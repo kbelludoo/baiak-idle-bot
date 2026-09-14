@@ -1,0 +1,27 @@
+# Tokens e arquivos locais confidenciais
+.env
+.env.local
+data/
+*.log
+
+# Ambientes virtuais e Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# Screenshots de teste
+*.png
+*.jpg
+*.jpeg
+
+# IDEs e Editores
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db

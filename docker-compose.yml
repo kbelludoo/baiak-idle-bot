@@ -1,0 +1,29 @@
+services:
+  baiak-bot:
+    build: .
+    container_name: baiak-idle-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./bot.py:/app/bot.py
+      - ./hunts.py:/app/hunts.py
+      - ./chrome.py:/app/chrome.py
+      - ./config.py:/app/config.py
+      - ./extras.py:/app/extras.py
+      - ./page_hud.js:/app/page_hud.js
+      - ./page_hunt.js:/app/page_hunt.js
+      - ./page_spell.js:/app/page_spell.js
+      - ./page_treino.js:/app/page_treino.js
+      - ./page_boss.js:/app/page_boss.js
+      - ./page_bags.js:/app/page_bags.js
+      - ./page_equip.js:/app/page_equip.js
+      - ./page_prey.js:/app/page_prey.js
+      - ./page_extra.js:/app/page_extra.js
+      - ./baiakidle-helper.user.js:/app/baiakidle-helper.user.js
+    shm_size: "64mb"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SCREENSHOT_INTERVAL=0
+      - CHROME_GL=off
