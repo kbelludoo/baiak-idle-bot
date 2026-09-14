@@ -88,6 +88,10 @@ Você pode personalizar o comportamento do bot editando o arquivo `.env`:
 | `AUTO_TREINO` | `true` | Alterna para treino quando a stamina acabar. |
 | `AUTO_SELL` | `true` | Vende o loot da pouch quando atingir o limite. |
 | `SELL_THRESHOLD_PCT` | `75` | Porcentagem da bolsa cheia para acionar a venda. |
+| `AUTO_HEAL` | `true` | Habilita configuração automática de cura e poções de HP/Mana. |
+| `HEAL_BELOW_PCT` | `75` | % de vida para usar magia de cura automática. |
+| `HP_POTION_BELOW_PCT` | `60` | % de vida para usar a melhor poção de HP disponível. |
+| `MANA_POTION_BELOW_PCT` | `65` | % de mana para usar a melhor poção de Mana disponível. |
 | `REDUCE_VFX` | `true` | Reduz efeitos visuais para consumir menos CPU. |
 | `SCREENSHOT_INTERVAL` | `0` | Intervalo em segundos para salvar screenshot em `data/` (0 = desliga). |
 
@@ -99,6 +103,7 @@ Você pode personalizar o comportamento do bot editando o arquivo `.env`:
 ├── iniciar.bat              # Script 1-clique para Windows
 ├── iniciar.sh               # Script 1-clique para Linux/Mac
 ├── bot.py                   # Motor principal do bot
+├── page_potion.js           # Gerenciador de cura e poções HP/MP por slot
 ├── chrome.py                # Configurações otimizadas do Chromium
 ├── hunts.py                 # Tabela e inteligência de seleção de hunts
 ├── config.py                # Leitura segura de flags e ambiente

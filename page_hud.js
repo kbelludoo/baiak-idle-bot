@@ -59,27 +59,30 @@
 
   const helper = document.getElementById("helper-modal");
   res.helperOpen = !!(helper && !helper.classList.contains("hidden"));
+  const members = Array.from(document.querySelectorAll("#bar-shooters .bar-member"));
+  let activeSlot = members.findIndex((el) => el.classList.contains("bar-member-active"));
   if (res.helperOpen) {
     const chars = Array.from(helper.querySelectorAll("button.bar-char")).filter((b) => !b.classList.contains("benched"));
-    let activeSlot = 0;
     chars.forEach((b, i) => { if (b.classList.contains("active")) activeSlot = i; });
+    if (activeSlot < 0) activeSlot = 0;
     const noneRe = /^(nenhuma|none)$/i;
     const autoRe = /cura autom[aá]tica|exura|healing/i;
-    const btns = Array.from(helper.querySelectorAll(".helper-spellbtn"));
+    const gridBtns = Array.from(helper.querySelectorAll(".helper-healgrid .helper-spellbtn"));
+    const btns = gridBtns.length ? gridBtns : Array.from(helper.querySelectorAll(".helper-spellbtn"));
     let heal = "", hp = "", mana = "";
     const flabels = Array.from(helper.querySelectorAll(".helper-flabel, .helper-check"));
     for (const lab of flabels) {
       const t = (lab.textContent || "").toLowerCase();
-      const row = lab.parentElement || lab;
-      const btn = row.querySelector(".helper-spellbtn");
-      const val = (btn?.textContent || "").replace(/\s+/g, " ").trim();
-      if (/magia/.test(t) && !hp && !mana) heal = val;
+      let n = lab.nextElementSibling;
+      while (n && !(n.classList && n.classList.contains("helper-spellbtn"))) n = n.nextElementSibling;
+      const val = (n?.textContent || "").replace(/\s+/g, " ").trim();
+      if (/^\s*magia/i.test(t) || (/magia/.test(t) && !/po[cç][aã]o/.test(t))) heal = val || heal;
       if (/po[cç][aã]o hp|hp pot/.test(t)) hp = val;
-      if (/po[cç][aã]o mp|mp pot|mana/.test(t) && /po[cç][aã]o|pot/.test(t)) mana = val;
+      if (/po[cç][aã]o mp|mp pot/.test(t)) mana = val;
     }
-    if (!heal && btns[0]) heal = (btns[0].textContent || "").trim();
-    if (!hp && btns[1]) hp = (btns[1].textContent || "").trim();
-    if (!mana && btns[2]) mana = (btns[2].textContent || "").trim();
+    if (!heal && btns[0]) heal = (btns[0].textContent || "").replace(/\s+/g, " ").trim();
+    if (!hp && btns[1]) hp = (btns[1].textContent || "").replace(/\s+/g, " ").trim();
+    if (!mana && btns[2]) mana = (btns[2].textContent || "").replace(/\s+/g, " ").trim();
     const autoHeal = autoRe.test(heal) || (heal && !noneRe.test(heal));
     res.helpers.push({
       slot: activeSlot,

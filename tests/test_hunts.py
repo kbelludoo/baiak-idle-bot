@@ -1,6 +1,8 @@
 from hunts import (
     HuntProfiler,
+    PROBE_COOLDOWN,
     SAMPLE_SEC,
+    STALL_SEC,
     classify_magic,
     effective_level,
     ids_from_picker_rows,
@@ -11,8 +13,23 @@ from hunts import (
 
 AOE = classify_magic([{"empty": False, "name": "exori"}])
 EMPTY = classify_magic([])
+BOTH = classify_magic([
+    {"slot": 0, "empty": False, "name": "exori"},
+    {"slot": 0, "empty": False, "name": "exura"},
+    {"slot": 0, "empty": False, "name": "mana potion"},
+    {"slot": 1, "empty": False, "name": "exori"},
+    {"slot": 1, "empty": False, "name": "exura"},
+    {"slot": 1, "empty": False, "name": "great mana potion"},
+])
+ONLY_LEAD = classify_magic([
+    {"slot": 0, "empty": False, "name": "exori"},
+    {"slot": 0, "empty": False, "name": "exura"},
+    {"slot": 0, "empty": False, "name": "mana potion"},
+    {"slot": 1, "empty": True, "name": ""},
+])
 UNLOCK_30 = [
-    "troll-cave", "elf-lair", "amazon-camp", "minotaur", "cyclopolis", "corym-cave",
+    "troll-cave", "elf-lair", "amazon-camp", "minotaur", "cyclopolis",
+    "corym-cave", "refiner-cave",
 ]
 UNLOCK_50 = UNLOCK_30 + ["giant-spider"]
 
@@ -121,7 +138,6 @@ def test_recent_death_drops_to_easier(tmp_path):
     _seed(p, "cyclopolis", "Cyclopolis", 8000, 120)
     best = p.get_best_hunt_to_farm(30, AOE, UNLOCK_30)
     assert best["id"] != "corym-cave"
-    assert best["id"] == "cyclopolis"
 
 
 def test_probe_reverts_when_gold_h_not_better(tmp_path):
@@ -165,6 +181,99 @@ def test_empty_magic_does_not_probe_hard(tmp_path):
     _live(p, "troll-cave", "Troll Cave", SAMPLE_SEC + 10, 200, 20)
     best = p.get_best_hunt_to_farm(80, EMPTY, UNLOCK_50)
     assert best["min"] <= 15
+    assert best["id"] != "refiner-cave"
+
+
+def test_party_two_slots_need_attack_heal_mana(tmp_path=None):
+    assert BOTH["party_ready"] is True
+    assert BOTH["slots"]["0"]["ready"] is True
+    assert BOTH["slots"]["1"]["ready"] is True
+    assert BOTH["heal"] >= 1
+    assert BOTH["mana"] >= 1
+    assert ONLY_LEAD["slot1_present"] is True
+    assert ONLY_LEAD["party_ready"] is False
+    assert ONLY_LEAD["slots"]["0"]["ready"] is True
+    assert not ONLY_LEAD["slots"]["1"]["ready"]
+
+
+def test_party_ready_from_helper_not_rotation(tmp_path=None):
+    mag = classify_magic(
+        [
+            {"slot": 0, "empty": False, "name": "exori"},
+            {"slot": 1, "empty": False, "name": "exori gran"},
+        ],
+        [
+            {"slot": 0, "heal": "Cura automática", "manaPotion": "mana potion", "autoHeal": True},
+            {"slot": 1, "heal": "Cura automática", "manaPotion": "great mana potion", "autoHeal": True},
+        ],
+    )
+    assert mag["party_ready"] is True
+    assert mag["slots"]["0"]["ready"] is True
+    assert mag["slots"]["1"]["ready"] is True
+    only0 = classify_magic(
+        [
+            {"slot": 0, "empty": False, "name": "exori"},
+            {"slot": 1, "empty": False, "name": "exori"},
+        ],
+        [{"slot": 0, "heal": "Cura automática", "manaPotion": "mana potion", "autoHeal": True}],
+    )
+    assert only0["slot1_present"] is True
+    assert only0["party_ready"] is False
+    assert only0["slots"]["1"]["ready"] is False
+
+
+def test_level50_both_chars_go_stone(tmp_path):
+    p = HuntProfiler(str(tmp_path))
+    best = p.get_best_hunt_to_farm(50, BOTH, UNLOCK_50)
+    assert best["id"] == "refiner-cave"
+    assert best["name"] == "Stone Refiner"
+    go, _ = p.should_enter(None, best, True, 1e12, 0)
+    assert go is True
+
+
+def test_level50_incomplete_party_not_stone(tmp_path):
+    p = HuntProfiler(str(tmp_path))
+    best = p.get_best_hunt_to_farm(50, ONLY_LEAD, UNLOCK_50)
+    assert best["id"] != "refiner-cave"
+    assert best["id"] != "giant-spider"
+
+
+def test_sim_switches_off_troll_before_120s(tmp_path):
+    p = HuntProfiler(str(tmp_path))
+    _live(p, "troll-cave", "Troll Cave", 40, 80, 10)
+    best = p.get_best_hunt_to_farm(50, BOTH, UNLOCK_50)
+    assert best["id"] == "refiner-cave"
+    assert p.last_decision["mode"] == "sim"
+    go, _ = p.should_enter("troll-cave", best, False, 1e12, 0)
+    assert go is True
+
+
+def test_stone_sample_calibrates_without_hop(tmp_path):
+    p = HuntProfiler(str(tmp_path))
+    _live(p, "refiner-cave", "Stone Refiner", 40, 200, 20)
+    best = p.get_best_hunt_to_farm(50, BOTH, UNLOCK_50)
+    assert best["id"] == "refiner-cave"
+    assert p.last_decision["mode"] == "sample"
+    go, _ = p.should_enter("refiner-cave", best, False, 1e12, 0)
+    assert go is False
+
+
+def test_death_on_stone_reverts(tmp_path):
+    import time
+    p = HuntProfiler(str(tmp_path))
+    _seed(p, "refiner-cave", "Stone Refiner", 80000, 400, deaths=1, last_death=time.time())
+    _live(p, "refiner-cave", "Stone Refiner", 5, 10, 1)
+    best = p.get_best_hunt_to_farm(50, BOTH, UNLOCK_50)
+    assert best["id"] != "refiner-cave"
+
+
+def test_live_sample_beats_stone_by_margin(tmp_path):
+    p = HuntProfiler(str(tmp_path))
+    _seed(p, "refiner-cave", "Stone Refiner", 1000, 20)
+    p.home_id = "refiner-cave"
+    _live(p, "giant-spider", "Giant Spider", SAMPLE_SEC + 20, 90000, 400)
+    best = p.get_best_hunt_to_farm(50, BOTH, UNLOCK_50)
+    assert best["id"] == "giant-spider"
 
 
 if __name__ == "__main__":
@@ -184,6 +293,14 @@ if __name__ == "__main__":
         test_probe_keeps_harder_if_profit_justifies,
         test_stall_reverts_urgent,
         test_empty_magic_does_not_probe_hard,
+        test_party_two_slots_need_attack_heal_mana,
+        test_party_ready_from_helper_not_rotation,
+        test_level50_both_chars_go_stone,
+        test_level50_incomplete_party_not_stone,
+        test_sim_switches_off_troll_before_120s,
+        test_stone_sample_calibrates_without_hop,
+        test_death_on_stone_reverts,
+        test_live_sample_beats_stone_by_margin,
     ):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))

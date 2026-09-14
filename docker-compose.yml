@@ -9,12 +9,15 @@ services:
       - ./data:/app/data
       - ./bot.py:/app/bot.py
       - ./hunts.py:/app/hunts.py
+      - ./hunt_sim.py:/app/hunt_sim.py
+      - ./engine_hunts.json:/app/engine_hunts.json
       - ./chrome.py:/app/chrome.py
       - ./config.py:/app/config.py
       - ./extras.py:/app/extras.py
       - ./page_hud.js:/app/page_hud.js
       - ./page_hunt.js:/app/page_hunt.js
       - ./page_spell.js:/app/page_spell.js
+      - ./page_potion.js:/app/page_potion.js
       - ./page_treino.js:/app/page_treino.js
       - ./page_boss.js:/app/page_boss.js
       - ./page_bags.js:/app/page_bags.js

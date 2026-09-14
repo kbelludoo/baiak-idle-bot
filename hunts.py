@@ -589,15 +589,27 @@ class HuntProfiler:
             drop = self._drop_easier(ordered, live, now)
             why = "sobreviveu mal (morte/stall) — cair para hunt mais fácil"
             return drop, why, "revert", True
+        if self.home_id and live and live["id"] != self.home_id and self._visit_ready():
+            home = self._hunt(ordered, self.home_id)
+            if home and not self._banned(home["id"], now):
+                if not self._justifies(live["id"], home["id"]):
+                    g_l, g_h = round(self._profit(live["id"], True), 1), round(self._profit(home["id"]), 1)
+                    return home, f"probe falhou: lucro {g_l} não supera {home['name']} {g_h} — reverter", "revert", False
+                self.home_id = live["id"]
+                return live, "probe ok: gold/h justifica o tempo; ficar e medir", "farm", False
         ids = [h["id"] for h in ordered if h["min"] <= cap]
         banned = {h["id"] for h in ordered if self._banned(h["id"], now)}
         rec = recommend_switch(ids, live["id"] if live else None, level, magic, self.sim_scale, banned)
         sim_h = self._hunt(ordered, rec["id"]) if rec else None
-        if rec and sim_h and rec.get("can_tank"):
+        ready = gold_farm_ready(magic)
+        if rec and sim_h and rec.get("can_tank") and ready:
             if live and live["id"] != sim_h["id"] and self._visit_ready():
                 live_p = self._profit(live["id"], True)
-                sim_p = max(self._profit(sim_h["id"]), float(rec.get("gold_h") or 0))
-                if sim_p > 0 and live_p >= sim_p * PROFIT_MARGIN:
+                sampled_p = self._profit(sim_h["id"])
+                bar = sampled_p if self._sampled(sim_h["id"]) and sampled_p > 0 else max(
+                    sampled_p, float(rec.get("gold_h") or 0)
+                )
+                if bar > 0 and live_p >= bar * PROFIT_MARGIN:
                     self.home_id = live["id"]
                     return live, "amostra 15% melhor que a sim — ficar e medir", "farm", False
             if live and live["id"] == sim_h["id"]:
@@ -631,7 +643,7 @@ class HuntProfiler:
                 return home, f"probe falhou: lucro {g_l} não supera {home['name']} {g_h} — reverter", "revert", False
             self.home_id = live["id"]
             return live, "probe ok: gold/h justifica o tempo; ficar e medir", "farm", False
-        farm = home or sim_h or live or ordered[0]
+        farm = home or (sim_h if ready else None) or live or ordered[0]
         if gold_farm_ready(magic) and self._hunt(ordered, STONE_ID) and STONE_ID in ids:
             stone = self._hunt(ordered, STONE_ID)
             if stone and not self._banned(STONE_ID, now):

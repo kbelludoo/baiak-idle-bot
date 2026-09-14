@@ -241,6 +241,7 @@ JS_BAGS = load_js("page_bags.js")
 JS_EQUIP = load_js("page_equip.js")
 JS_PREY = load_js("page_prey.js")
 JS_EXTRA = load_js("page_extra.js")
+JS_POTION = load_js("page_potion.js")
 EXTRA_SCRIPTS = {
     "bags": JS_BAGS,
     "boss": JS_BOSS,
@@ -325,10 +326,14 @@ def main():
     last_party_slots = 1
     city_streak = 0
     magic_state = classify_magic([])
+    helper_by_slot = {}
+    last_gear_slot = None
     last_hunt_scan = 0
     in_treino = False
     last_treino_time = 0.0
     extra_last = {}
+    last_potion_check = 0.0
+    need_potion_check = True
 
     subsystems_status = {
         "anti_bot": {"status": "FUNCIONAL", "detail": "Presença humana real (isTrusted: true) ativa"},
@@ -337,7 +342,11 @@ def main():
         "auto_promote": {"status": "AGUARDANDO_REQUISITO", "detail": "Aguardando nível 20 e 20.000 gold"},
         "codex": {"status": "VERIFICANDO", "detail": "Monitorando entregas de criaturas na Pouch"},
         "treino": {"status": "AGUARDANDO", "detail": "Stamina → treino online quando zerar"},
-        "boss": {"status": "AGUARDANDO", "detail": "Auto Boss nativo se playlist existir"}
+        "boss": {"status": "AGUARDANDO", "detail": "Auto Boss nativo se playlist existir"},
+        "auto_heal": {
+            "status": "FUNCIONAL" if flags.auto_heal else "DESATIVADO",
+            "detail": f"Magia (<{flags.heal_below_pct}%), HP (<{flags.hp_potion_below_pct}%), MP (<{flags.mana_potion_below_pct}%)"
+        }
     }
 
     def update_status_file():
@@ -803,15 +812,23 @@ def main():
                         if (pickerModal && !pickerModal.classList.contains('hidden') && /rota|magia|spell|cura|potion|po[cç][aã]o/i.test(pTitle)) {
                             res.events.push('PICKER_SPELL_ABERTO: ' + pTitle.trim());
                         } else if (!pickerModal || pickerModal.classList.contains('hidden')) {
-                            for (let slot = 0; slot < 3; slot++) {
+                            slotLoop:
+                            for (let slot = 0; slot < 2; slot++) {
+                                let hasSpell = false;
+                                let emptyU = -1;
                                 for (let u = 0; u < 6; u++) {
                                     const rotSlot = document.getElementById(`rot-${slot}-${u}`);
-                                    if (rotSlot && rotSlot.querySelector('small')) {
-                                        rotSlot.click();
-                                        res.events.push(`CLICOU_SLOT_MAGIA_VAZIO: rot-${slot}-${u}`);
-                                        slot = 99;
-                                        break;
+                                    if (!rotSlot) continue;
+                                    if (rotSlot.querySelector('small')) {
+                                        if (emptyU < 0) emptyU = u;
+                                    } else {
+                                        hasSpell = true;
                                     }
+                                }
+                                if (!hasSpell && emptyU >= 0) {
+                                    document.getElementById(`rot-${slot}-${emptyU}`).click();
+                                    res.events.push(`CLICOU_SLOT_MAGIA_VAZIO: rot-${slot}-${emptyU}`);
+                                    break slotLoop;
                                 }
                             }
                         }
@@ -874,6 +891,7 @@ def main():
                     for ev in state["events"]:
                         print(f"[{ts_now()}] ⚡ [{ev}]", flush=True)
                         if "RECRUTOU_CAMPEAO" in ev:
+                            need_potion_check = True
                             if party_slots > last_party_slots:
                                 profiler.clear_death_penalties()
                                 print(f"[{ts_now()}] 🚀 [BENCHMARK] Novo slot de campeão. Penalidades de morte zeradas; hunts serão reavaliadas.", flush=True)
@@ -960,6 +978,7 @@ def main():
                     current_hunt = state["wave"]
                 if state.get("invText"):
                     bag_slots = state["invText"]
+                old_lvl = player_level
                 if state.get("level"):
                     player_level = state["level"]
                 if state.get("gold") is not None:
@@ -981,7 +1000,17 @@ def main():
                     player_gold = hud["gold"]
                 if hud.get("stamina"):
                     player_stamina = hud["stamina"]
-                magic_state = classify_magic(hud.get("spells") or [], hud.get("helpers") or [])
+                if old_lvl and player_level and player_level > old_lvl:
+                    need_potion_check = True
+                if party_slots > last_party_slots:
+                    need_potion_check = True
+                for hlp in hud.get("helpers") or []:
+                    if isinstance(hlp, dict) and hlp.get("slot") is not None:
+                        helper_by_slot[int(hlp["slot"])] = hlp
+                magic_state = classify_magic(
+                    hud.get("spells") or [],
+                    [helper_by_slot[k] for k in sorted(helper_by_slot)],
+                )
 
                 if looks_like_treino(current_hunt) or looks_like_treino(state.get("wave")):
                     in_treino = True
@@ -1016,54 +1045,92 @@ def main():
                 ):
                     print(f"[{ts_now()}] {line}", flush=True)
 
+                if flags.auto_heal and not hud.get("pickerOpen") and (now - last_potion_check >= 60 or need_potion_check):
+                    last_potion_check = now
+                    need_potion_check = False
+                    try:
+                        pot_res = page.evaluate(JS_POTION, {
+                            "autoHeal": flags.auto_heal,
+                            "healBelowPct": flags.heal_below_pct,
+                            "hpPotionBelowPct": flags.hp_potion_below_pct,
+                            "manaPotionBelowPct": flags.mana_potion_below_pct,
+                        })
+                        if pot_res and pot_res.get("events"):
+                            for ev in pot_res["events"]:
+                                print(f"[{ts_now()}] 🧪 [POTION/CURA] {ev}", flush=True)
+                        elif pot_res and not pot_res.get("ok"):
+                            print(f"[{ts_now()}] 🧪 [POTION AVISO] {pot_res}", flush=True)
+                    except Exception as e:
+                        print(f"[{ts_now()}] 🧪 [POTION ERRO] {e}", flush=True)
+
                 handled_spell = False
                 picker_kind = hud.get("pickerKind")
                 picker_open_ev = any("PICKER_SPELL_ABERTO" in ev for ev in (state.get("events") or []))
+                spell_args = {
+                    "metaAoe": list(AOE_WORDS), "metaStrike": list(STRIKE_WORDS),
+                    "healWords": list(HEAL_WORDS), "manaWords": list(MANA_WORDS),
+                }
+
+                def _apply_helper_snap(res):
+                    snap = (res or {}).get("helper") if isinstance(res, dict) else None
+                    if not isinstance(snap, dict) or snap.get("slot") is None:
+                        return
+                    sid = int(snap["slot"])
+                    helper_by_slot[sid] = {**helper_by_slot.get(sid, {}), **snap}
+
+                def _log_spell(tag, res):
+                    print(f"[{ts_now()}] 🔮 [{tag}] {res}", flush=True)
+                    for ev in (res or {}).get("events") or []:
+                        if str(ev).startswith("CONFIGUROU_"):
+                            print(f"[{ts_now()}] 🔮 [{ev}]", flush=True)
+
                 if picker_kind in ("spell", "heal", "mana", "hp") or picker_open_ev:
                     handled_spell = True
                     need = {"heal": "heal", "mana": "mana", "hp": "hp"}.get(picker_kind, "aoe")
                     try:
                         spell_res = page.evaluate(JS_SPELL, {
-                            "metaAoe": list(AOE_WORDS),
-                            "metaStrike": list(STRIKE_WORDS),
-                            "healWords": list(HEAL_WORDS),
-                            "manaWords": list(MANA_WORDS),
-                            "need": need,
-                            "job": "pick",
+                            **spell_args, "need": need, "job": "pick", "slot": last_gear_slot,
                         })
+                        _apply_helper_snap(spell_res)
                         tag = "CURA" if need == "heal" else ("MANA" if need == "mana" else "MAGIA")
-                        print(f"[{ts_now()}] 🔮 [{tag}] {spell_res}", flush=True)
+                        _log_spell(tag, spell_res)
                     except Exception as e:
                         print(f"[{ts_now()}] 🔮 [MAGIA ERRO] {e}", flush=True)
-                elif not magic_state.get("party_ready") and magic_state.get("slot1_present"):
+                elif not magic_state.get("party_ready"):
                     slots = magic_state.get("slots") or {}
-                    for sid in (0, 1):
+                    present = [int(k) for k in slots if str(k).isdigit()]
+                    if not present:
+                        present = [0, 1]
+                    for sid in present:
+                        if sid > 2:
+                            continue
                         kit = slots.get(str(sid)) or {}
                         if kit.get("ready"):
                             continue
-                        job_need = "aoe"
-                        job = "fill"
+                        job_need, job = "aoe", "fill"
                         if kit.get("attack") and not kit.get("heal"):
                             job_need, job = "heal", "helper"
                         elif kit.get("attack") and not kit.get("mana"):
                             job_need, job = "mana", "helper"
                         try:
                             spell_res = page.evaluate(JS_SPELL, {
-                                "metaAoe": list(AOE_WORDS),
-                                "metaStrike": list(STRIKE_WORDS),
-                                "healWords": list(HEAL_WORDS),
-                                "manaWords": list(MANA_WORDS),
-                                "need": job_need,
-                                "job": job,
-                                "slot": sid,
+                                **spell_args, "need": job_need, "job": job, "slot": sid,
                             })
-                            if spell_res and spell_res.get("ok"):
+                            last_gear_slot = sid
+                            _apply_helper_snap(spell_res)
+                            if spell_res and (spell_res.get("ok") or spell_res.get("events")):
                                 handled_spell = True
-                                print(f"[{ts_now()}] 🔮 [GEAR slot{sid}] {spell_res}", flush=True)
+                                _log_spell(f"GEAR slot{sid}", spell_res)
                                 break
                         except Exception as e:
                             print(f"[{ts_now()}] 🔮 [GEAR ERRO] {e}", flush=True)
                             break
+
+                if helper_by_slot:
+                    magic_state = classify_magic(
+                        hud.get("spells") or [],
+                        [helper_by_slot[k] for k in sorted(helper_by_slot)],
+                    )
 
                 picker_open = bool(hud.get("pickerOpen"))
                 hunt_name_l = (current_hunt or "").lower()
@@ -1187,7 +1254,13 @@ def main():
                 slots_str = f" | Champions: {party_slots}"
                 loop_str = f" | Loop: {'ON' if loop_active else 'OFF'}"
                 bag_str = f" | Pouch: {bag_slots}" if bag_slots else ""
-                mag_str = f" | Magia: p{magic_state.get('power', 0)} aoe={magic_state.get('aoe', 0)} fill={magic_state.get('filled', 0)}"
+                s0 = (magic_state.get("slots") or {}).get("0") or {}
+                s1 = (magic_state.get("slots") or {}).get("1") or {}
+                mag_str = (
+                    f" | Magia: p{magic_state.get('power', 0)} aoe={magic_state.get('aoe', 0)}"
+                    f" s0 h{s0.get('heal', 0)}/m{s0.get('mana', 0)} s1 h{s1.get('heal', 0)}/m{s1.get('mana', 0)}"
+                    f" party={magic_state.get('party_ready')}"
+                )
                 dec = profiler.last_decision or {}
                 dec_str = f" | Dec: {dec.get('mode') or '-'} {(dec.get('reason') or '')[:80]}"
 

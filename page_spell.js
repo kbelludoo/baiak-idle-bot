@@ -1,8 +1,11 @@
-({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
+async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const vis = (el) => !!(el && el.offsetParent !== null);
   const txt = (el) => (el?.innerText || el?.textContent || "").toLowerCase();
   const events = [];
+  const wantSlot = Number.isFinite(Number(slot)) ? Number(slot) : null;
+  const noneRe = /^(nenhuma|none)$/i;
+  const autoHealRe = /cura autom[aá]tica|exura|light healing|wound cleansing/i;
 
   const picker = document.getElementById("picker-modal");
   const pickerOpen = !!(picker && !picker.classList.contains("hidden"));
@@ -33,11 +36,13 @@
     const prefer = (words || []).map((s) => String(s).toLowerCase());
     for (const word of prefer) {
       for (const row of rows) {
-        if (!txt(row).includes(word)) continue;
+        const blob = txt(row);
+        if (!blob.includes(word) || /n[aã]o bebe|nenhuma \(/.test(blob)) continue;
         const btn = useOf(row);
-        if (btn && vis(btn) && (btn.textContent || "").trim().toLowerCase() !== "em uso") {
+        const bt = (btn?.textContent || "").trim().toLowerCase();
+        if (btn && vis(btn) && bt !== "em uso" && bt !== "remover" && bt !== "ativar") {
           btn.click();
-          return { ok: true, picked: word, method, events };
+          return { ok: true, picked: word, method, slot: wantSlot, events };
         }
       }
     }
@@ -47,11 +52,12 @@
   const pickFirstUse = (method) => {
     const anyUse = Array.from(picker.querySelectorAll("button")).find((b) => {
       const t = (b.textContent || "").trim().toLowerCase();
-      return (t === "usar" || t === "use") && !b.disabled && vis(b);
+      const row = (b.closest(".sp-book-row, .im-row")?.innerText || "").toLowerCase();
+      return (t === "usar" || t === "use") && !b.disabled && vis(b) && !/n[aã]o bebe|nenhuma \(/.test(row);
     });
     if (anyUse) {
       anyUse.click();
-      return { ok: true, picked: (anyUse.closest("div")?.innerText || "").slice(0, 48), method, events };
+      return { ok: true, picked: (anyUse.closest("div")?.innerText || "").slice(0, 48), method, slot: wantSlot, events };
     }
     return null;
   };
@@ -70,30 +76,38 @@
         || pickFirstUse("first-aoe");
       if (hit) return hit;
     } else if (kind === "heal") {
-      clickTab(/^(cura|heal|magia)$/i);
+      clickTab(/^(cura|heal|magia|todas)$/i);
+      const autoBtn = Array.from(picker.querySelectorAll("button")).find((b) =>
+        /^(autom[aá]tica|auto heal)$/i.test((b.textContent || "").trim()));
       const hit = pickByWords(
         ["cura automática", ...(healWords || []), "exura", "light healing", "wound cleansing"],
         "heal"
-      ) || pickFirstUse("first-heal");
-      if (hit) return hit;
+      ) || (autoBtn && vis(autoBtn) && (autoBtn.click(), { ok: true, picked: "auto", method: "heal-auto", slot: wantSlot, events }))
+        || pickFirstUse("first-heal");
+      if (hit) {
+        events.push(`CONFIGUROU_CURA_SLOT_${wantSlot ?? "?"}`);
+        return hit;
+      }
     } else if (kind === "mana") {
       const hit = pickByWords(
         [...(manaWords || []), "great mana", "strong mana", "mana potion", "ultimate mana"],
         "mana"
       ) || pickFirstUse("first-mana");
-      if (hit) return hit;
+      if (hit) {
+        events.push(`CONFIGUROU_MANA_SLOT_${wantSlot ?? "?"}`);
+        return hit;
+      }
     } else if (kind === "hp") {
       const hit = pickByWords(["great health", "strong health", "health potion", "ultimate health"], "hp")
         || pickFirstUse("first-hp");
       if (hit) return hit;
     }
     closePicker();
-    return { ok: false, reason: "no-use", kind, events };
+    return { ok: false, reason: "no-use", kind, slot: wantSlot, events };
   }
 
-  const wantSlot = Number.isFinite(Number(slot)) ? Number(slot) : null;
   if (job === "fill" || job === "open-slot" || (!job && !pickerOpen)) {
-    const slots = wantSlot != null ? [wantSlot] : [0, 1];
+    const slots = wantSlot != null ? [wantSlot] : [0, 1, 2];
     for (const s of slots) {
       for (let u = 0; u < 6; u++) {
         const el = document.getElementById(`rot-${s}-${u}`);
@@ -107,66 +121,143 @@
   }
 
   if (job === "helper" || job === "open-helper") {
-    const helper = document.getElementById("helper-modal");
-    const tab = document.getElementById("tab-helper");
-    if (helper && helper.classList.contains("hidden") && tab) {
-      tab.click();
-      events.push("ABRIU_HELPER");
-      return { ok: true, method: "open-helper", events };
-    }
-    if (helper && !helper.classList.contains("hidden")) {
-      const curaTab = Array.from(helper.querySelectorAll(".helper-menubtn, button"))
-        .find((b) => /^(cura|healing)$/i.test((b.textContent || "").replace(/[^\wáàâãéêíóôõúç ]/gi, "").trim()));
-      if (curaTab && !curaTab.classList.contains("on")) {
-        curaTab.click();
-        events.push("HELPER_TAB_CURA");
-        return { ok: true, method: "helper-tab", events };
+    const openHelper = async () => {
+      const tab = document.getElementById("tab-helper");
+      const h = document.getElementById("helper-modal");
+      if (h && h.classList.contains("hidden") && tab) {
+        tab.click();
+        events.push("ABRIU_HELPER");
+        await sleep(280);
       }
-      const chars = Array.from(helper.querySelectorAll("button.bar-char")).filter((b) => !b.classList.contains("benched"));
-      if (wantSlot != null && chars[wantSlot] && !chars[wantSlot].classList.contains("active")) {
-        chars[wantSlot].click();
+    };
+    await openHelper();
+
+    const memberBtns = () => Array.from(document.querySelectorAll("#bar-shooters .bar-member button.bar-char"));
+    const helperChips = (root) => Array.from((root || document).querySelectorAll("#helper-modal button.bar-char"))
+      .filter((b) => !b.classList.contains("benched"));
+
+    if (wantSlot != null) {
+      const barBtn = memberBtns()[wantSlot];
+      if (barBtn && !barBtn.classList.contains("active")) {
+        barBtn.click();
+        events.push(`BAR_CHAR_SLOT_${wantSlot}`);
+        await sleep(360);
+        await openHelper();
+      }
+    }
+
+    let helperNow = document.getElementById("helper-modal");
+    if (!helperNow || helperNow.classList.contains("hidden")) {
+      await openHelper();
+      helperNow = document.getElementById("helper-modal");
+    }
+    if (!helperNow || helperNow.classList.contains("hidden")) {
+      return { ok: false, reason: "helper-closed", slot: wantSlot, events };
+    }
+
+    const curaTab = Array.from(helperNow.querySelectorAll(".helper-menubtn, button"))
+      .find((b) => /^(cura|healing)$/i.test((b.textContent || "").replace(/[^\wáàâãéêíóôõúç ]/gi, "").trim()));
+    if (curaTab && !curaTab.classList.contains("on")) {
+      curaTab.click();
+      events.push("HELPER_TAB_CURA");
+      await sleep(220);
+      helperNow = document.getElementById("helper-modal") || helperNow;
+    }
+
+    if (wantSlot != null) {
+      const chips = helperChips(helperNow);
+      const chip = chips[wantSlot];
+      if (chip && !chip.classList.contains("active")) {
+        chip.click();
         events.push(`HELPER_CHAR_SLOT_${wantSlot}`);
-        return { ok: true, method: "helper-char", slot: wantSlot, events };
+        await sleep(360);
+        helperNow = document.getElementById("helper-modal") || helperNow;
+      } else if (chip) {
+        events.push(`HELPER_CHAR_JA_SLOT_${wantSlot}`);
+      } else {
+        events.push(`HELPER_SEM_CHIP_SLOT_${wantSlot}`);
       }
-      const labels = Array.from(helper.querySelectorAll(".helper-flabel, .helper-check"));
-      const clickNear = (re, missingRe) => {
-        for (const lab of labels) {
-          if (!re.test(lab.textContent || "")) continue;
-          const row = lab.parentElement || lab;
-          const btn = row.querySelector(".helper-spellbtn") || lab.nextElementSibling;
-          const t = (btn?.textContent || "").toLowerCase();
-          if (btn && vis(btn) && (!missingRe || missingRe.test(t))) {
-            btn.click();
-            return t.slice(0, 40);
-          }
-        }
-        return null;
-      };
-      if (need === "heal") {
-        const magiaBtn = Array.from(helper.querySelectorAll(".helper-spellbtn")).find((b) => vis(b) && /cura|exura|nenhuma|autom[aá]tica/i.test(b.textContent || ""));
-        if (magiaBtn) {
-          magiaBtn.click();
-          events.push("CLICOU_CURA_HELPER");
-          return { ok: true, method: "open-heal", events };
-        }
+      const after = helperChips(helperNow)[wantSlot];
+      const barAfter = memberBtns()[wantSlot];
+      const active = (after && after.classList.contains("active")) || (barAfter && barAfter.classList.contains("active"));
+      if (!active) {
+        document.getElementById("bar-member-next")?.click();
+        events.push(`BAR_NEXT_SLOT_${wantSlot}`);
+        await sleep(360);
+        helperNow = document.getElementById("helper-modal") || helperNow;
       }
-      if (need === "mana") {
-        const hit = clickNear(/po[cç][aã]o mp|mana/i, /nenhuma|none/);
-        if (hit != null) {
-          events.push("CLICOU_MANA_HELPER: " + hit);
-          return { ok: true, method: "open-mana", events };
-        }
-      }
-      if (need === "hp") {
-        const hit = clickNear(/po[cç][aã]o hp|vida/i, /nenhuma|none/);
-        if (hit != null) {
-          events.push("CLICOU_HP_HELPER: " + hit);
-          return { ok: true, method: "open-hp", events };
-        }
-      }
-      return { ok: false, reason: "helper-nothing", events };
     }
+
+    const magiaBox = Array.from(helperNow.querySelectorAll('input[type="checkbox"]'))
+      .find((c) => /magia/i.test((c.parentElement?.textContent || "")));
+    if (magiaBox && !magiaBox.checked) {
+      magiaBox.click();
+      events.push("HELPER_MAGIA_ON");
+      await sleep(180);
+    }
+
+    const gridBtns = () => Array.from((document.getElementById("helper-modal") || helperNow)
+      .querySelectorAll(".helper-healgrid .helper-spellbtn"));
+    const labelOf = (re) => {
+      const h = document.getElementById("helper-modal") || helperNow;
+      for (const lab of h.querySelectorAll(".helper-flabel, .helper-check")) {
+        if (!re.test(lab.textContent || "")) continue;
+        let n = lab.nextElementSibling;
+        while (n && !(n.classList && n.classList.contains("helper-spellbtn"))) n = n.nextElementSibling;
+        if (n && vis(n)) return n;
+      }
+      return null;
+    };
+    const snap = () => {
+      const btns = gridBtns();
+      const t = (b) => (b?.textContent || "").replace(/\s+/g, " ").trim();
+      const heal = t(btns[0] || labelOf(/magia/i));
+      const hp = t(btns[1] || labelOf(/po[cç][aã]o hp|hp pot/i));
+      const mana = t(btns[2] || labelOf(/po[cç][aã]o mp|mp pot/i));
+      return {
+        slot: wantSlot,
+        heal: noneRe.test(heal) ? "" : heal,
+        hpPotion: noneRe.test(hp) ? "" : hp,
+        manaPotion: noneRe.test(mana) ? "" : mana,
+        autoHeal: autoHealRe.test(heal) && !noneRe.test(heal),
+        healEnabled: !(magiaBox && !magiaBox.checked)
+      };
+    };
+
+    const clickBtn = (btn, ev) => {
+      if (!btn || !vis(btn) || btn.disabled) return false;
+      btn.click();
+      events.push(ev);
+      return true;
+    };
+
+    const kit = snap();
+    const healMissing = !kit.heal || noneRe.test(kit.heal);
+    const manaMissing = !kit.manaPotion || noneRe.test(kit.manaPotion);
+    const wantHeal = need === "heal" || need === "both" || !need;
+    const wantMana = need === "mana" || need === "both" || need === "heal" || !need;
+
+    if (wantHeal && healMissing) {
+      const btn = gridBtns()[0] || labelOf(/magia/i);
+      if (clickBtn(btn, `CONFIGUROU_CURA_SLOT_${wantSlot}`)) {
+        return { ok: true, method: "open-heal", slot: wantSlot, helper: kit, events };
+      }
+    }
+    if (wantMana && manaMissing) {
+      const btn = gridBtns()[2] || labelOf(/po[cç][aã]o mp|mp pot/i);
+      if (clickBtn(btn, `CONFIGUROU_MANA_SLOT_${wantSlot}`)) {
+        return { ok: true, method: "open-mana", slot: wantSlot, helper: kit, events };
+      }
+    }
+    if (!healMissing) events.push(`CURA_JA_OK_SLOT_${wantSlot}: ${(kit.heal || "").slice(0, 40)}`);
+    if (!manaMissing) events.push(`MANA_JA_OK_SLOT_${wantSlot}: ${(kit.manaPotion || "").slice(0, 40)}`);
+    const ready = !healMissing && !manaMissing;
+    return {
+      ok: ready, method: ready ? "helper-ready" : "helper-nothing",
+      reason: ready ? undefined : "helper-nothing",
+      slot: wantSlot, helper: kit, events
+    };
   }
 
-  return { ok: false, reason: "idle", events };
+  return { ok: false, reason: "idle", slot: wantSlot, events };
 }
