@@ -685,3 +685,124 @@ class HuntProfiler:
         if not urgent and now - last_switch < 90:
             return False, ""
         return True, reason or f"trocar para {best['name']} (sobrevive+lucro, não meta)"
+
+
+class HuntMatrix:
+    """
+    Matriz de Aprendizado Empírico de Hunts.
+    Consolida histórico de telemetria, rendimento de XP/h, Gold/h, kills e segurança de cada hunt.
+    Gera classificações de eficiência ('TOP_LUCRO', 'TOP_XP', 'EQUILIBRADO', 'PERIGOSO').
+    """
+    def __init__(self, data_dir: str):
+        self.file_path = os.path.join(data_dir, "hunt_matrix.json")
+        self.matrix: dict[str, dict[str, Any]] = {}
+        self.load()
+
+    def load(self) -> None:
+        if os.path.exists(self.file_path):
+            try:
+                with open(self.file_path, encoding="utf-8") as f:
+                    self.matrix = json.load(f)
+            except Exception:
+                self.matrix = {}
+
+    def save(self) -> None:
+        try:
+            with open(self.file_path, "w", encoding="utf-8") as f:
+                json.dump(self.matrix, f, indent=2)
+        except Exception:
+            pass
+
+    def record_tick(
+        self,
+        hunt_id: str,
+        hunt_name: str,
+        level: int | None,
+        gold_per_hour: float,
+        kills_per_hour: float,
+        waves_per_hour: float,
+        deaths: int,
+        xp_per_hour: float | str | None = None,
+        loot_per_hour: float | str | None = None,
+    ) -> dict[str, Any]:
+        if not hunt_id:
+            return {}
+
+        match = match_hunt(hunt_name)
+        min_lvl = match.get("min_lvl", 1) if match else 1
+
+        rec = self.matrix.setdefault(hunt_id, {
+            "id": hunt_id,
+            "name": hunt_name,
+            "min_level": min_lvl,
+            "samples": 0,
+            "deaths": 0,
+            "avg_gold_h": 0.0,
+            "max_gold_h": 0.0,
+            "avg_kills_h": 0.0,
+            "avg_waves_h": 0.0,
+            "xp_h_display": "—",
+            "loot_h_display": "—",
+            "safety_rating": "SEGURO",
+            "category": "EQUILIBRADO",
+            "efficiency_score": 50,
+            "last_seen_ts": time.time(),
+        })
+
+        rec["samples"] += 1
+        rec["deaths"] = max(rec.get("deaths", 0), deaths)
+        rec["last_seen_ts"] = time.time()
+
+        if gold_per_hour > 0:
+            rec["avg_gold_h"] = round((rec.get("avg_gold_h", 0.0) * 0.7) + (gold_per_hour * 0.3), 1)
+            rec["max_gold_h"] = max(rec.get("max_gold_h", 0.0), round(gold_per_hour, 1))
+
+        if kills_per_hour > 0:
+            rec["avg_kills_h"] = round((rec.get("avg_kills_h", 0.0) * 0.7) + (kills_per_hour * 0.3), 1)
+
+        if waves_per_hour > 0:
+            rec["avg_waves_h"] = round((rec.get("avg_waves_h", 0.0) * 0.7) + (waves_per_hour * 0.3), 1)
+
+        if xp_per_hour and str(xp_per_hour) != "—":
+            rec["xp_h_display"] = str(xp_per_hour)
+
+        if loot_per_hour and str(loot_per_hour) != "—":
+            rec["loot_h_display"] = str(loot_per_hour)
+
+        # Avalia Segurança
+        if rec["deaths"] == 0:
+            rec["safety_rating"] = "SEGURO"
+        elif rec["deaths"] <= 2:
+            rec["safety_rating"] = "MODERADO"
+        else:
+            rec["safety_rating"] = "PERIGOSO"
+
+        # Avalia Categoria & Score
+        if rec["deaths"] > 2:
+            rec["category"] = "EVITAR (ALTA MORTALIDADE)"
+            rec["efficiency_score"] = 20
+        elif rec["avg_gold_h"] >= 100000:
+            rec["category"] = "TOP_LUCRO (OURO ALTO)"
+            rec["efficiency_score"] = 95
+        elif rec["avg_kills_h"] >= 1000:
+            rec["category"] = "TOP_XP (FAST CLEAR)"
+            rec["efficiency_score"] = 90
+        elif rec["avg_gold_h"] >= 10000:
+            rec["category"] = "FARM ESTÁVEL"
+            rec["efficiency_score"] = 80
+        else:
+            rec["category"] = "EQUILIBRADO"
+            rec["efficiency_score"] = 65
+
+        self.save()
+        return rec
+
+    def get_rankings(self) -> dict[str, list[dict[str, Any]]]:
+        valid = list(self.matrix.values())
+        by_profit = sorted(valid, key=lambda x: x.get("avg_gold_h", 0.0), reverse=True)
+        by_kills = sorted(valid, key=lambda x: x.get("avg_kills_h", 0.0), reverse=True)
+        return {
+            "by_profit": by_profit[:5],
+            "by_kills": by_kills[:5],
+            "all": valid
+        }

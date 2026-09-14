@@ -107,5 +107,56 @@
     else if (picker.querySelector(".im-card.sp-mode")) res.pickerKind = "spell";
     else res.pickerKind = "other";
   }
+
+  // Extrai dados dos Analisadores do jogo (#panel-hunt, #panel-dmg, #panel-loot, #panel-supply, #panel-taken, .bs-stats)
+  res.analyzers = {};
+
+  // 1. Screensaver / Economy stats bar (.bs-stats)
+  const bsStats = document.querySelector(".bs-stats");
+  if (bsStats) {
+    const items = bsStats.querySelectorAll(".bs-stat");
+    for (const item of items) {
+      const lb = (item.querySelector(".bs-stat-lb")?.textContent || "").trim();
+      const val = (item.querySelector(".bs-stat-v")?.textContent || "").trim();
+      if (/xp\/h/i.test(lb)) res.analyzers.xp_per_hour = val;
+      if (/loot\/h/i.test(lb)) res.analyzers.loot_per_hour = val;
+      if (/tempo/i.test(lb)) res.analyzers.session_time = val;
+    }
+  }
+
+  // 2. Extrai dados de painéis dock/laterais
+  const parsePanelRows = (panelId) => {
+    const p = document.getElementById(panelId);
+    if (!p) return null;
+    const entries = {};
+    const rows = p.querySelectorAll(".arow, .prow, tr, .bs-stat, .stat-row, li, [class*='row']");
+    for (const r of rows) {
+      const txt = (r.innerText || "").replace(/\s+/g, " ").trim();
+      const parts = txt.split(/[:=·]/);
+      if (parts.length >= 2) {
+        const k = parts[0].trim().toLowerCase();
+        const v = parts.slice(1).join(":").trim();
+        entries[k] = v;
+      }
+    }
+    entries._raw = (p.innerText || "").slice(0, 300).replace(/\s+/g, " ").trim();
+    return entries;
+  };
+
+  const pHunt = parsePanelRows("panel-hunt");
+  if (pHunt) res.analyzers.hunt = pHunt;
+
+  const pDmg = parsePanelRows("panel-dmg");
+  if (pDmg) res.analyzers.damage = pDmg;
+
+  const pTaken = parsePanelRows("panel-taken");
+  if (pTaken) res.analyzers.taken = pTaken;
+
+  const pLoot = parsePanelRows("panel-loot");
+  if (pLoot) res.analyzers.loot = pLoot;
+
+  const pSupply = parsePanelRows("panel-supply");
+  if (pSupply) res.analyzers.supply = pSupply;
+
   return res;
 }

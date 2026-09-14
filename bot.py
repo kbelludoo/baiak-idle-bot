@@ -38,12 +38,14 @@ from hunts import (
     HEAL_WORDS,
     MANA_WORDS,
     STRIKE_WORDS,
+    HuntMatrix,
     HuntProfiler,
     classify_magic,
     ids_from_picker_rows,
     infer_level,
     match_hunt,
 )
+from server import start_dashboard_server
 
 # --- Msgpack decodificador leve (compatível com frames Colyseus 0x0D) ---
 def _mp(b, st):
@@ -277,6 +279,8 @@ def main():
     os.makedirs(data_dir, exist_ok=True)
 
     profiler = HuntProfiler(data_dir)
+    hunt_matrix = HuntMatrix(data_dir)
+    start_dashboard_server(data_dir, port=8080)
 
     print("=" * 68)
     print(" ⚔️  BAIAK IDLE — BOT DE ALTO RENDIMENTO COM PROFILER REAL")
@@ -334,6 +338,7 @@ def main():
     extra_last = {}
     last_potion_check = 0.0
     need_potion_check = True
+    latest_analyzers = {}
 
     subsystems_status = {
         "anti_bot": {"status": "FUNCIONAL", "detail": "Presença humana real (isTrusted: true) ativa"},
@@ -346,6 +351,10 @@ def main():
         "auto_heal": {
             "status": "FUNCIONAL" if flags.auto_heal else "DESATIVADO",
             "detail": f"Magia (<{flags.heal_below_pct}%), HP (<{flags.hp_potion_below_pct}%), MP (<{flags.mana_potion_below_pct}%)"
+        },
+        "hunt_analyzer": {
+            "status": "FUNCIONAL",
+            "detail": "Coleta e aprendizado contínuo ativos (Dashboard HTTP porta 8080)"
         }
     }
 
@@ -370,6 +379,8 @@ def main():
                 "hunt_decision": profiler.last_decision,
                 "magic": magic_state,
                 "subsystems": subsystems_status,
+                "analyzers": latest_analyzers,
+                "hunt_matrix": hunt_matrix.matrix,
                 "last_update": ts_now()
             }
             status_path = os.path.join(data_dir, "status.json")
@@ -1000,6 +1011,8 @@ def main():
                     player_gold = hud["gold"]
                 if hud.get("stamina"):
                     player_stamina = hud["stamina"]
+                if hud.get("analyzers"):
+                    latest_analyzers = hud["analyzers"]
                 if old_lvl and player_level and player_level > old_lvl:
                     need_potion_check = True
                 if party_slots > last_party_slots:
@@ -1161,6 +1174,18 @@ def main():
                         print(f"[{ts_now()}] 🏹 [SESSÃO INICIADA] Monitorando telemetria em '{h_name}'...", flush=True)
                     else:
                         profiler.update_tick(player_gold, kills)
+                        b = profiler.benchmarks.get(h_id, {})
+                        hunt_matrix.record_tick(
+                            hunt_id=h_id,
+                            hunt_name=h_name,
+                            level=player_level,
+                            gold_per_hour=b.get("gold_per_hour", 0.0),
+                            kills_per_hour=b.get("kills_per_hour", 0.0),
+                            waves_per_hour=round(waves / (max(1.0, now - t0)) * 3600, 1),
+                            deaths=b.get("deaths", 0),
+                            xp_per_hour=latest_analyzers.get("xp_per_hour"),
+                            loot_per_hour=latest_analyzers.get("loot_per_hour"),
+                        )
                 elif is_city and profiler.active_hunt_id is not None:
                     profiler.record_death(player_gold, kills)
                     print(f"[{ts_now()}] ⚠️ [BENCHMARK] Morte/templo confirmado. Hunt despriorizada temporariamente.", flush=True)
@@ -1267,6 +1292,10 @@ def main():
                 print(f"[{ts_now()}] 📊 [METRICAS REAIS] Waves: {waves} ({waves_h}/h) | Kills: {kills} ({kills_h}/h){gold_rate_str}{lvl_str}{gold_str}{hunt_str}{treino_str}{slots_str}{loop_str}{bag_str}{mag_str}{dec_str} | Online: {int(elapsed//60)}m", flush=True)
                 sub_line = " | ".join([f"{k}: {v['status']}" for k, v in subsystems_status.items()])
                 print(f"[{ts_now()}] 🛡️ [SUBSISTEMAS] {sub_line}", flush=True)
+                top_p = hunt_matrix.get_rankings().get("by_profit", [])
+                if top_p:
+                    best = top_p[0]
+                    print(f"[{ts_now()}] 🧠 [APRENDIZADO ANALYZER] Top Lucro: {best['name']} ({best.get('avg_gold_h', 0):,.0f} g/h | {best.get('safety_rating')}) | Hunts catalogadas: {len(hunt_matrix.matrix)}", flush=True)
                 update_status_file()
                 last_metric_print = now
 

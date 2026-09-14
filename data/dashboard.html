@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Baiak Idle — Hunt Analyser & Telemetria em Tempo Real</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-base: #090d16;
+      --bg-card: rgba(18, 24, 38, 0.75);
+      --bg-card-hover: rgba(28, 38, 60, 0.85);
+      --border-card: rgba(255, 255, 255, 0.08);
+      --border-accent: rgba(139, 92, 246, 0.35);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #8b5cf6;
+      --primary-glow: rgba(139, 92, 246, 0.25);
+      --cyan: #06b6d4;
+      --emerald: #10b981;
+      --amber: #f59e0b;
+      --rose: #f43f5e;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-base);
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(139, 92, 246, 0.12) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(6, 182, 212, 0.1) 0px, transparent 50%),
+        linear-gradient(180deg, #090d16 0%, #06080e 100%);
+      background-attachment: fixed;
+      color: var(--text-main);
+      font-family: 'Outfit', -apple-system, sans-serif;
+      min-height: 100vh;
+      padding: 1.5rem;
+    }
+
+    .container {
+      max-width: 1380px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    /* HEADER */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-card);
+      border-radius: 1rem;
+      padding: 1.25rem 1.75rem;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .brand-icon {
+      font-size: 2.25rem;
+      background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      filter: drop-shadow(0 0 12px var(--primary-glow));
+    }
+
+    .brand-title h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-title p {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .header-badges {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      border: 1px solid transparent;
+    }
+
+    .badge-live {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: rgba(16, 185, 129, 0.35);
+      color: #34d399;
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 8px #10b981;
+      animation: pulse 1.8s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(1.3); }
+    }
+
+    .badge-level {
+      background: rgba(139, 92, 246, 0.18);
+      border-color: rgba(139, 92, 246, 0.4);
+      color: #c4b5fd;
+    }
+
+    /* KPI CARDS GRID */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+
+    .kpi-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border-card);
+      border-radius: 0.875rem;
+      padding: 1.25rem;
+      transition: all 0.25s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .kpi-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--border-accent);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    }
+
+    .kpi-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--card-glow, var(--primary)), transparent);
+      opacity: 0.7;
+    }
+
+    .kpi-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.5rem;
+    }
+
+    .kpi-title {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .kpi-icon {
+      font-size: 1.25rem;
+    }
+
+    .kpi-val {
+      font-size: 1.85rem;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: -0.03em;
+      color: var(--text-main);
+    }
+
+    .kpi-sub {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 0.35rem;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    /* SECTION CONTAINERS */
+    .section-box {
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-card);
+      border-radius: 1rem;
+      padding: 1.5rem;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.25rem;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
+    .section-title h2 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    /* PARTY SLOTS LOADOUT */
+    .party-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+
+    .slot-card {
+      background: rgba(10, 15, 26, 0.65);
+      border: 1px solid var(--border-card);
+      border-radius: 0.75rem;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .slot-card.active {
+      border-color: rgba(139, 92, 246, 0.4);
+      background: rgba(139, 92, 246, 0.05);
+    }
+
+    .slot-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      padding-bottom: 0.5rem;
+    }
+
+    .slot-name {
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    .slot-kit-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.85rem;
+    }
+
+    .kit-badge {
+      font-family: 'JetBrains Mono', monospace;
+      padding: 0.2rem 0.5rem;
+      border-radius: 0.35rem;
+      font-size: 0.75rem;
+      background: rgba(255, 255, 255, 0.06);
+      color: #cbd5e1;
+    }
+
+    .kit-badge.on {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    /* HUNT MATRIX TABLE */
+    .table-wrap {
+      overflow-x: auto;
+      border-radius: 0.5rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.9rem;
+    }
+
+    th {
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--border-card);
+    }
+
+    td {
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .tag-safe {
+      color: #10b981;
+      background: rgba(16, 185, 129, 0.1);
+      padding: 0.2rem 0.5rem;
+      border-radius: 0.25rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .tag-danger {
+      color: #f43f5e;
+      background: rgba(244, 63, 94, 0.1);
+      padding: 0.2rem 0.5rem;
+      border-radius: 0.25rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .tag-gold {
+      color: #f59e0b;
+      background: rgba(245, 158, 11, 0.1);
+      padding: 0.2rem 0.5rem;
+      border-radius: 0.25rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    /* SUBSYSTEMS ROW */
+    .subsystems-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.75rem;
+    }
+
+    .sub-badge {
+      background: rgba(10, 15, 26, 0.65);
+      border: 1px solid var(--border-card);
+      border-radius: 0.5rem;
+      padding: 0.75rem 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .sub-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .sub-status {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #10b981;
+    }
+
+    .sub-desc {
+      font-size: 0.75rem;
+      color: #64748b;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* POUCH BAR */
+    .pouch-bar-wrap {
+      width: 100%;
+      height: 8px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 9999px;
+      overflow: hidden;
+      margin-top: 0.4rem;
+    }
+
+    .pouch-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #8b5cf6, #06b6d4);
+      border-radius: 9999px;
+      transition: width 0.3s ease;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+
+    <!-- HEADER -->
+    <header>
+      <div class="brand">
+        <div class="brand-icon">⚔️</div>
+        <div class="brand-title">
+          <h1>Baiak Idle — Hunt Analyser</h1>
+          <p>Telemetria e Otimização Contínua em Tempo Real</p>
+        </div>
+      </div>
+      <div class="header-badges">
+        <span class="badge badge-live">
+          <span class="pulse-dot"></span>
+          <span id="txt-conn">ONLINE</span>
+        </span>
+        <span class="badge badge-level" id="badge-lvl">Nível: 50</span>
+        <span class="badge" style="background: rgba(255,255,255,0.06);" id="badge-stamina">Stamina: —</span>
+        <span class="badge" style="background: rgba(255,255,255,0.06);" id="badge-clock">00:00:00</span>
+      </div>
+    </header>
+
+    <!-- KPI CARDS -->
+    <div class="kpi-grid">
+      <!-- HUNT ATUAL -->
+      <div class="kpi-card" style="--card-glow: var(--primary);">
+        <div class="kpi-header">
+          <span class="kpi-title">Hunt Atual</span>
+          <span class="kpi-icon">🏹</span>
+        </div>
+        <div class="kpi-val" id="val-hunt" style="font-size: 1.4rem;">Stone Refiner</div>
+        <div class="kpi-sub" id="sub-hunt-status">Modo Loop: ATIVO</div>
+      </div>
+
+      <!-- GOLD / H & TOTAL -->
+      <div class="kpi-card" style="--card-glow: var(--amber);">
+        <div class="kpi-header">
+          <span class="kpi-title">Gold / Hora Real</span>
+          <span class="kpi-icon">🪙</span>
+        </div>
+        <div class="kpi-val" id="val-gold-h" style="color: #fbbf24;">—</div>
+        <div class="kpi-sub" id="sub-gold-total">Saldo: 0 gold</div>
+      </div>
+
+      <!-- XP / H -->
+      <div class="kpi-card" style="--card-glow: var(--cyan);">
+        <div class="kpi-header">
+          <span class="kpi-title">XP / Hora (Analyser)</span>
+          <span class="kpi-icon">⚡</span>
+        </div>
+        <div class="kpi-val" id="val-xp-h" style="color: #38bdf8;">—</div>
+        <div class="kpi-sub" id="sub-xp-rate">Calculado pelo motor nativo</div>
+      </div>
+
+      <!-- KILLS & WAVES / H -->
+      <div class="kpi-card" style="--card-glow: var(--emerald);">
+        <div class="kpi-header">
+          <span class="kpi-title">Abates / Hora</span>
+          <span class="kpi-icon">💀</span>
+        </div>
+        <div class="kpi-val" id="val-kills-h" style="color: #34d399;">—</div>
+        <div class="kpi-sub" id="sub-waves-h">Waves: —/h</div>
+      </div>
+
+      <!-- LOOT POUCH -->
+      <div class="kpi-card" style="--card-glow: var(--rose);">
+        <div class="kpi-header">
+          <span class="kpi-title">Loot Pouch</span>
+          <span class="kpi-icon">🎒</span>
+        </div>
+        <div class="kpi-val" id="val-pouch" style="font-size: 1.4rem;">0 / 29</div>
+        <div class="pouch-bar-wrap">
+          <div class="pouch-fill" id="fill-pouch" style="width: 0%;"></div>
+        </div>
+        <div class="kpi-sub" style="margin-top: 0.35rem;">Auto-Sell aos 75%</div>
+      </div>
+    </div>
+
+    <!-- PARTY & AUTO-HEAL CONFIGURATION -->
+    <div class="section-box">
+      <div class="section-title">
+        <h2>👥 Campeões & Loadout de Magias / Poções</h2>
+        <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #34d399;" id="badge-party-status">Party Pronta</span>
+      </div>
+      <div class="party-grid" id="party-container">
+        <!-- Preenchido dinamicamente via JS -->
+      </div>
+    </div>
+
+    <!-- HUNT MATRIX - APRENDIZADO EMPÍRICO -->
+    <div class="section-box">
+      <div class="section-title">
+        <h2>🧠 Matriz de Aprendizado & Ranking de Hunts</h2>
+        <span style="font-size: 0.85rem; color: var(--text-muted);">Compara e ranqueia o rendimento medido em cada hunt</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Hunt</th>
+              <th>Nível Mín.</th>
+              <th>Gold / h (Médio)</th>
+              <th>Kills / h</th>
+              <th>XP / h</th>
+              <th>Mortes</th>
+              <th>Segurança</th>
+              <th>Classificação</th>
+            </tr>
+          </thead>
+          <tbody id="matrix-tbody">
+            <!-- Preenchido dinamicamente via JS -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- SUBSISTEMAS ATIVOS -->
+    <div class="section-box">
+      <div class="section-title">
+        <h2>🛡️ Status dos Subsistemas Autônomos</h2>
+        <span style="font-size: 0.85rem; color: var(--text-muted);">Monitoramento 100% autônomo</span>
+      </div>
+      <div class="subsystems-grid" id="subsystems-container">
+        <!-- Preenchido dinamicamente via JS -->
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const updateTime = () => {
+      const now = new Date();
+      document.getElementById('badge-clock').textContent = now.toLocaleTimeString();
+    };
+    setInterval(updateTime, 1000);
+    updateTime();
+
+    // Função de formatação de números
+    const fmt = (n) => {
+      if (n == null || isNaN(n)) return '—';
+      return Number(n).toLocaleString('pt-BR');
+    };
+
+    // Atualização dos dados do Dashboard
+    async function refreshDashboard() {
+      try {
+        // Tenta obter status da API local ou arquivo
+        const res = await fetch('/api/status').catch(() => fetch('status.json'));
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Header
+        document.getElementById('badge-lvl').textContent = `Nível: ${data.level || '—'}`;
+        document.getElementById('badge-stamina').textContent = `Stamina: ${data.stamina || '—'}`;
+        document.getElementById('txt-conn').textContent = data.connected ? 'ONLINE' : 'RECONECTANDO';
+
+        // KPIs
+        document.getElementById('val-hunt').textContent = data.hunt || '—';
+        document.getElementById('sub-hunt-status').textContent = `Modo Loop: ${data.loop_mode ? 'ATIVO' : 'OFF'} · Champions: ${data.party_slots || 1}`;
+
+        // Gold
+        const b = (data.benchmarks || {})[data.hunt_decision?.best?.id || ''] || {};
+        const goldRate = b.gold_per_hour || 0;
+        document.getElementById('val-gold-h').textContent = goldRate > 0 ? fmt(Math.round(goldRate)) : 'Calculando...';
+        document.getElementById('sub-gold-total').textContent = `Saldo atual: ${fmt(data.gold || 0)} gold`;
+
+        // Analyser rates
+        const an = data.analyzers || {};
+        document.getElementById('val-xp-h').textContent = an.xp_per_hour || '—';
+
+        // Kills
+        const killsRate = b.kills_per_hour || (data.kills && data.elapsed_minutes ? Math.round((data.kills / data.elapsed_minutes) * 60) : null);
+        document.getElementById('val-kills-h').textContent = killsRate ? `${fmt(killsRate)}/h` : 'Calculando...';
+        const waveRate = (data.waves && data.elapsed_minutes) ? Math.round((data.waves / data.elapsed_minutes) * 60) : null;
+        document.getElementById('sub-waves-h').textContent = `Waves: ${waveRate ? fmt(waveRate) + '/h' : '—'} (${data.waves || 0} total)`;
+
+        // Pouch
+        const pouchText = data.bag_slots || '0 / 29';
+        document.getElementById('val-pouch').textContent = pouchText;
+        const [cur, max] = pouchText.split('/').map(s => parseInt(s.trim(), 10));
+        if (cur && max) {
+          const pct = Math.min(100, Math.round((cur / max) * 100));
+          document.getElementById('fill-pouch').style.width = `${pct}%`;
+        }
+
+        // Campeões / Party
+        const partyCont = document.getElementById('party-container');
+        partyCont.innerHTML = '';
+        const magic = data.magic || {};
+        const slots = magic.slots || {};
+
+        for (let sid = 0; sid < 3; sid++) {
+          const s = slots[String(sid)] || {};
+          const isConfigured = s.ready || (s.heal > 0 || s.mana > 0);
+          const card = document.createElement('div');
+          card.className = `slot-card ${isConfigured ? 'active' : ''}`;
+          card.innerHTML = `
+            <div class="slot-head">
+              <span class="slot-name">Slot ${sid} ${sid === 0 ? '(Líder)' : ''}</span>
+              <span class="badge ${isConfigured ? 'badge-live' : ''}" style="font-size: 0.7rem;">
+                ${isConfigured ? 'Pronto' : 'Sem Campeão'}
+              </span>
+            </div>
+            <div class="slot-kit-row">
+              <span>Magia de Ataque:</span>
+              <span class="kit-badge ${s.attack ? 'on' : ''}">${s.attack ? 'Ativa' : 'Nenhuma'}</span>
+            </div>
+            <div class="slot-kit-row">
+              <span>Magia de Cura:</span>
+              <span class="kit-badge ${s.heal > 0 ? 'on' : ''}">${s.heal > 0 ? 'Configurada (<75%)' : 'Nenhuma'}</span>
+            </div>
+            <div class="slot-kit-row">
+              <span>Poções HP / Mana:</span>
+              <span class="kit-badge ${(s.heal > 0 || s.mana > 0) ? 'on' : ''}">
+                HP (<60%) · MP (<65%)
+              </span>
+            </div>
+          `;
+          partyCont.appendChild(card);
+        }
+
+        // Subsistemas
+        const subCont = document.getElementById('subsystems-container');
+        subCont.innerHTML = '';
+        const subs = data.subsystems || {};
+        for (const [key, info] of Object.entries(subs)) {
+          const box = document.createElement('div');
+          box.className = 'sub-badge';
+          const name = key.replace(/_/g, ' ').toUpperCase();
+          box.innerHTML = `
+            <div class="sub-head">
+              <span>${name}</span>
+              <span class="sub-status">${info.status}</span>
+            </div>
+            <div class="sub-desc" title="${info.detail || ''}">${info.detail || ''}</div>
+          `;
+          subCont.appendChild(box);
+        }
+
+        // Carrega Matriz de Hunts
+        const matRes = await fetch('/api/matrix').catch(() => fetch('hunt_matrix.json'));
+        if (matRes.ok) {
+          const matrix = await matRes.json();
+          renderMatrix(matrix);
+        }
+      } catch (err) {
+        console.warn('Refresh error:', err);
+      }
+    }
+
+    function renderMatrix(matrix) {
+      const tbody = document.getElementById('matrix-tbody');
+      tbody.innerHTML = '';
+      const list = Object.values(matrix || {});
+
+      if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:#64748b;">Nenhuma hunt avaliada ainda nesta sessão.</td></tr>';
+        return;
+      }
+
+      // Ordena por maior gold médio
+      list.sort((a, b) => (b.avg_gold_h || 0) - (a.avg_gold_h || 0));
+
+      for (const item of list) {
+        const tr = document.createElement('tr');
+        const safeClass = item.safety_rating === 'SEGURO' ? 'tag-safe' : (item.safety_rating === 'MODERADO' ? 'tag-gold' : 'tag-danger');
+        tr.innerHTML = `
+          <td style="font-weight: 600; color: #f8fafc;">${item.name}</td>
+          <td>${item.min_level || 1}</td>
+          <td style="color: #fbbf24;">${item.avg_gold_h ? fmt(Math.round(item.avg_gold_h)) + ' /h' : '—'}</td>
+          <td style="color: #34d399;">${item.avg_kills_h ? fmt(Math.round(item.avg_kills_h)) + ' /h' : '—'}</td>
+          <td style="color: #38bdf8;">${item.xp_h_display || '—'}</td>
+          <td style="${item.deaths > 0 ? 'color: #f43f5e;' : ''}">${item.deaths || 0}</td>
+          <td><span class="${safeClass}">${item.safety_rating}</span></td>
+          <td><span class="kit-badge on">${item.category || 'EQUILIBRADO'}</span></td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    setInterval(refreshDashboard, 3000);
+    refreshDashboard();
+  </script>
+</body>
+</html>

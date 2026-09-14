@@ -1,7 +1,8 @@
 # Tokens e arquivos locais confidenciais
 .env
 .env.local
-data/
+data/*
+!data/dashboard.html
 *.log
 
 # Ambientes virtuais e Python
