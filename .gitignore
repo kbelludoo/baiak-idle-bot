@@ -1,28 +1,34 @@
-# Tokens e arquivos locais confidenciais
+# Secrets
 .env
-.env.local
-data/*
-!data/dashboard.html
-*.log
+.env.*
+!.env.example
+**/.env
+!**/.env.example
+**/.env.local
 
-# Ambientes virtuais e Python
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
-env/
 venv/
+env/
 ENV/
 
-# Screenshots de teste
-*.png
-*.jpg
-*.jpeg
+# Logs / dumps locais
+*.log
+bot/data/*
+!bot/data/dashboard.html
 
-# IDEs e Editores
+# IDEs
 .vscode/
 .idea/
 *.sublime-project
 *.sublime-workspace
 .DS_Store
 Thumbs.db
+
+# Screenshots de teste
+*.png
+*.jpg
+*.jpeg

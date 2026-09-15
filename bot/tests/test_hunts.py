@@ -276,6 +276,40 @@ def test_live_sample_beats_stone_by_margin(tmp_path):
     assert best["id"] == "giant-spider"
 
 
+def test_resume_stays_in_last_hunt(tmp_path):
+    p = HuntProfiler(str(tmp_path))
+    p.remember_played("cyclopolis", "Cyclopolis")
+    go, why = p.should_resume_last(True, False, "cyclopolis", "")
+    assert go is False
+    assert p.last_decision["mode"] == "stay"
+    assert "cyclopolis" in why.lower() or "Cyclopolis" in why
+
+
+def test_resume_city_returns_to_last_not_best(tmp_path):
+    p = HuntProfiler(str(tmp_path))
+    p.remember_played("cyclopolis", "Cyclopolis")
+    go, why = p.should_resume_last(True, True, None, "")
+    assert go is True
+    assert p.last_decision["mode"] == "resume"
+    assert "Cyclopolis" in why
+    tgt = p.resume_target("")
+    assert tgt["id"] == "cyclopolis"
+    assert tgt["resumeLast"] is True
+    tgt_force = p.resume_target("refiner-cave")
+    assert tgt_force["id"] == "refiner-cave"
+    go_force, why_force = p.should_resume_last(True, False, "cyclopolis", "refiner-cave")
+    assert go_force is True
+    assert "FORCE_HUNT" in why_force
+
+
+def test_last_played_persists_across_reload(tmp_path):
+    p = HuntProfiler(str(tmp_path))
+    p.start_session("cyclopolis", "Cyclopolis", 0, 0)
+    p2 = HuntProfiler(str(tmp_path))
+    assert p2.last_played_id == "cyclopolis"
+    assert p2.last_played_name == "Cyclopolis"
+
+
 if __name__ == "__main__":
     from pathlib import Path
     import tempfile
@@ -301,6 +335,9 @@ if __name__ == "__main__":
         test_stone_sample_calibrates_without_hop,
         test_death_on_stone_reverts,
         test_live_sample_beats_stone_by_margin,
+        test_resume_stays_in_last_hunt,
+        test_resume_city_returns_to_last_not_best,
+        test_last_played_persists_across_reload,
     ):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))

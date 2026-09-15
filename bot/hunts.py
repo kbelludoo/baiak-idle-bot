@@ -315,6 +315,8 @@ class HuntProfiler:
         self.failed_until: dict[str, float] = {}
         self.last_probe_ts = 0.0
         self.switch_grace_until = 0.0
+        self.last_played_id: str | None = None
+        self.last_played_name: str | None = None
         self.load()
         self.active_hunt_id: str | None = None
         self.active_hunt_name: str | None = None
@@ -345,6 +347,10 @@ class HuntProfiler:
         self.failed_until = {k: float(v) for k, v in (st.get("failed_until") or {}).items()}
         self.last_probe_ts = float(st.get("last_probe_ts") or 0)
         self.sim_scale = float(st.get("sim_scale") or 1.0)
+        lp = str(st.get("last_played_id") or "").strip()
+        ln = str(st.get("last_played_name") or "").strip()
+        self.last_played_id = lp or None
+        self.last_played_name = ln or None
 
     def save(self) -> None:
         try:
@@ -353,6 +359,8 @@ class HuntProfiler:
                 "home_id": self.home_id, "probe_id": self.probe_id,
                 "failed_until": self.failed_until, "last_probe_ts": self.last_probe_ts,
                 "sim_scale": self.sim_scale,
+                "last_played_id": self.last_played_id,
+                "last_played_name": self.last_played_name,
             }
             with open(self.file_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
@@ -433,6 +441,68 @@ class HuntProfiler:
             self.benchmarks[hunt_id] = _blank(hunt_name)
         else:
             self.benchmarks[hunt_id]["name"] = hunt_name
+        self.remember_played(hunt_id, hunt_name)
+
+    def remember_played(self, hunt_id: str | None, hunt_name: str | None) -> None:
+        hid = str(hunt_id or "").strip()
+        name = str(hunt_name or "").strip()
+        if hid in ("", "current_hunt", "—", "-", "–"):
+            hid = ""
+        low = name.lower()
+        if low in ("", "—", "-", "–", "cidade", "city", "conectando"):
+            if not hid:
+                return
+            name = ""
+        changed = False
+        if hid and hid != self.last_played_id:
+            self.last_played_id = hid
+            changed = True
+        if name and name != self.last_played_name:
+            self.last_played_name = name
+            changed = True
+        if changed:
+            self.save()
+
+    def resume_target(self, force_id: str = "") -> dict[str, Any]:
+        fid = str(force_id or "").strip()
+        if fid:
+            known = HUNTS_BY_ID.get(fid) or {}
+            return {"id": fid, "name": str(known.get("name") or fid), "resumeLast": False}
+        return {
+            "id": self.last_played_id or "",
+            "name": self.last_played_name or "",
+            "resumeLast": True,
+        }
+
+    def should_resume_last(
+        self,
+        auto_hunt: bool,
+        is_city: bool,
+        current_id: str | None,
+        force_id: str = "",
+    ) -> tuple[bool, str]:
+        """Fica na hunt atual; só teleporta para a última (ou FORCE_HUNT). Sem ranking."""
+        fid = str(force_id or "").strip()
+        if not auto_hunt:
+            self.last_decision = {"mode": "off", "reason": "AUTO_HUNT off", "home": self.last_played_id}
+            return False, ""
+        if fid:
+            if current_id == fid and not is_city:
+                why = f"FORCE_HUNT já em {fid}"
+                self.last_decision = {"mode": "stay", "reason": why, "home": fid}
+                return False, why
+            why = f"FORCE_HUNT={fid}"
+            self.last_decision = {"mode": "force", "reason": why, "home": fid}
+            return True, why
+        if not is_city and current_id:
+            label = self.last_played_name or current_id
+            why = f"ficar na última hunt ({label})"
+            self.last_decision = {"mode": "stay", "reason": why, "home": self.last_played_id}
+            return False, why
+        label = self.last_played_name or self.last_played_id or "pick-current do jogo"
+        why = f"cidade/templo → última hunt: {label}"
+        self.last_decision = {"mode": "resume", "reason": why, "home": self.last_played_id}
+        return True, why
 
     def mark_switch(self) -> None:
         self.switch_grace_until = time.time() + SWITCH_GRACE
@@ -476,6 +546,7 @@ class HuntProfiler:
             if k.startswith("_") or not isinstance(b, dict):
                 continue
             b["last_death_ts"] = 0
+            b["deaths"] = 0
         self.failed_until = {}
         self.save()
 

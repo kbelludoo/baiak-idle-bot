@@ -70,12 +70,24 @@ async ({ autoHeal = true, healBelowPct = 75, hpPotionBelowPct = 60, manaPotionBe
 
   const configureOpenedHealPicker = async () => {
     let pm = null;
-    for (let w = 0; w < 8; w++) {
+    for (let w = 0; w < 10; w++) {
       await sleep(100);
       pm = document.getElementById("picker-modal");
       if (pm && !pm.classList.contains("hidden")) break;
     }
     if (!pm || pm.classList.contains("hidden")) return false;
+
+    // 1. Tenta botão "Automática" no footer do modal
+    const autoFooterBtn = Array.from(pm.querySelectorAll(".sp-footer button, button")).find((b) =>
+      /^(autom[aá]tica|auto heal|auto)$/i.test((b.textContent || "").trim())
+    );
+    if (autoFooterBtn && vis(autoFooterBtn)) {
+      autoFooterBtn.click();
+      events.push("EQUIPOU_CURA_AUTOMATICA");
+      await sleep(250);
+      closePicker();
+      return true;
+    }
 
     const btns = Array.from(pm.querySelectorAll("button")).filter((b) => {
       const t = (b.textContent || "").trim().toLowerCase();
@@ -85,6 +97,9 @@ async ({ autoHeal = true, healBelowPct = 75, hpPotionBelowPct = 60, manaPotionBe
     const autoBtn = btns.find((b) => {
       const row = (b.closest(".sp-book-row, .im-row, div")?.innerText || "").toLowerCase();
       return /cura autom[aá]tica/i.test(row);
+    }) || btns.find((b) => {
+      const row = b.closest(".sp-book-row, .im-row");
+      return row && !row.classList.contains("lock") && !b.disabled && vis(b);
     }) || btns[0];
 
     if (autoBtn) {
@@ -93,7 +108,7 @@ async ({ autoHeal = true, healBelowPct = 75, hpPotionBelowPct = 60, manaPotionBe
         events.push("CURA_MAGIA_JA_OTIMA");
       } else if (!autoBtn.disabled) {
         autoBtn.click();
-        events.push("EQUIPOU_MAGIA_CURA");
+        events.push("EQUIPOU_MAGIA_CURA: " + (autoBtn.closest(".sp-book-row, div")?.innerText || "").slice(0, 30));
         await sleep(250);
       }
     }

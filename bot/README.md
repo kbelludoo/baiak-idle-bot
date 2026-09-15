@@ -14,6 +14,7 @@ Bot completo de alta performance para o jogo [Baiak Idle](https://baiakidle.com/
 - 🛡️ **Anti-Bot Nativo:** Dispara eventos de presença humana real (`isTrusted: true`) contínuos, evitando bloqueios do jogo.
 - 🔄 **Watchdog com Auto-Reconexão:** Detecta modais de desconexão (*"Sessão Expirada"*, *"Sessão Aberta em Outro Lugar"* ou quedas de WebSocket) e reconecta automaticamente sem você precisar intervir.
 - 🖥️ **Modo Visual ou Segundo Plano:** Escolha se quer ver a janela do jogo abrindo na sua tela ou se prefere deixar rodando 100% invisível em background.
+- 📺 **Transmissão 480p:** MJPEG ~12 fps no dashboard (`http://host:8080/`), sem slideshow de JPEG e sem 4K.
 
 ---
 
@@ -58,6 +59,10 @@ docker compose up -d --build
 
 # 3. Acompanhe os logs ao vivo
 docker compose logs -f
+
+# 4. Transmissão 480p (dashboard + MJPEG)
+# http://IP-DA-VPS:8080/
+# http://IP-DA-VPS:8080/api/stream.mjpeg
 ```
 
 ---
@@ -84,7 +89,9 @@ Você pode personalizar o comportamento do bot editando o arquivo `.env`:
 |---|---|---|
 | `BAIAK_TOKEN` | *obrigatório* | Seu token de autenticação de 64 caracteres. |
 | `HEADLESS` | `false` no PC / `true` na VPS | `false` para ver a janela do navegador; `true` para rodar invisível. |
-| `AUTO_HUNT` | `true` | Habilita caça automática contínua. |
+| `AUTO_HUNT` | `true` | Mantém o loop de caça. Sempre na **última hunt** (não escolhe “melhor”). |
+| `FORCE_HUNT` | `false` | Se `true`, entra em `HUNT_ID` em vez da última hunt. |
+| `HUNT_ID` | vazio | Ignorado salvo com `FORCE_HUNT=true`. |
 | `AUTO_TREINO` | `true` | Alterna para treino quando a stamina acabar. |
 | `AUTO_SELL` | `true` | Vende o loot da pouch quando atingir o limite. |
 | `SELL_THRESHOLD_PCT` | `75` | Porcentagem da bolsa cheia para acionar a venda. |
@@ -94,6 +101,10 @@ Você pode personalizar o comportamento do bot editando o arquivo `.env`:
 | `MANA_POTION_BELOW_PCT` | `65` | % de mana para usar a melhor poção de Mana disponível. |
 | `REDUCE_VFX` | `true` | Reduz efeitos visuais para consumir menos CPU. |
 | `SCREENSHOT_INTERVAL` | `0` | Intervalo em segundos para salvar screenshot em `data/` (0 = desliga). |
+| `LIVE_STREAM` | `true` | Transmissão 480p MJPEG no dashboard (`/api/stream.mjpeg`). |
+| `STREAM_FPS` | `12` | FPS alvo (4–24). 12 é o equilíbrio qualidade/CPU. |
+| `STREAM_WIDTH` / `STREAM_HEIGHT` | `854` / `480` | Resolução do stream (não use 1080p/4K). |
+| `STREAM_QUALITY` | `70` | JPEG 40–85. |
 
 ---
 
@@ -102,7 +113,8 @@ Você pode personalizar o comportamento do bot editando o arquivo `.env`:
 ```text
 ├── iniciar.bat              # Script 1-clique para Windows
 ├── iniciar.sh               # Script 1-clique para Linux/Mac
-├── bot.py                   # Motor principal do bot
+├── stream.py                # Buffer + CDP screencast 480p (MJPEG)
+├── server.py                # Dashboard HTTP + /api/stream.mjpeg
 ├── page_potion.js           # Gerenciador de cura e poções HP/MP por slot
 ├── chrome.py                # Configurações otimizadas do Chromium
 ├── hunts.py                 # Tabela e inteligência de seleção de hunts

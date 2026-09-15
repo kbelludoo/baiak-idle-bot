@@ -8,9 +8,8 @@ Funcionalidades:
 - Prioridade 2: Auto-sell preventivo da Loot Pouch ao atingir >= 70% (#sell-all) e expansão de mochila (#buy-slot).
 - Prioridade 3: Auto-promoção de vocação superior no nível 20.
 - Prioridade 4: Modo Loop nativo (#loop-toggle) sempre ligado.
-  * O personagem caça continuamente sem interrupção arbitrária.
-  * Sai da hunt em morte, ou quando sobrevive mal / gold/h não justifica o tempo.
-  * Hunts com mortes recentes são penalizadas para evitar perda de tempo e quebra de sequência.
+  * Fica sempre na última hunt (HUD / pick-current). Sem ranking automático.
+  * Volta para a última sala após cidade/templo. HUNT_ID só com FORCE_HUNT=true.
 - Chromium mínimo: --disable-gpu, viewport 800x540, sem screenshot.
 - Atualização em tempo real de status.json e benchmarks.json.
 """
@@ -46,6 +45,7 @@ from hunts import (
     match_hunt,
 )
 from server import start_dashboard_server
+from stream import LatestFrame, StreamPump, idle_capture
 
 # --- Msgpack decodificador leve (compatível com frames Colyseus 0x0D) ---
 def _mp(b, st):
@@ -281,8 +281,17 @@ def main():
     os.makedirs(data_dir, exist_ok=True)
 
     profiler = HuntProfiler(data_dir)
+    profiler.clear_death_penalties()
     hunt_matrix = HuntMatrix(data_dir)
-    start_dashboard_server(data_dir, port=8080)
+    live_frames = LatestFrame()
+    stream_pump = StreamPump(
+        live_frames,
+        width=flags.stream_width,
+        height=flags.stream_height,
+        quality=flags.stream_quality,
+        fps=flags.stream_fps,
+    )
+    start_dashboard_server(data_dir, port=8080, frames=live_frames if flags.live_stream else None)
 
     print("=" * 68)
     print(" ⚔️  BAIAK IDLE — BOT DE ALTO RENDIMENTO COM PROFILER REAL")
@@ -294,6 +303,12 @@ def main():
     print(" [*] Stamina 0 → Treino online; stamina volta → hunts")
     print(" [*] Telemetria: uma hunt, mede números, decide uma vez (não hop)")
     print(f" [*] Chrome: {describe()} | screenshot={'on' if flags.screenshot else 'off'}")
+    if flags.live_stream:
+        print(
+            f" [*] Stream: {flags.stream_width}x{flags.stream_height} @ {flags.stream_fps}fps "
+            f"q{flags.stream_quality} → /api/stream.mjpeg",
+            flush=True,
+        )
     print(f" [*] Flags: {describe_flags(flags)}")
     print(f" [*] Pasta de Dados: {data_dir}")
     print("=" * 68)
@@ -341,6 +356,8 @@ def main():
     last_potion_check = 0.0
     need_potion_check = True
     latest_analyzers = {}
+    last_status_file_update = 0.0
+    hud = {}
 
     subsystems_status = {
         "anti_bot": {"status": "FUNCIONAL", "detail": "Presença humana real (isTrusted: true) ativa"},
@@ -360,29 +377,82 @@ def main():
         }
     }
 
+    cached_account_chars = {}
+    last_account_chars_sync = 0.0
+
+    def sync_account_chars():
+        nonlocal cached_account_chars, last_account_chars_sync
+        now = time.time()
+        if cached_account_chars and (now - last_account_chars_sync < 300):
+            return cached_account_chars
+        token = os.environ.get("BAIAK_TOKEN", "").strip()
+        if not token:
+            return cached_account_chars
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "https://baiakidle.com/api/trpc/characters.list",
+                headers={"Authorization": f"Bearer {token}", "User-Agent": "Mozilla/5.0"}
+            )
+            with urllib.request.urlopen(req, timeout=5) as r:
+                if r.status == 200:
+                    data = json.loads(r.read().decode("utf-8"))
+                    chars = data.get("result", {}).get("data", [])
+                    mapping = {}
+                    for c in chars:
+                        v = (c.get("vocation") or "").lower()
+                        mapping[v] = {
+                            "id": c.get("id"),
+                            "name": c.get("name"),
+                            "vocation": v,
+                            "level": int(c.get("level") or 1)
+                        }
+                    if mapping:
+                        cached_account_chars = mapping
+                        last_account_chars_sync = now
+        except Exception:
+            pass
+        return cached_account_chars
+
     def update_status_file():
         nonlocal player_level
         try:
+            acc_chars = sync_account_chars()
             party_members_out = []
             raw_members = hud.get("partyMembers") if isinstance(hud, dict) else []
             slots_map = (magic_state.get("slots") or {}) if isinstance(magic_state, dict) else {}
             helpers_map = helper_by_slot
 
-            total_slots = max(2, party_slots or 2)
+            total_slots = max(len(raw_members) if raw_members else 3, party_slots or 3)
             member_levels = []
             for sid in range(total_slots):
                 found = next((m for m in (raw_members or []) if m.get("slot") == sid), None)
-                voc = (found.get("voc") if found else None) or ("Monk (MK)" if sid == 0 else ("Knight (EK)" if sid == 1 else f"Slot {sid}"))
-                lvl = (found.get("level") if found else None) or (50 if sid == 0 else 3)
-                if lvl > 500:
-                    lvl = 50 if sid == 0 else 3
+                voc = (found.get("voc") if found and found.get("voc") else None) or ("Paladin (RP)" if sid == 0 else ("Knight (EK)" if sid == 1 else "Monk (MK)"))
+                char_info = None
+                voc_low = voc.lower()
+                for vk, vi in acc_chars.items():
+                    if vk in voc_low or (vk.startswith("p") and "paladin" in voc_low) or (vk.startswith("m") and "monk" in voc_low) or (vk.startswith("k") and "knight" in voc_low):
+                        char_info = vi
+                        break
+
+                # PRIORIDADE MÁXIMA: dados reais lidos diretamente do jogo pelo page_hud.js
+                extracted_name = found.get("name") if found and found.get("name") and not str(found.get("name")).startswith("Slot") else None
+                extracted_lvl = found.get("level") if found and found.get("level") else None
+
+                default_name = "Secondpally" if sid == 0 else ("sencodtank" if sid == 1 else "Sofisico")
+                default_lvl = 25 if sid == 0 else (52 if sid == 1 else 31)
+
+                char_name_val = extracted_name or (char_info.get("name") if char_info else None) or default_name
+                lvl = extracted_lvl or (char_info.get("level") if char_info else None) or default_lvl
                 member_levels.append(lvl)
+
                 s_info = slots_map.get(str(sid), {})
                 h_info = helpers_map.get(sid, {})
                 heal_name = h_info.get("heal") or ("Configurada (<75%)" if s_info.get("heal") else "Nenhuma")
                 mana_name = h_info.get("manaPotion") or "mana potion"
                 party_members_out.append({
                     "slot": sid,
+                    "name": char_name_val,
                     "voc": voc,
                     "level": lvl,
                     "heal": heal_name,
@@ -391,9 +461,8 @@ def main():
                     "ready": bool(s_info.get("ready") or (s_info.get("heal") and s_info.get("mana")))
                 })
 
-            top_level = max(member_levels) if member_levels else 50
-            if player_level and player_level > 500:
-                player_level = top_level
+            top_level = max(member_levels) if member_levels else 52
+            player_level = top_level
 
             status_data = {
                 "online": bool(ws_connected and (time.time() - last_ws_frame_time < 35)),
@@ -403,6 +472,8 @@ def main():
                 "gold": player_gold,
                 "stamina": player_stamina or "42:00",
                 "hunt": current_hunt,
+                "last_hunt": profiler.last_played_name or current_hunt,
+                "last_hunt_id": profiler.last_played_id,
                 "loop_mode": loop_active,
                 "treino": in_treino,
                 "party_slots": party_slots,
@@ -417,6 +488,7 @@ def main():
                 "subsystems": subsystems_status,
                 "analyzers": latest_analyzers,
                 "hunt_matrix": hunt_matrix.matrix,
+                "stream": stream_pump.stats() if flags.live_stream else {"ready": False, "error": "LIVE_STREAM=false"},
                 "last_update": ts_now()
             }
             status_path = os.path.join(data_dir, "status.json")
@@ -551,8 +623,18 @@ def main():
                         dug = _dig_level(pay)
                         if dug:
                             player_level = dug
-                        if "stamina" in pay:
-                            player_stamina = pay["stamina"]
+                        # Stamina parsing flexível (int minutos, float 0..1, ou string HH:MM)
+                        s_val = pay.get("stamina") or pay.get("staminaMinutes")
+                        if s_val is None and isinstance(pay.get("player"), dict):
+                            s_val = pay["player"].get("stamina") or pay["player"].get("staminaMinutes")
+                        if s_val is not None:
+                            if isinstance(s_val, (int, float)):
+                                s_mins = int(s_val * 2520) if s_val <= 1.0 else int(s_val)
+                                h = s_mins // 60
+                                m = s_mins % 60
+                                player_stamina = f"{h}:{m:02d}"
+                            elif isinstance(s_val, str) and ":" in s_val:
+                                player_stamina = s_val
                         if "hunt" in pay:
                             current_hunt = pay["hunt"]
                         g = pay.get("gold")
@@ -582,14 +664,27 @@ def main():
         except Exception as e:
             print(f"[{ts_now()}] [AVISO] Navegação /jogar/: {e}", flush=True)
 
-        # Aguarda 8s para conexão WebSocket e montagem do DOM
-        time.sleep(8)
+        # Aguarda conexão WebSocket e montagem do DOM (captura 480p nesse intervalo)
+        if flags.live_stream:
+            idle_capture(page, stream_pump, 8, lambda: running)
+            stream_pump.attach_cdp(page)
+            print(
+                f"[{ts_now()}] 📺 [STREAM] {stream_pump.mode} "
+                f"{flags.stream_width}x{flags.stream_height}@{flags.stream_fps}fps "
+                f"ready={live_frames.seq > 0} err={stream_pump.error or '-'}",
+                flush=True,
+            )
+        else:
+            time.sleep(8)
 
         # =====================================================================
         # LOOP PRINCIPAL DE AUTOMAÇÃO E DECISÃO
         # =====================================================================
         while running:
-            time.sleep(2.5)
+            if flags.live_stream:
+                idle_capture(page, stream_pump, 2.5, lambda: running)
+            else:
+                time.sleep(2.5)
             now = time.time()
 
             try:
@@ -785,6 +880,24 @@ def main():
                         } catch(e) {}
                     }
 
+                    // --- PRIORIDADE 0: SAQUE DE GOLD DA CAIXA DE ENTRADA / LEILÃO (SE NECESSÁRIO) ---
+                    if (res.partySlotsCount < 3 && (!res.gold || res.gold < 100000000)) {
+                        const giClaim = document.querySelector('button.gi-claim, .mini-btn.gi-claim') || Array.from(document.querySelectorAll('button')).find(b => b.offsetParent !== null && !b.disabled && /sacar/i.test((b.innerText || '').trim()));
+                        if (giClaim) {
+                            giClaim.click();
+                            res.events.push('SACOU_GOLD_CAIXA_ENTRADA: ' + (giClaim.innerText || 'OK').trim());
+                        } else {
+                            const chestModal = document.getElementById('chest-modal');
+                            if (chestModal && !chestModal.classList.contains('hidden')) {
+                                const inboxBtn = Array.from(chestModal.querySelectorAll('button.store-sidebtn, button')).find(b => /caixa de entrada|inbox/i.test((b.innerText || '').trim()));
+                                if (inboxBtn && !inboxBtn.classList.contains('active')) {
+                                    inboxBtn.click();
+                                    res.events.push('ABRIU_INBOX_DENTRO_DO_CHEST');
+                                }
+                            }
+                        }
+                    }
+
                     // --- PRIORIDADE 1: COMPRA DE SLOTS DE CAMPEÃO (SLOTS 2 E 3 COM GOLD) ---
                     const unlockSlotBtn = Array.from(document.querySelectorAll('button, .btn, [data-mode="unlock"], [data-mode="recruit"], #recruit-btn')).find(b => {
                         if (b.offsetParent === null || b.disabled) return false;
@@ -805,11 +918,11 @@ def main():
                         const nameInput = document.getElementById('voc-name');
                         const createBtn = document.getElementById('voc-create');
                         const cancelBtn = document.getElementById('voc-cancel');
-                        if (vocOpts.length > 0 && nameInput && createBtn && !createBtn.disabled) {
-                            const freeVoc = vocOpts[0];
-                            freeVoc.click();
-                            const voc = freeVoc.dataset.voc || 'sorcerer';
-                            const prefixes = ['Bell', 'Lord', 'Sir', 'Dark', 'Val', 'Kael', 'Thor', 'Odin'];
+                        if (vocOpts.length > 0 && nameInput && createBtn) {
+                            const preferred = vocOpts.find(v => (v.dataset.voc === 'sorcerer' || v.dataset.voc === 'paladin')) || vocOpts[0];
+                            preferred.click();
+                            const voc = preferred.dataset.voc || 'sorcerer';
+                            const prefixes = ['Bell', 'Lord', 'Sir', 'Dark', 'Val', 'Kael', 'Thor', 'Odin', 'Zeus'];
                             const pfx = prefixes[Math.floor(Math.random() * prefixes.length)];
                             const syllables = ['ar', 'on', 'en', 'ik', 'or', 'an', 'is', 'el', 'us', 'yr'];
                             const s1 = syllables[Math.floor(Math.random() * syllables.length)];
@@ -818,6 +931,9 @@ def main():
                             nameInput.value = validName;
                             nameInput.dispatchEvent(new Event('input', { bubbles: true }));
                             nameInput.dispatchEvent(new Event('change', { bubbles: true }));
+                            if (createBtn.disabled) {
+                                createBtn.disabled = false;
+                            }
                             createBtn.click();
                             res.events.push('RECRUTOU_CAMPEAO: ' + validName + ' (' + voc + ')');
                         } else {
@@ -844,6 +960,31 @@ def main():
                             confirmCancel.click();
                         }
                     }
+
+                    // Detecção genérica de botão modal 'Vender tudo' (ex: dialog de confirmação de venda)
+                    try {
+                        const allBtns = Array.from(document.querySelectorAll('button, .btn, .confirm-btn, .modal button'));
+                        const sellConfirmBtn = allBtns.find(b =>
+                            b.offsetParent !== null && !b.disabled && b.id !== 'sell-all' &&
+                            /^vender tudo$/i.test((b.textContent || '').trim())
+                        );
+                        if (sellConfirmBtn) {
+                            sellConfirmBtn.click();
+                            res.events.push('CONFIRMOU_VENDER_TUDO_MODAL');
+                        }
+                    } catch (e) {}
+
+                    // Se helper-modal ficou aberto e nenhum picker está aberto, fecha o helper
+                    try {
+                        const helperModal = document.getElementById('helper-modal');
+                        const pickerModal = document.getElementById('picker-modal');
+                        if (helperModal && !helperModal.classList.contains('hidden') && (!pickerModal || pickerModal.classList.contains('hidden'))) {
+                            const closeBtn = document.getElementById('helper-modal-close') || helperModal.querySelector('.close-btn, .modal-close');
+                            if (closeBtn) closeBtn.click();
+                            else helperModal.classList.add('hidden');
+                            res.events.push('FECHOU_HELPER_MODAL_RESTANTE');
+                        }
+                    } catch (e) {}
 
                     // --- PRIORIDADE 2b: AUTO-SELL PREVENTIVO (>= 70%) ---
                     let shouldSell = false;
@@ -957,7 +1098,7 @@ def main():
                                 profiler.clear_death_penalties()
                                 print(f"[{ts_now()}] 🚀 [BENCHMARK] Novo slot de campeão. Penalidades de morte zeradas; hunts serão reavaliadas.", flush=True)
                             last_party_slots = max(last_party_slots, party_slots)
-                        if "CONFIRMOU_MODAL_ACAO" in ev or "CONFIRMOU_VENDA_MODAL" in ev:
+                        if "CONFIRMOU_MODAL_ACAO" in ev or "CONFIRMOU_VENDA_MODAL" in ev or "CONFIRMOU_VENDER_TUDO_MODAL" in ev:
                             last_sell_time = now  # registra cooldown de 2 min
                         if "ATIVOU_AUTOSELL_NATIVO" in ev or "CONFIGUROU_PCT_AUTOSELL" in ev:
                             subsystems_status["auto_sell"] = {
@@ -1049,7 +1190,11 @@ def main():
                             time.sleep(4)
                         else:
                             page.goto("https://baiakidle.com/jogar/", wait_until="commit", timeout=30000)
-                            time.sleep(6)
+                            if flags.live_stream:
+                                idle_capture(page, stream_pump, 6, lambda: running)
+                                stream_pump.attach_cdp(page)
+                            else:
+                                time.sleep(6)
                         last_ws_frame_time = time.time()
                         last_ws_close_time = 0.0
                     except Exception as re_err:
@@ -1191,11 +1336,15 @@ def main():
                         kit = slots.get(str(sid)) or {}
                         if kit.get("ready"):
                             continue
-                        job_need, job = "aoe", "fill"
-                        if kit.get("attack") and not kit.get("heal"):
+                        # Prioridade máxima de sobrevivência: Cura -> Mana -> Ataque
+                        if not kit.get("heal"):
                             job_need, job = "heal", "helper"
-                        elif kit.get("attack") and not kit.get("mana"):
+                        elif not kit.get("mana"):
                             job_need, job = "mana", "helper"
+                        elif not kit.get("attack"):
+                            job_need, job = "aoe", "fill"
+                        else:
+                            job_need, job = "aoe", "fill"
                         try:
                             spell_res = page.evaluate(JS_SPELL, {
                                 **spell_args, "need": job_need, "job": job, "slot": sid,
@@ -1219,17 +1368,15 @@ def main():
                 picker_open = bool(hud.get("pickerOpen"))
                 hunt_name_l = (current_hunt or "").lower()
                 looks_city = (
-                    (not current_hunt)
-                    or current_hunt in ("—", "–", "-", "\u2014")
+                    current_hunt in ("Cidade", "City", "Templo", "Temple")
                     or "cidade" in hunt_name_l
-                    or "city" in hunt_name_l
-                    or "conectando" in hunt_name_l
+                    or "templo" in hunt_name_l
                 )
                 if looks_city and not picker_open:
                     city_streak += 1
                 else:
                     city_streak = 0
-                is_city = city_streak >= 2
+                is_city = city_streak >= 5
 
                 if looks_like_treino(current_hunt) or in_treino:
                     if profiler.active_hunt_id is not None:
@@ -1259,56 +1406,31 @@ def main():
                         )
                 elif is_city and profiler.active_hunt_id is not None:
                     profiler.record_death(player_gold, kills)
-                    print(f"[{ts_now()}] ⚠️ [BENCHMARK] Morte/templo confirmado. Hunt despriorizada temporariamente.", flush=True)
+                    print(f"[{ts_now()}] ⚠️ [BENCHMARK] Morte/templo confirmado. Vai voltar à última hunt.", flush=True)
 
                 game_ready = bool(ws_connected) or match_hunt(current_hunt) is not None or kills > 0
-                need_scan = game_ready and (not profiler.unlocked_ids or not player_level) and (now - last_hunt_scan >= 30)
-                best_hunt = profiler.get_best_hunt_to_farm(player_level, magic_state, profiler.unlocked_ids)
-                should_enter, reason = profiler.should_enter(
-                    profiler.active_hunt_id, best_hunt, is_city, now, last_hunt_attempt
+                force_id = flags.hunt_id if flags.force_hunt else ""
+                live_id = profiler.active_hunt_id if not is_city else None
+                should_enter, reason = profiler.should_resume_last(
+                    flags.auto_hunt, is_city, live_id, force_id
                 )
-                sampling = str((profiler.last_decision or {}).get("mode") or "") == "sample"
-                if need_scan and not should_enter:
-                    if sampling or (profiler.active_hunt_id and not is_city):
-                        last_hunt_scan = now
-                        try:
-                            hunt_res = page.evaluate(JS_HUNT, {"id": "", "name": ""})
-                            unlocked = ids_from_picker_rows((hunt_res or {}).get("unlocked") or [])
-                            if unlocked:
-                                profiler.unlocked_ids = unlocked
-                                if not player_level:
-                                    inferred = infer_level(None, unlocked)
-                                    if inferred:
-                                        player_level = inferred
-                                        print(f"[{ts_now()}] 🏹 [NÍVEL INFERIDO] {player_level} via hunts desbloqueadas", flush=True)
-                        except Exception as e:
-                            print(f"[{ts_now()}] 🏹 [ERRO SCAN]: {e}", flush=True)
-                    else:
-                        should_enter = True
-                        reason = "scan da lista de hunts (nível/desbloqueadas)"
-                        last_hunt_scan = now
                 if not game_ready:
                     should_enter = False
-                elif handled_spell and not need_scan and not is_city:
+                elif handled_spell and not is_city:
                     should_enter = False
                 if in_treino or stam_empty or not flags.auto_hunt:
                     should_enter = False
-                if flags.hunt_id and flags.auto_hunt and not in_treino and not stam_empty:
-                    cur = match_hunt(current_hunt)
-                    if not cur or cur.get("id") != flags.hunt_id:
-                        should_enter = True
-                        reason = reason or f"HUNT_ID={flags.hunt_id}"
-                    elif cur.get("id") == flags.hunt_id:
-                        should_enter = False
 
                 if should_enter and (now - last_hunt_attempt >= 10):
                     last_hunt_attempt = now
                     profiler.mark_switch()
-                    target = best_hunt or {"id": "", "name": ""}
-                    if flags.hunt_id:
-                        target = {"id": flags.hunt_id, "name": flags.hunt_id}
-                    label = f"{target.get('name')} ({target.get('id')})" if target.get("id") else "scan"
-                    print(f"[{ts_now()}] 🏹 [HUNT DECISÃO] {reason}. Alvo: {label} | Lvl {player_level} | magia {magic_state}", flush=True)
+                    target = profiler.resume_target(force_id)
+                    label = (
+                        f"{target.get('name')} ({target.get('id')})"
+                        if target.get("id")
+                        else "última do jogo (pick-current)"
+                    )
+                    print(f"[{ts_now()}] 🏹 [HUNT DECISÃO] {reason}. Alvo: {label} | Lvl {player_level}", flush=True)
                     try:
                         hunt_res = page.evaluate(JS_HUNT, target)
                         unlocked = ids_from_picker_rows((hunt_res or {}).get("unlocked") or [])
@@ -1320,13 +1442,13 @@ def main():
                                 if inferred:
                                     player_level = inferred
                                     print(f"[{ts_now()}] 🏹 [NÍVEL INFERIDO] {player_level} via hunts desbloqueadas", flush=True)
-                            best_hunt = profiler.get_best_hunt_to_farm(player_level, magic_state, unlocked)
-                            if best_hunt and hunt_res and not hunt_res.get("success") and best_hunt.get("id") != target.get("id"):
-                                hunt_res = page.evaluate(JS_HUNT, best_hunt)
+                        went = (hunt_res or {}).get("hunt") or target.get("id")
+                        went_name = target.get("name") or went
+                        if hunt_res and (hunt_res.get("success") or hunt_res.get("alreadyThere")) and went:
+                            profiler.remember_played(went, went_name)
                         print(f"[{ts_now()}] 🏹 [RESULTADO TELEPORTE] {hunt_res}", flush=True)
-                        if profiler.last_decision:
-                            d = profiler.last_decision
-                            print(f"[{ts_now()}] 🏹 [ANALISE] {d.get('reason')} | mode={d.get('mode')} home={d.get('home')} | top {d.get('top3')}", flush=True)
+                        d = profiler.last_decision or {}
+                        print(f"[{ts_now()}] 🏹 [ANALISE] {d.get('reason')} | mode={d.get('mode')} last={d.get('home')}", flush=True)
                     except Exception as e:
                         print(f"[{ts_now()}] 🏹 [ERRO TELEPORTE]: {e}", flush=True)
 
@@ -1367,8 +1489,12 @@ def main():
                 if top_p:
                     best = top_p[0]
                     print(f"[{ts_now()}] 🧠 [APRENDIZADO ANALYZER] Top Lucro: {best['name']} ({best.get('avg_gold_h', 0):,.0f} g/h | {best.get('safety_rating')}) | Hunts catalogadas: {len(hunt_matrix.matrix)}", flush=True)
-                update_status_file()
                 last_metric_print = now
+
+            # Atualização contínua do status.json para o Dashboard Web em tempo real (<1.5s)
+            if now - last_status_file_update >= 1.5:
+                update_status_file()
+                last_status_file_update = now
 
         print(f"[{ts_now()}] Fechando navegador...")
         browser.close()

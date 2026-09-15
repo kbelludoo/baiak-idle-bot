@@ -407,6 +407,118 @@
       border-radius: 9999px;
       transition: width 0.3s ease;
     }
+
+    /* LIVE STREAM CARD */
+    .live-stream-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-card);
+      border-radius: 1rem;
+      padding: 1.25rem 1.75rem;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .live-stream-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
+    .live-stream-title {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+
+    .live-stream-container {
+      position: relative;
+      width: 100%;
+      background: #020408;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 0.75rem;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 260px;
+    }
+
+    .live-stream-img {
+      width: 100%;
+      max-height: 480px;
+      object-fit: contain;
+      display: block;
+      background: #020408;
+    }
+
+    .live-stream-badge {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(239, 68, 68, 0.5);
+      color: #f87171;
+      padding: 0.35rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      z-index: 2;
+    }
+
+    .live-dot-rec {
+      width: 8px;
+      height: 8px;
+      background: #ef4444;
+      border-radius: 50%;
+      box-shadow: 0 0 8px #ef4444;
+      animation: pulse 1.2s infinite;
+    }
+
+    .live-stream-meta {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #cbd5e1;
+      padding: 0.3rem 0.65rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-family: 'JetBrains Mono', monospace;
+      z-index: 2;
+    }
+
+    .stream-error {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.25rem;
+      text-align: center;
+      background: rgba(2, 4, 8, 0.72);
+      color: #fca5a5;
+      font-size: 0.9rem;
+      font-weight: 600;
+      pointer-events: none;
+    }
+
+    .stream-error[hidden] {
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -432,6 +544,33 @@
         <span class="badge" style="background: rgba(255,255,255,0.06);" id="badge-clock">00:00:00</span>
       </div>
     </header>
+
+    <!-- LIVE GAME STREAM -->
+    <div class="live-stream-card">
+      <div class="live-stream-header">
+        <div class="live-stream-title">
+          <span>🎮</span>
+          <span>Tela do Jogo — 480p ao vivo</span>
+          <span class="badge badge-live" style="font-size: 0.75rem;">
+            <span class="pulse-dot"></span>
+            AO VIVO
+          </span>
+        </div>
+        <div style="display: flex; gap: 0.75rem; align-items: center;">
+          <span id="live-time-indicator" style="font-size: 0.8rem; color: var(--text-muted);">MJPEG 854×480 @ 12fps</span>
+          <button id="btn-fullscreen-stream" onclick="toggleStreamFullscreen()" style="background: rgba(255,255,255,0.08); border: 1px solid var(--border-card); color: var(--text-main); padding: 0.35rem 0.75rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer; transition: 0.2s ease;">🔍 Expandir</button>
+        </div>
+      </div>
+      <div class="live-stream-container" id="stream-container">
+        <div class="live-stream-badge">
+          <span class="live-dot-rec"></span>
+          GAMEPLAY LIVE
+        </div>
+        <img id="game-live-img" class="live-stream-img" src="/api/screenshot" alt="Transmissão 480p do Baiak Idle" />
+        <div id="stream-error" class="stream-error">Sem vídeo ainda — aguardando /api/screenshot…</div>
+        <div class="live-stream-meta" id="live-fps">854×480 · — fps</div>
+      </div>
+    </div>
 
     <!-- KPI CARDS -->
     <div class="kpi-grid">
@@ -554,23 +693,117 @@
       return Number(n).toLocaleString('pt-BR');
     };
 
-    // Atualização dos dados do Dashboard
+    let streamFullscreen = false;
+    let mjpegOn = false;
+    let shotPoll = null;
+
+    function stopShotPoll() {
+      if (shotPoll) {
+        clearInterval(shotPoll);
+        shotPoll = null;
+      }
+    }
+
+    function startShotPoll() {
+      if (shotPoll) return;
+      const tick = () => {
+        const img = document.getElementById('game-live-img');
+        if (!img) return;
+        const url = '/api/screenshot?t=' + Date.now();
+        const probe = new Image();
+        probe.onload = () => { img.src = url; };
+        probe.src = url;
+      };
+      shotPoll = setInterval(tick, 90);
+      tick();
+    }
+
+    function applyStreamState(st) {
+      const err = document.getElementById('stream-error');
+      const img = document.getElementById('game-live-img');
+      const ready = !!(st && st.ready && (st.bytes || 0) > 200);
+      if (ready) {
+        if (err) err.hidden = true;
+        if (!mjpegOn && img) {
+          stopShotPoll();
+          mjpegOn = true;
+          img.src = '/api/stream.mjpeg?t=' + Date.now();
+        }
+      } else {
+        mjpegOn = false;
+        if (err) {
+          err.hidden = false;
+          const why = (st && st.error) ? st.error : 'nenhum frame (404/vazio em /api/screenshot)';
+          err.textContent = 'Sem vídeo: ' + why + ' — veja o log 📺 [STREAM]';
+        }
+        startShotPoll();
+      }
+    }
+
+    function bindLiveStream() {
+      const img = document.getElementById('game-live-img');
+      if (!img) return;
+      img.onerror = () => {
+        mjpegOn = false;
+        startShotPoll();
+      };
+      startShotPoll();
+    }
+
+    function toggleStreamFullscreen() {
+      const container = document.getElementById('stream-container');
+      const img = document.getElementById('game-live-img');
+      const btn = document.getElementById('btn-fullscreen-stream');
+      streamFullscreen = !streamFullscreen;
+      if (streamFullscreen) {
+        container.style.position = 'fixed';
+        container.style.inset = '0';
+        container.style.zIndex = '99999';
+        container.style.height = '100vh';
+        container.style.borderRadius = '0';
+        img.style.maxHeight = '100vh';
+        img.style.height = '100%';
+        btn.textContent = '❌ Fechar';
+      } else {
+        container.style.position = 'relative';
+        container.style.inset = 'auto';
+        container.style.zIndex = '1';
+        container.style.height = 'auto';
+        container.style.borderRadius = '0.75rem';
+        img.style.maxHeight = '480px';
+        img.style.height = 'auto';
+        btn.textContent = '🔍 Expandir';
+      }
+    }
+
+    // Atualização dos dados do Dashboard com anti-cache
     async function refreshDashboard() {
       try {
-        // Tenta obter status da API local ou arquivo
-        const res = await fetch('/api/status').catch(() => fetch('status.json'));
+        const bust = '?t=' + Date.now();
+        const res = await fetch('/api/status' + bust).catch(() => fetch('status.json' + bust));
         if (!res.ok) return;
         const data = await res.json();
 
         // Header
         let lvlText = `Nível: ${data.level || '—'}`;
         if (data.party_members && data.party_members.length > 0) {
-          const parts = data.party_members.map(m => `${(m.voc || '').split(' ')[0]}: ${m.level || data.level || 50}`);
-          lvlText += ` (${parts.join(' · ')})`;
+          const parts = data.party_members.map(m => `${m.name || (m.voc || '').split(' ')[0]}: Lvl ${m.level || '—'}`);
+          lvlText = `Nível: ${data.level || '—'} (${parts.join(' · ')})`;
         }
         document.getElementById('badge-lvl').textContent = lvlText;
         document.getElementById('badge-stamina').textContent = `Stamina: ${data.stamina || '—'}`;
         document.getElementById('txt-conn').textContent = data.online ? 'ONLINE' : (data.connected ? 'SINCRONIZANDO' : 'RECONECTANDO');
+
+        const st = data.stream || {};
+        applyStreamState(st);
+        const meta = document.getElementById('live-fps');
+        if (meta) {
+          meta.textContent = `${st.width || 854}×${st.height || 480} · ${st.fps || 0} fps · ${st.mode || '-'}`;
+        }
+        const hint = document.getElementById('live-time-indicator');
+        if (hint) {
+          hint.textContent = st.ready ? ('480p ao vivo (' + (st.mode || 'shot') + ')') : 'Aguardando primeiro frame…';
+        }
 
         // KPIs
         document.getElementById('val-hunt').textContent = data.hunt || '—';
@@ -607,8 +840,9 @@
         const magic = data.magic || {};
         const slots = magic.slots || {};
         const members = (data.party_members && data.party_members.length > 0) ? data.party_members : [
-          { slot: 0, voc: 'Monk (MK)', level: 50, heal: 'Spirit Mend', mana: 'mana potion', attack: true, ready: true },
-          { slot: 1, voc: 'Knight (EK)', level: 3, heal: 'Fair Wound Cleansing', mana: 'mana potion', attack: true, ready: true }
+          { slot: 0, name: 'Secondpally', voc: 'Paladin (RP)', level: 25, heal: 'Salvation', mana: 'mana potion', attack: true, ready: true },
+          { slot: 1, name: 'sencodtank', voc: 'Knight (EK)', level: 52, heal: 'Fair Wound Cleansing', mana: 'mana potion', attack: true, ready: true },
+          { slot: 2, name: 'Sofisico', voc: 'Monk (MK)', level: 31, heal: 'Spirit Mend', mana: 'mana potion', attack: true, ready: true }
         ];
 
         members.forEach((m) => {
@@ -620,9 +854,9 @@
           card.innerHTML = `
             <div class="slot-head">
               <div>
-                <span class="slot-name">${m.voc || ('Slot ' + sid)} ${sid === 0 ? '👑' : ''}</span>
+                <span class="slot-name">${m.name ? `<b style="color:#fff;">${m.name}</b> · ` : ''}${m.voc || ('Slot ' + sid)} ${sid === 0 ? '👑' : ''}</span>
                 <div style="font-size: 0.95rem; font-weight: 800; color: #38bdf8; margin-top: 3px;">
-                  ⚡ Nível ${m.level || data.level || 50}
+                  ⚡ Nível ${m.level}
                 </div>
               </div>
               <span class="badge ${isConfigured ? 'badge-live' : ''}" style="font-size: 0.72rem;">
@@ -666,7 +900,7 @@
         }
 
         // Carrega Matriz de Hunts
-        const matRes = await fetch('/api/matrix').catch(() => fetch('hunt_matrix.json'));
+        const matRes = await fetch('/api/matrix' + bust).catch(() => fetch('hunt_matrix.json' + bust));
         if (matRes.ok) {
           const matrix = await matRes.json();
           renderMatrix(matrix);
@@ -706,7 +940,8 @@
       }
     }
 
-    setInterval(refreshDashboard, 3000);
+    bindLiveStream();
+    setInterval(refreshDashboard, 1500);
     refreshDashboard();
   </script>
 </body>

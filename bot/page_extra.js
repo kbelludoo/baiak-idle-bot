@@ -85,7 +85,17 @@ async ({ job }) => {
   if (job === "chest") {
     const miss = await openThen("tab-chest", "chest-modal", async (root) => {
       const inbox = Array.from(root.querySelectorAll("button.store-sidebtn, button")).find((b) => /caixa de entrada|inbox/i.test(txt(b)));
-      if (inbox) { inbox.click(); await sleep(250); }
+      if (inbox) {
+        inbox.click();
+        await sleep(350);
+        // Saque de Gold da Caixa de Entrada / Leilão:
+        const goldClaimBtn = root.querySelector("button.gi-claim, .mini-btn.gi-claim") || Array.from(root.querySelectorAll("button, .btn, .mini-btn")).find((b) => vis(b) && !b.disabled && /sacar/i.test(txt(b)));
+        if (goldClaimBtn) {
+          goldClaimBtn.click();
+          events.push("SACOU_GOLD_INBOX: " + txt(goldClaimBtn));
+          await sleep(400);
+        }
+      }
       let n = 0;
       for (let i = 0; i < 4; i++) {
         const hit = clickRe(root, /coletar tudo|coletar|claim|retirar/i, /deletar|descartar|comprar|loja/);

@@ -209,7 +209,7 @@ def tick(
         try:
             safe_js = f"""(arg) => Promise.race([
                 Promise.resolve().then(() => ({js})(arg)),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout_5s')), 5000))
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout_12s')), 12000))
             ])"""
             res = page.evaluate(safe_js, arg)
         except Exception as exc:
@@ -236,7 +236,7 @@ def tick(
 
     extra_on = flags.auto_extras
     jobs = (
-        ("chest", 90, {"job": "chest"}),
+        ("chest", 15, {"job": "chest"}),
         ("codex", 55, {"job": "codex"}),
         ("tree", 180, {"job": "tree"}),
         ("charms", 240, {"job": "charms"}),

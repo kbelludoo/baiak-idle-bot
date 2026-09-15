@@ -77,7 +77,6 @@ def launch_args() -> list[str]:
         args += [
             "--disable-gpu",
             "--disable-gpu-compositing",
-            "--disable-software-rasterizer",
         ]
     if env_flag("CHROME_SINGLE_PROCESS"):
         args.append("--single-process")

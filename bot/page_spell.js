@@ -11,6 +11,13 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
   const pickerOpen = !!(picker && !picker.classList.contains("hidden"));
   const title = (picker?.querySelector(".im-title")?.textContent || "").toLowerCase();
 
+  const closeHelper = () => {
+    const hm = document.getElementById("helper-modal");
+    const c = document.getElementById("helper-modal-close") || hm?.querySelector(".close-btn, .modal-close");
+    if (c) c.click();
+    else if (hm) hm.classList.add("hidden");
+  };
+
   const detectNeed = () => {
     if (/cura pr[oó]pria|heal/.test(title)) return "heal";
     if (/potion de mana|po[cç][aã]o mp/.test(title)) return "mana";
@@ -36,6 +43,7 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
     const prefer = (words || []).map((s) => String(s).toLowerCase());
     for (const word of prefer) {
       for (const row of rows) {
+        if (row.classList.contains("lock")) continue;
         const blob = txt(row);
         if (!blob.includes(word) || /n[aã]o bebe|nenhuma \(/.test(blob)) continue;
         const btn = useOf(row);
@@ -52,12 +60,14 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
   const pickFirstUse = (method) => {
     const anyUse = Array.from(picker.querySelectorAll("button")).find((b) => {
       const t = (b.textContent || "").trim().toLowerCase();
-      const row = (b.closest(".sp-book-row, .im-row")?.innerText || "").toLowerCase();
-      return (t === "usar" || t === "use") && !b.disabled && vis(b) && !/n[aã]o bebe|nenhuma \(/.test(row);
+      const row = b.closest(".sp-book-row, .im-row");
+      if (row && row.classList.contains("lock")) return false;
+      const rowText = (row?.innerText || "").toLowerCase();
+      return (t === "usar" || t === "use") && !b.disabled && vis(b) && !/n[aã]o bebe|nenhuma \(/.test(rowText);
     });
     if (anyUse) {
       anyUse.click();
-      return { ok: true, picked: (anyUse.closest("div")?.innerText || "").slice(0, 48), method, slot: wantSlot, events };
+      return { ok: true, picked: (anyUse.closest(".sp-book-row, .im-row, div")?.innerText || "").slice(0, 48), method, slot: wantSlot, events };
     }
     return null;
   };
@@ -69,23 +79,57 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
   };
 
   if (pickerOpen && (job === "pick" || !job || /rota|magia|spell|cura|potion|po[cç][aã]o/.test(title) || picker.querySelector(".im-card.sp-mode"))) {
+    // 1. Tenta marcar checkbox 'Só liberadas' para filtrar magias de level alto
+    const onlyUnlockedCheck = picker.querySelector("input[type='checkbox']");
+    if (onlyUnlockedCheck && !onlyUnlockedCheck.checked) {
+      onlyUnlockedCheck.click();
+      await sleep(100);
+    }
+
     const kind = detectNeed();
     if (kind === "aoe") {
+      // Tenta 1: Aba Área
       clickTab(/^(área|area)$/i);
-      const hit = pickByWords([...(metaAoe || []), ...(metaStrike || [])], "meta-aoe")
-        || pickFirstUse("first-aoe");
-      if (hit) return hit;
-    } else if (kind === "heal") {
-      clickTab(/^(cura|heal|magia|todas)$/i);
-      const autoBtn = Array.from(picker.querySelectorAll("button")).find((b) =>
-        /^(autom[aá]tica|auto heal)$/i.test((b.textContent || "").trim()));
-      const hit = pickByWords(
-        ["cura automática", ...(healWords || []), "exura", "light healing", "wound cleansing"],
-        "heal"
-      ) || (autoBtn && vis(autoBtn) && (autoBtn.click(), { ok: true, picked: "auto", method: "heal-auto", slot: wantSlot, events }))
-        || pickFirstUse("first-heal");
+      await sleep(100);
+      let hit = pickByWords(metaAoe || [], "meta-aoe") || pickFirstUse("first-aoe");
+
+      // Tenta 2: Aba Ataque (Strike/Single-target) se Área não tiver nenhuma magia utilizável no level
+      if (!hit) {
+        clickTab(/^(ataque|strike)$/i);
+        await sleep(120);
+        hit = pickByWords(metaStrike || [], "meta-strike") || pickFirstUse("first-strike");
+      }
+
+      // Tenta 3: Aba Todas
+      if (!hit) {
+        clickTab(/^(todas|all)$/i);
+        await sleep(120);
+        hit = pickByWords([...(metaAoe || []), ...(metaStrike || [])], "meta-all") || pickFirstUse("first-all");
+      }
+
       if (hit) {
-        events.push(`CONFIGUROU_CURA_SLOT_${wantSlot ?? "?"}`);
+        events.push(`CONFIGUROU_MAGIA_ATAQUE_SLOT_${wantSlot ?? "?"}: ${hit.picked}`);
+        return hit;
+      }
+    } else if (kind === "heal") {
+      // 1. Botão Automática no footer
+      const autoFooterBtn = Array.from(picker.querySelectorAll(".sp-footer button, button")).find((b) =>
+        /^(autom[aá]tica|auto heal|auto)$/i.test((b.textContent || "").trim())
+      );
+      if (autoFooterBtn && vis(autoFooterBtn)) {
+        autoFooterBtn.click();
+        events.push(`CONFIGUROU_CURA_AUTOMATICA_SLOT_${wantSlot ?? "?"}`);
+        return { ok: true, picked: "auto", method: "heal-auto-footer", slot: wantSlot, events };
+      }
+
+      clickTab(/^(cura|heal|magias?|todas)$/i);
+      await sleep(120);
+      const hit = pickByWords(
+        ["cura automática", ...(healWords || []), "exura", "divine healing", "spirit mend", "wound cleansing", "light healing"],
+        "heal"
+      ) || pickFirstUse("first-heal");
+      if (hit) {
+        events.push(`CONFIGUROU_CURA_SLOT_${wantSlot ?? "?"}: ${hit.picked}`);
         return hit;
       }
     } else if (kind === "mana") {
@@ -94,13 +138,16 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
         "mana"
       ) || pickFirstUse("first-mana");
       if (hit) {
-        events.push(`CONFIGUROU_MANA_SLOT_${wantSlot ?? "?"}`);
+        events.push(`CONFIGUROU_MANA_SLOT_${wantSlot ?? "?"}: ${hit.picked}`);
         return hit;
       }
     } else if (kind === "hp") {
       const hit = pickByWords(["great health", "strong health", "health potion", "ultimate health"], "hp")
         || pickFirstUse("first-hp");
-      if (hit) return hit;
+      if (hit) {
+        events.push(`CONFIGUROU_HP_SLOT_${wantSlot ?? "?"}: ${hit.picked}`);
+        return hit;
+      }
     }
     closePicker();
     return { ok: false, reason: "no-use", kind, slot: wantSlot, events };
@@ -252,6 +299,9 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
     if (!healMissing) events.push(`CURA_JA_OK_SLOT_${wantSlot}: ${(kit.heal || "").slice(0, 40)}`);
     if (!manaMissing) events.push(`MANA_JA_OK_SLOT_${wantSlot}: ${(kit.manaPotion || "").slice(0, 40)}`);
     const ready = !healMissing && !manaMissing;
+    if (ready) {
+      closeHelper();
+    }
     return {
       ok: ready, method: ready ? "helper-ready" : "helper-nothing",
       reason: ready ? undefined : "helper-nothing",

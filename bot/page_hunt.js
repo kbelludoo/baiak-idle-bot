@@ -1,6 +1,18 @@
 async (target) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const visible = (el) => !!(el && el.offsetParent !== null);
+  const closePicker = () => {
+    const picker = document.getElementById("picker-modal");
+    if (picker && !picker.classList.contains("hidden")) {
+      const closeBtn = picker.querySelector(
+        "#picker-modal-close, .im-close, .close-btn, .modal-close, [data-close]"
+      );
+      if (closeBtn) closeBtn.click();
+      else picker.classList.add("hidden");
+    }
+    const tp = document.getElementById("teleport-menu");
+    if (tp) tp.classList.add("hidden");
+  };
   const dbg = {
     wave: (document.getElementById("wave-title")?.textContent || "").trim(),
     hasTp: !!document.getElementById("teleport-menu"),
@@ -58,32 +70,61 @@ async (target) => {
     goDisabled: !!(r.querySelector("button.stage-go") && r.querySelector("button.stage-go").disabled)
   }));
 
-  if (!target || !target.id) {
+  const resumeLast = !!(target && (target.resumeLast || target.mode === "last"));
+  const wantId = String((target && target.id) || "").toLowerCase();
+  const wantName = String((target && target.name) || "").toLowerCase();
+
+  if (!wantId && !wantName && !resumeLast) {
+    closePicker();
     return { success: false, scanOnly: true, rows: rows.length, unlocked, dbg };
   }
 
-  const want = String(target.id).toLowerCase();
-  const wantName = String(target.name || "").toLowerCase();
-  let row = rows.find((r) => (r.dataset.hunt || "").toLowerCase() === want);
+  let row = null;
+  if (wantId) {
+    row = rows.find((r) => (r.dataset.hunt || "").toLowerCase() === wantId);
+  }
   if (!row && wantName) {
     row = rows.find((r) => (r.innerText || "").toLowerCase().includes(wantName));
   }
+  if (!row && resumeLast) {
+    row = rows.find((r) => r.classList.contains("pick-current"));
+  }
   if (!row) {
-    return { success: false, rows: rows.length, unlocked, reason: "not_found", dbg };
+    closePicker();
+    return { success: false, rows: rows.length, unlocked, reason: resumeLast ? "no_current" : "not_found", dbg };
   }
 
   if (row.classList.contains("locked")) {
+    closePicker();
     return { success: false, rows: rows.length, unlocked, reason: "locked", dbg };
+  }
+
+  const findGo = () => row.querySelector("button.stage-go")
+    || Array.from(row.querySelectorAll("button")).find((b) => /caçar|cacar|hunt|ir|escolher/i.test(b.innerText || ""));
+  let goBtn = findGo();
+  if (row.classList.contains("pick-current") && (!goBtn || goBtn.disabled)) {
+    closePicker();
+    return {
+      success: true, alreadyThere: true, hunt: row.dataset.hunt || wantId,
+      method: "already-current", unlocked, dbg
+    };
   }
   if (!row.classList.contains("expanded")) {
     row.click();
     await sleep(300);
+    goBtn = findGo();
   }
-  const goBtn = row.querySelector("button.stage-go")
-    || Array.from(row.querySelectorAll("button")).find((b) => /caçar|cacar|hunt|ir|escolher/i.test(b.innerText || ""));
   if (goBtn && !goBtn.disabled && visible(goBtn)) {
     goBtn.click();
-    return { success: true, hunt: row.dataset.hunt || target.id, method: "stage-go", unlocked, dbg };
+    return { success: true, hunt: row.dataset.hunt || wantId, method: "stage-go", unlocked, dbg };
   }
+  if (row.classList.contains("pick-current")) {
+    closePicker();
+    return {
+      success: true, alreadyThere: true, hunt: row.dataset.hunt || wantId,
+      method: "already-current", unlocked, dbg
+    };
+  }
+  closePicker();
   return { success: false, rows: rows.length, unlocked, reason: "go_disabled", dbg };
 }

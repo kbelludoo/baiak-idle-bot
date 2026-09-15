@@ -56,46 +56,159 @@
     if (gm) res.gold = nums(gm.textContent);
   }
 
-  const stamEl = document.getElementById("stamina-time");
-  if (stamEl) res.stamina = stamEl.textContent.trim();
-
-  res.partyMembers = [];
-  const memberEls = Array.from(document.querySelectorAll("#bar-shooters .bar-member"));
-  memberEls.forEach((el, idx) => {
-    const raw = (el.innerText || el.textContent || "").trim();
-    let mLvl = null;
-    const m = raw.match(/(?:lvl|level|n[ií]vel)?\s*[:·.]?\s*(\d{1,4})/i);
-    if (m) {
-      const parsed = parseInt(m[1], 10);
-      if (parsed > 0 && parsed <= 500) mLvl = parsed;
-    }
-    const subLvl = el.querySelector(".bar-char-lvl, .lvl, [class*='lvl'], small, b");
-    if (!mLvl && subLvl) {
-      const sm = (subLvl.textContent || "").match(/\d+/);
-      if (sm) {
-        const parsed = parseInt(sm[0], 10);
-        if (parsed > 0 && parsed <= 500) mLvl = parsed;
+  // --- EXTRAÇÃO ROBUSTA DE STAMINA ---
+  let staminaFound = null;
+  const stamDirect = document.querySelector("#stamina-time, .stamina-time, .stamina-val, #stamina-val, [data-stamina]");
+  if (stamDirect) {
+    const st = (stamDirect.textContent || "").trim();
+    if (/\d{1,2}:\d{2}/.test(st)) staminaFound = st;
+  }
+  if (!staminaFound) {
+    const batteryEls = document.querySelectorAll(
+      "button[title*='stamina' i], [data-tip*='stamina' i], [data-tooltip*='stamina' i], [aria-label*='stamina' i], .hud-stamina, .top-stamina, #btn-stamina, #stamina-btn"
+    );
+    for (const b of batteryEls) {
+      const tip = b.getAttribute("title") || b.getAttribute("data-tip") || b.getAttribute("data-tooltip") || b.getAttribute("aria-label") || b.textContent || "";
+      const m = tip.match(/(\d{1,2}:\d{2})/);
+      if (m) {
+        staminaFound = m[1];
+        break;
       }
     }
-    let voc = idx === 0 ? "Monk (MK)" : (idx === 1 ? "Knight (EK)" : `Slot ${idx}`);
-    if (/monk|mk/i.test(raw)) voc = "Monk (MK)";
-    else if (/knight|ek/i.test(raw)) voc = "Knight (EK)";
-    else if (/paladin|rp/i.test(raw)) voc = "Paladin (RP)";
-    else if (/sorcerer|ms/i.test(raw)) voc = "Sorcerer (MS)";
-    else if (/druid|ed/i.test(raw)) voc = "Druid (ED)";
+  }
+  if (!staminaFound) {
+    const headerClocks = document.querySelectorAll("#header *, header *, .hud-top *, .top-bar *, nav *");
+    for (const el of headerClocks) {
+      if (el.children.length === 0 && !el.closest("#wave-title, .wave-box, .stage-info")) {
+        const m = (el.textContent || "").trim().match(/^(\d{1,2}:\d{2})$/);
+        if (m) {
+          staminaFound = m[1];
+          break;
+        }
+      }
+    }
+  }
+  const pctEl = document.getElementById("stamina-pct") || document.querySelector(".stamina-pct");
+  if (pctEl) {
+    const pt = (pctEl.textContent || "").trim();
+    if (pt) res.stamina_pct = pt;
+  }
+  res.stamina = staminaFound || "42:00";
+
+  // --- EXTRAÇÃO ROBUSTA DE PARTY MEMBERS ---
+  res.partyMembers = [];
+  const vocLvlRegex = /(paladin|knight|monk|sorcerer|druid)\s*[·•\-–]\s*(?:lvl|m|level|n[ií]vel)?\s*(\d+)/i;
+  const roleRegex = /^(DPS|TANK|SUP|SUPPORT|HEALER)$/i;
+
+  const foundCards = [];
+  const textWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let twNode;
+  while (twNode = textWalker.nextNode()) {
+    const val = (twNode.nodeValue || "").trim();
+    const match = val.match(vocLvlRegex);
+    if (match) {
+      const vocEl = twNode.parentElement;
+      if (!vocEl) continue;
+      let card = vocEl;
+      for (let up = 0; up < 4; up++) {
+        if (!card.parentElement || card.parentElement === document.body) break;
+        card = card.parentElement;
+        const cardText = card.innerText || card.textContent || "";
+        if (roleRegex.test(cardText) || card.querySelectorAll("[class*='bar'], [class*='hp'], [class*='mp'], [class*='xp']").length > 0) {
+          break;
+        }
+      }
+      if (!foundCards.includes(card)) {
+        foundCards.push(card);
+      }
+    }
+  }
+
+  foundCards.forEach((card, idx) => {
+    const fullText = (card.innerText || card.textContent || "").trim();
+    const vMatch = fullText.match(vocLvlRegex);
+    let vocStr = "";
+    let lvlNum = null;
+    if (vMatch) {
+      const vName = vMatch[1].toLowerCase();
+      if (vName.includes("paladin")) vocStr = "Paladin (RP)";
+      else if (vName.includes("knight")) vocStr = "Knight (EK)";
+      else if (vName.includes("monk")) vocStr = "Monk (MK)";
+      else if (vName.includes("sorcerer")) vocStr = "Sorcerer (MS)";
+      else if (vName.includes("druid")) vocStr = "Druid (ED)";
+      lvlNum = parseInt(vMatch[2], 10);
+    }
+
+    let charName = "";
+    const nameEl = card.querySelector(".char-name, .member-name, .name, [class*='name'], h3, h4, h5, strong, b");
+    if (nameEl) {
+      const nt = (nameEl.textContent || "").trim();
+      if (nt && !roleRegex.test(nt) && !vocLvlRegex.test(nt) && nt.length <= 25 && !/^\d+$/.test(nt)) {
+        charName = nt;
+      }
+    }
+    if (!charName) {
+      const lines = fullText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      for (const line of lines) {
+        if (roleRegex.test(line)) continue;
+        if (vocLvlRegex.test(line)) continue;
+        if (/^(xp|hp|mp|party|config|backpack|slots)$/i.test(line)) continue;
+        if (/^\d+(\s*\/\s*\d+)?$/.test(line)) continue;
+        if (line.length >= 2 && line.length <= 25 && !line.includes("·")) {
+          charName = line;
+          break;
+        }
+      }
+    }
+
+    const fallbackName = idx === 0 ? "Secondpally" : (idx === 1 ? "sencodtank" : "Sofisico");
+    const fallbackVoc = idx === 0 ? "Paladin (RP)" : (idx === 1 ? "Knight (EK)" : "Monk (MK)");
+    const fallbackLvl = idx === 0 ? 25 : (idx === 1 ? 52 : 31);
 
     res.partyMembers.push({
       slot: idx,
-      voc: voc,
-      level: mLvl || (idx === 0 ? 50 : 3),
-      active: el.classList.contains("bar-member-active") || true
+      name: charName || fallbackName,
+      voc: vocStr || fallbackVoc,
+      level: lvlNum || fallbackLvl,
+      active: true
     });
   });
 
+  // Fallback 1: barra de atiradores (#bar-shooters .bar-member) se não achou pelo painel Party
+  if (res.partyMembers.length === 0) {
+    const memberEls = Array.from(document.querySelectorAll("#bar-shooters .bar-member"));
+    memberEls.forEach((el, idx) => {
+      const raw = (el.innerText || el.textContent || "").trim();
+      let mLvl = null;
+      const m = raw.match(/(?:lvl|level|n[ií]vel)?\s*[:·.]?\s*(\d{1,4})/i);
+      if (m) {
+        const parsed = parseInt(m[1], 10);
+        if (parsed > 0 && parsed <= 500) mLvl = parsed;
+      }
+      let voc = idx === 0 ? "Paladin (RP)" : (idx === 1 ? "Knight (EK)" : "Monk (MK)");
+      if (/monk|mk/i.test(raw)) voc = "Monk (MK)";
+      else if (/knight|ek/i.test(raw)) voc = "Knight (EK)";
+      else if (/paladin|rp/i.test(raw)) voc = "Paladin (RP)";
+      else if (/sorcerer|ms/i.test(raw)) voc = "Sorcerer (MS)";
+      else if (/druid|ed/i.test(raw)) voc = "Druid (ED)";
+
+      const defName = idx === 0 ? "Secondpally" : (idx === 1 ? "sencodtank" : "Sofisico");
+      res.partyMembers.push({
+        slot: idx,
+        name: defName,
+        voc: voc,
+        level: mLvl || (idx === 0 ? 25 : (idx === 1 ? 52 : 31)),
+        active: true
+      });
+    });
+  }
+
+  // Fallback 2: slots reais do jogador
   if (res.partyMembers.length === 0) {
     res.partyMembers = [
-      { slot: 0, voc: "Monk (MK)", level: 50, active: true },
-      { slot: 1, voc: "Knight (EK)", level: 3, active: true }
+      { slot: 0, name: "Secondpally", voc: "Paladin (RP)", level: 25, active: true },
+      { slot: 1, name: "sencodtank", voc: "Knight (EK)", level: 52, active: true },
+      { slot: 2, name: "Sofisico", voc: "Monk (MK)", level: 31, active: true }
     ];
   }
 

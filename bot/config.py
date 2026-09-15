@@ -46,6 +46,7 @@ def env_str(name: str, default: str = "") -> str:
 class Flags:
     auto_hunt: bool
     hunt_id: str
+    force_hunt: bool
     auto_treino: bool
     auto_sell: bool
     sell_threshold_pct: int
@@ -61,6 +62,11 @@ class Flags:
     heal_below_pct: int
     hp_potion_below_pct: int
     mana_potion_below_pct: int
+    live_stream: bool
+    stream_fps: int
+    stream_width: int
+    stream_height: int
+    stream_quality: int
 
 
 def read_flags() -> Flags:
@@ -70,9 +76,14 @@ def read_flags() -> Flags:
     heal_pct = env_int("HEAL_BELOW_PCT", 75)
     hp_pct = env_int("HP_POTION_BELOW_PCT", 60)
     mana_pct = env_int("MANA_POTION_BELOW_PCT", 65)
+    fps = max(4, min(24, env_int("STREAM_FPS", 12)))
+    sw = max(320, min(1280, env_int("STREAM_WIDTH", 854)))
+    sh = max(240, min(720, env_int("STREAM_HEIGHT", 480)))
+    sq = max(40, min(85, env_int("STREAM_QUALITY", 70)))
     return Flags(
         auto_hunt=env_flag("AUTO_HUNT", True),
         hunt_id=env_str("HUNT_ID"),
+        force_hunt=env_flag("FORCE_HUNT", False),
         auto_treino=env_flag("AUTO_TREINO", True),
         auto_sell=env_flag("AUTO_SELL", True),
         sell_threshold_pct=pct,
@@ -88,6 +99,11 @@ def read_flags() -> Flags:
         heal_below_pct=max(10, min(95, heal_pct)),
         hp_potion_below_pct=max(10, min(95, hp_pct)),
         mana_potion_below_pct=max(10, min(95, mana_pct)),
+        live_stream=env_flag("LIVE_STREAM", True),
+        stream_fps=fps,
+        stream_width=sw,
+        stream_height=sh,
+        stream_quality=sq,
     )
 
 
@@ -103,7 +119,14 @@ def describe_flags(flags: Flags) -> str:
         f"vfx={'low' if flags.reduce_vfx else 'full'}",
         f"headless={'ON' if flags.headless else 'OFF'}",
         f"screenshot={'ON' if flags.screenshot else 'OFF'}",
+        (
+            f"stream={flags.stream_width}x{flags.stream_height}@{flags.stream_fps}q{flags.stream_quality}"
+            if flags.live_stream
+            else "stream=OFF"
+        ),
     ]
-    if flags.hunt_id:
-        bits.append(f"hunt_id={flags.hunt_id}")
+    if flags.force_hunt and flags.hunt_id:
+        bits.append(f"force_hunt={flags.hunt_id}")
+    elif flags.hunt_id:
+        bits.append("hunt_id=ignorado (última hunt)")
     return " | ".join(bits)
