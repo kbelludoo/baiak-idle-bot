@@ -207,7 +207,11 @@ def tick(
             return False
         last[key] = now
         try:
-            res = page.evaluate(js, arg) if arg is not None else page.evaluate(js)
+            safe_js = f"""(arg) => Promise.race([
+                Promise.resolve().then(() => ({js})(arg)),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout_5s')), 5000))
+            ])"""
+            res = page.evaluate(safe_js, arg)
         except Exception as exc:
             logs.append(f"[{key.upper()}] erro: {exc}")
             return True

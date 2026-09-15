@@ -58,6 +58,43 @@
   const stamEl = document.getElementById("stamina-time");
   if (stamEl) res.stamina = stamEl.textContent.trim();
 
+  res.partyMembers = [];
+  const memberEls = Array.from(document.querySelectorAll("#bar-shooters .bar-member"));
+  memberEls.forEach((el, idx) => {
+    const raw = (el.innerText || el.textContent || "").trim();
+    let mLvl = null;
+    const m = raw.match(/(?:lvl|level|n[ií]vel)?\s*[:·.]?\s*(\d{1,4})/i);
+    if (m) {
+      const parsed = parseInt(m[1], 10);
+      if (parsed > 0 && parsed < 3000) mLvl = parsed;
+    }
+    const subLvl = el.querySelector(".bar-char-lvl, .lvl, [class*='lvl'], small, b");
+    if (!mLvl && subLvl) {
+      const sm = (subLvl.textContent || "").match(/\d+/);
+      if (sm) mLvl = parseInt(sm[0], 10);
+    }
+    let voc = idx === 0 ? "Knight (EK)" : (idx === 1 ? "Monk (MK)" : `Slot ${idx}`);
+    if (/monk|mk/i.test(raw)) voc = "Monk (MK)";
+    else if (/knight|ek/i.test(raw)) voc = "Knight (EK)";
+    else if (/paladin|rp/i.test(raw)) voc = "Paladin (RP)";
+    else if (/sorcerer|ms/i.test(raw)) voc = "Sorcerer (MS)";
+    else if (/druid|ed/i.test(raw)) voc = "Druid (ED)";
+
+    res.partyMembers.push({
+      slot: idx,
+      voc: voc,
+      level: mLvl || maxLvl || 50,
+      active: el.classList.contains("bar-member-active") || true
+    });
+  });
+
+  if (res.partyMembers.length === 0) {
+    res.partyMembers = [
+      { slot: 0, voc: "Knight (EK)", level: maxLvl || 50, active: true },
+      { slot: 1, voc: "Monk (MK)", level: maxLvl || 50, active: true }
+    ];
+  }
+
   document.querySelectorAll(".cyc-char-voc, .hd-voc").forEach((el) => {
     const t = (el.textContent || "").trim();
     if (t) res.vocs.push(t);

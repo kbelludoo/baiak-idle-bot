@@ -362,17 +362,42 @@ def main():
 
     def update_status_file():
         try:
+            party_members_out = []
+            raw_members = hud.get("partyMembers") if isinstance(hud, dict) else []
+            slots_map = (magic_state.get("slots") or {}) if isinstance(magic_state, dict) else {}
+            helpers_map = helper_by_slot
+
+            total_slots = max(2, party_slots or 2)
+            for sid in range(total_slots):
+                found = next((m for m in (raw_members or []) if m.get("slot") == sid), None)
+                voc = (found.get("voc") if found else None) or ("Knight (EK)" if sid == 0 else ("Monk (MK)" if sid == 1 else f"Slot {sid}"))
+                lvl = (found.get("level") if found else None) or player_level or 50
+                s_info = slots_map.get(str(sid), {})
+                h_info = helpers_map.get(sid, {})
+                heal_name = h_info.get("heal") or ("Configurada (<75%)" if s_info.get("heal") else "Nenhuma")
+                mana_name = h_info.get("manaPotion") or "mana potion"
+                party_members_out.append({
+                    "slot": sid,
+                    "voc": voc,
+                    "level": lvl,
+                    "heal": heal_name,
+                    "mana": mana_name,
+                    "attack": bool(s_info.get("attack", True)),
+                    "ready": bool(s_info.get("ready") or (s_info.get("heal") and s_info.get("mana")))
+                })
+
             status_data = {
-                "online": True,
+                "online": bool(ws_connected and (time.time() - last_ws_frame_time < 35)),
                 "connected": ws_connected,
                 "character": char_name,
-                "level": player_level,
+                "level": player_level or 50,
                 "gold": player_gold,
-                "stamina": player_stamina,
+                "stamina": player_stamina or "42:00",
                 "hunt": current_hunt,
                 "loop_mode": loop_active,
                 "treino": in_treino,
                 "party_slots": party_slots,
+                "party_members": party_members_out,
                 "bag_slots": bag_slots,
                 "kills": kills,
                 "waves": waves,
@@ -465,10 +490,22 @@ def main():
         page.on("console", lambda msg: print(f"[{ts_now()}] [BROWSER {msg.type}] {msg.text}", flush=True) if "Leviticus" not in msg.text else None)
         page.on("pageerror", lambda err: print(f"[{ts_now()}] [PAGE ERROR] {err}", flush=True))
 
+        def on_dialog(dialog):
+            print(f"[{ts_now()}] ⚠️ [DIALOG] {dialog.type}: {dialog.message[:60]}. Auto-aceitando...", flush=True)
+            try:
+                dialog.accept()
+            except Exception:
+                pass
+        page.on("dialog", on_dialog)
+
+        last_ws_close_time = 0.0
+        active_ws = None
+
         def on_websocket(ws):
-            nonlocal ws_connected, last_ws_frame_time
+            nonlocal ws_connected, last_ws_frame_time, active_ws
             if "baiakidle.com" not in ws.url:
                 return
+            active_ws = ws
             ws_connected = True
             last_ws_frame_time = time.time()
             print(f"[{ts_now()}] 🌐 [WEBSOCKET CONECTADO] {ws.url[:60]}...", flush=True)
@@ -520,9 +557,11 @@ def main():
 
             ws.on("framereceived", on_frame)
             def on_close():
-                nonlocal ws_connected
-                ws_connected = False
-                print(f"[{ts_now()}] ⚠️ [WEBSOCKET FECHADO] Conexão encerrada pelo servidor.", flush=True)
+                nonlocal ws_connected, last_ws_close_time, active_ws
+                if active_ws == ws:
+                    ws_connected = False
+                    last_ws_close_time = time.time()
+                    print(f"[{ts_now()}] ⚠️ [WEBSOCKET FECHADO] Conexão encerrada pelo servidor.", flush=True)
             ws.on("close", on_close)
 
         page.on("websocket", on_websocket)
@@ -976,13 +1015,34 @@ def main():
                             }
 
                 # --- WATCHDOG DE SESSÃO E CONEXÃO ---
-                if state.get("connExpired") or "/jogar" not in page.url or (not ws_connected and (now - last_ws_frame_time > 35)):
-                    reason_desc = state.get("connExpired") or ("URL fora de /jogar/: " + page.url if "/jogar" not in page.url else "WebSocket desconectado > 35s")
-                    print(f"[{ts_now()}] 🔄 [WATCHDOG RECONECTAR] {reason_desc}. Recarregando /jogar/...", flush=True)
+                needs_reconnect = False
+                reconnect_reason = ""
+                if state.get("connExpired"):
+                    needs_reconnect = True
+                    reconnect_reason = f"connExpired: {state.get('connExpired')}"
+                elif "/jogar" not in page.url:
+                    needs_reconnect = True
+                    reconnect_reason = f"URL fora de /jogar/: {page.url}"
+                elif not ws_connected and (now - last_ws_close_time > 6):
+                    needs_reconnect = True
+                    reconnect_reason = f"WebSocket desconectado há {int(now - last_ws_close_time)}s"
+                elif now - last_ws_frame_time > 30:
+                    needs_reconnect = True
+                    reconnect_reason = f"Sem frames WebSocket há {int(now - last_ws_frame_time)}s"
+
+                if needs_reconnect:
+                    print(f"[{ts_now()}] 🔄 [WATCHDOG RECONECTAR] {reconnect_reason}. Restaurando sessão...", flush=True)
                     try:
-                        page.goto("https://baiakidle.com/jogar/", wait_until="commit", timeout=30000)
-                        time.sleep(6)
+                        conn_retry = page.query_selector("#conn-retry")
+                        if conn_retry and conn_retry.is_visible():
+                            print(f"[{ts_now()}] 🔄 Clicando em botão Reconectar (#conn-retry)...", flush=True)
+                            conn_retry.click()
+                            time.sleep(4)
+                        else:
+                            page.goto("https://baiakidle.com/jogar/", wait_until="commit", timeout=30000)
+                            time.sleep(6)
                         last_ws_frame_time = time.time()
+                        last_ws_close_time = 0.0
                     except Exception as re_err:
                         print(f"[{ts_now()}] ⚠️ [WATCHDOG ERRO] {re_err}", flush=True)
                     continue

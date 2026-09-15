@@ -563,9 +563,14 @@
         const data = await res.json();
 
         // Header
-        document.getElementById('badge-lvl').textContent = `Nível: ${data.level || '—'}`;
+        let lvlText = `Nível: ${data.level || '—'}`;
+        if (data.party_members && data.party_members.length > 0) {
+          const parts = data.party_members.map(m => `${(m.voc || '').split(' ')[0]}: ${m.level || data.level || 50}`);
+          lvlText += ` (${parts.join(' · ')})`;
+        }
+        document.getElementById('badge-lvl').textContent = lvlText;
         document.getElementById('badge-stamina').textContent = `Stamina: ${data.stamina || '—'}`;
-        document.getElementById('txt-conn').textContent = data.connected ? 'ONLINE' : 'RECONECTANDO';
+        document.getElementById('txt-conn').textContent = data.online ? 'ONLINE' : (data.connected ? 'SINCRONIZANDO' : 'RECONECTANDO');
 
         // KPIs
         document.getElementById('val-hunt').textContent = data.hunt || '—';
@@ -596,41 +601,51 @@
           document.getElementById('fill-pouch').style.width = `${pct}%`;
         }
 
-        // Campeões / Party
+        // Campeões / Party Loadout
         const partyCont = document.getElementById('party-container');
         partyCont.innerHTML = '';
         const magic = data.magic || {};
         const slots = magic.slots || {};
+        const members = (data.party_members && data.party_members.length > 0) ? data.party_members : [
+          { slot: 0, voc: 'Knight (EK)', level: data.level || 50, heal: 'Spirit Mend', mana: 'mana potion', attack: true, ready: true },
+          { slot: 1, voc: 'Monk (MK)', level: data.level || 50, heal: 'Fair Wound Cleansing', mana: 'mana potion', attack: true, ready: true }
+        ];
 
-        for (let sid = 0; sid < 3; sid++) {
+        members.forEach((m) => {
+          const sid = m.slot;
           const s = slots[String(sid)] || {};
-          const isConfigured = s.ready || (s.heal > 0 || s.mana > 0);
+          const isConfigured = m.ready || s.ready || (s.heal > 0 || s.mana > 0);
           const card = document.createElement('div');
           card.className = `slot-card ${isConfigured ? 'active' : ''}`;
           card.innerHTML = `
             <div class="slot-head">
-              <span class="slot-name">Slot ${sid} ${sid === 0 ? '(Líder)' : ''}</span>
-              <span class="badge ${isConfigured ? 'badge-live' : ''}" style="font-size: 0.7rem;">
-                ${isConfigured ? 'Pronto' : 'Sem Campeão'}
+              <div>
+                <span class="slot-name">${m.voc || ('Slot ' + sid)} ${sid === 0 ? '👑' : ''}</span>
+                <div style="font-size: 0.95rem; font-weight: 800; color: #38bdf8; margin-top: 3px;">
+                  ⚡ Nível ${m.level || data.level || 50}
+                </div>
+              </div>
+              <span class="badge ${isConfigured ? 'badge-live' : ''}" style="font-size: 0.72rem;">
+                ${isConfigured ? 'Pronto (Auto-Heal)' : 'Aguardando'}
               </span>
             </div>
             <div class="slot-kit-row">
               <span>Magia de Ataque:</span>
-              <span class="kit-badge ${s.attack ? 'on' : ''}">${s.attack ? 'Ativa' : 'Nenhuma'}</span>
+              <span class="kit-badge ${s.attack !== false ? 'on' : ''}">${s.attack !== false ? 'Ativa' : 'Nenhuma'}</span>
             </div>
             <div class="slot-kit-row">
               <span>Magia de Cura:</span>
-              <span class="kit-badge ${s.heal > 0 ? 'on' : ''}">${s.heal > 0 ? 'Configurada (<75%)' : 'Nenhuma'}</span>
+              <span class="kit-badge ${m.heal && m.heal !== 'Nenhuma' ? 'on' : ''}">${m.heal && m.heal !== 'Nenhuma' ? `${m.heal} (<75%)` : 'Nenhuma'}</span>
             </div>
             <div class="slot-kit-row">
-              <span>Poções HP / Mana:</span>
-              <span class="kit-badge ${(s.heal > 0 || s.mana > 0) ? 'on' : ''}">
+              <span>Poções HP / MP:</span>
+              <span class="kit-badge on">
                 HP (<60%) · MP (<65%)
               </span>
             </div>
           `;
           partyCont.appendChild(card);
-        }
+        });
 
         // Subsistemas
         const subCont = document.getElementById('subsystems-container');
