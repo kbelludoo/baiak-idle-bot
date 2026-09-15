@@ -577,7 +577,7 @@ def main():
                     };
 
                     // Extrai contagem de Party Slots atuais
-                    const partySlots = document.querySelectorAll('.char-slot, .party-slot');
+                    const partySlots = document.querySelectorAll('#bar-shooters .bar-member, .char-slot, .party-slot, button.bar-char:not(.benched)');
                     if (partySlots.length > 0) res.partySlotsCount = partySlots.length;
 
                     // Fecha modal offline ("Bem-vindo de volta" / Coletar)

@@ -66,7 +66,7 @@
     chars.forEach((b, i) => { if (b.classList.contains("active")) activeSlot = i; });
     if (activeSlot < 0) activeSlot = 0;
     const noneRe = /^(nenhuma|none)$/i;
-    const autoRe = /cura autom[aá]tica|exura|healing/i;
+    const autoRe = /cura autom[aá]tica|exura|healing|mend|cleansing|san|ico|cura|infir/i;
     const gridBtns = Array.from(helper.querySelectorAll(".helper-healgrid .helper-spellbtn"));
     const btns = gridBtns.length ? gridBtns : Array.from(helper.querySelectorAll(".helper-spellbtn"));
     let heal = "", hp = "", mana = "";

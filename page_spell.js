@@ -5,7 +5,7 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
   const events = [];
   const wantSlot = Number.isFinite(Number(slot)) ? Number(slot) : null;
   const noneRe = /^(nenhuma|none)$/i;
-  const autoHealRe = /cura autom[aá]tica|exura|light healing|wound cleansing/i;
+  const autoHealRe = /cura autom[aá]tica|exura|light healing|wound cleansing|spirit mend|mend|cleansing|san|ico|cura/i;
 
   const picker = document.getElementById("picker-modal");
   const pickerOpen = !!(picker && !picker.classList.contains("hidden"));
