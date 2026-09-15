@@ -20,11 +20,28 @@
 
   let maxLvl = 0;
   const lvlRe = /(?:lvl|n[ií]vel|level)\s*[:·.]?\s*(\d{1,4})/i;
-  const lvlEls = document.querySelectorAll(".cyc-char-lvl, .pm-pc-meta, .pm-char-meta");
+  const lvlEls = document.querySelectorAll(
+    ".cyc-char-lvl, .pm-pc-meta, .pm-char-meta, .hd-lvl, .hud-lvl, [class*='lvl'], [class*='level'], #bar-shooters *, .bar-member *"
+  );
   for (const el of lvlEls) {
-    const m = (el.textContent || "").match(lvlRe);
-    const n = m ? parseInt(m[1], 10) : 0;
-    if (n > maxLvl && n < 2000) maxLvl = n;
+    const t = (el.textContent || "").trim();
+    const m = t.match(lvlRe);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > maxLvl && n < 3000) maxLvl = n;
+    }
+  }
+  if (maxLvl === 0) {
+    const allEls = document.querySelectorAll("#header *, #m-dock *, .hud-top *, .player-info *, .cyc-char *");
+    for (const el of allEls) {
+      if (el.children.length === 0) {
+        const m = (el.textContent || "").match(lvlRe);
+        if (m) {
+          const n = parseInt(m[1], 10);
+          if (n > maxLvl && n < 3000) maxLvl = n;
+        }
+      }
+    }
   }
   if (maxLvl > 0) res.level = maxLvl;
 

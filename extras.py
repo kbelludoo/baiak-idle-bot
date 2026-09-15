@@ -50,23 +50,40 @@ def parse_stamina_minutes(text: str | None) -> int | None:
     return None
 
 
-def stamina_is_empty(text: str | None, pct: int | None = None) -> bool:
-    if pct is not None and pct <= 0:
+def stamina_is_empty(text: str | None, pct: int | None = None, threshold_pct: int = 15) -> bool:
+    """Retorna True se stamina estiver <= 15% (ou threshold_pct configurado)."""
+    if pct is not None:
+        return pct <= threshold_pct
+    if not text:
+        return False
+    raw = str(text).strip().lower()
+    if raw in ("0:00", "00:00", "0%", "0", "vazia", "empty"):
         return True
-    mins = parse_stamina_minutes(text)
-    if mins is None:
-        low = (text or "").strip().lower()
-        return low in ("0:00", "00:00", "0%", "0", "vazia", "empty")
-    return mins <= 0
-
-
-def stamina_has_recovered(text: str | None, pct: int | None = None) -> bool:
-    if pct is not None and pct > 0:
-        return True
+    m_pct = re.search(r"(\d+)\s*%", raw)
+    if m_pct:
+        return int(m_pct.group(1)) <= threshold_pct
     mins = parse_stamina_minutes(text)
     if mins is None:
         return False
-    return mins > 0
+    # Max stamina: 42h = 2520 min. 15% = 378 min (~06:18)
+    thresh_mins = int(2520 * (threshold_pct / 100.0))
+    return mins <= thresh_mins
+
+
+def stamina_has_recovered(text: str | None, pct: int | None = None, recovery_pct: int = 85) -> bool:
+    """Retorna True quando stamina tiver recuperado para patamar saudável (>= 85% ou 35h+)."""
+    if pct is not None:
+        return pct >= recovery_pct
+    if not text:
+        return False
+    m_pct = re.search(r"(\d+)\s*%", str(text))
+    if m_pct:
+        return int(m_pct.group(1)) >= recovery_pct
+    mins = parse_stamina_minutes(text)
+    if mins is None:
+        return False
+    thresh_mins = int(2520 * (recovery_pct / 100.0))
+    return mins >= thresh_mins
 
 
 def looks_like_treino(wave: str | None) -> bool:

@@ -206,9 +206,11 @@ def _dig_level(pay, depth=0):
     if depth > 3 or pay is None:
         return None
     if isinstance(pay, dict):
-        for k in ("level",):
+        for k in ("level", "lvl"):
             v = pay.get(k)
-            if isinstance(v, (int, float)) and 1 <= int(v) <= 2000:
+            if isinstance(v, (int, float)) and 1 <= int(v) <= 3000:
+                return int(v)
+            if isinstance(v, str) and v.isdigit() and 1 <= int(v) <= 3000:
                 return int(v)
         for nest in ("player", "account", "me", "leader", "char"):
             got = _dig_level(pay.get(nest), depth + 1)
@@ -577,8 +579,8 @@ def main():
                     };
 
                     // Extrai contagem de Party Slots atuais
-                    const partySlots = document.querySelectorAll('#bar-shooters .bar-member, .char-slot, .party-slot, button.bar-char:not(.benched)');
-                    if (partySlots.length > 0) res.partySlotsCount = partySlots.length;
+                    const shooters = document.querySelectorAll('#bar-shooters .bar-member');
+                    res.partySlotsCount = shooters.length > 0 ? shooters.length : 2;
 
                     // Fecha modal offline ("Bem-vindo de volta" / Coletar)
                     const coletarBtn = Array.from(document.querySelectorAll('button, .btn, [role="button"]')).find(b => 
@@ -1041,7 +1043,7 @@ def main():
                             in_treino = True
                         subsystems_status["treino"] = {
                             "status": "TREINANDO",
-                            "detail": "Stamina 0 — Treino online"
+                            "detail": "Stamina <= 15% — Treino online ativo"
                         }
                     except Exception as e:
                         print(f"[{ts_now()}] 🧘 [TREINO ERRO] {e}", flush=True)
