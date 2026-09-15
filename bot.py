@@ -361,6 +361,7 @@ def main():
     }
 
     def update_status_file():
+        nonlocal player_level
         try:
             party_members_out = []
             raw_members = hud.get("partyMembers") if isinstance(hud, dict) else []
@@ -421,8 +422,8 @@ def main():
             status_path = os.path.join(data_dir, "status.json")
             with open(status_path, "w", encoding="utf-8") as f:
                 json.dump(status_data, f, indent=2)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[{ts_now()}] ⚠️ [STATUS FILE ERRO] {e}", flush=True)
 
     with sync_playwright() as pw:
         ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
