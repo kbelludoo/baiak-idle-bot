@@ -607,8 +607,8 @@
         const magic = data.magic || {};
         const slots = magic.slots || {};
         const members = (data.party_members && data.party_members.length > 0) ? data.party_members : [
-          { slot: 0, voc: 'Knight (EK)', level: data.level || 50, heal: 'Spirit Mend', mana: 'mana potion', attack: true, ready: true },
-          { slot: 1, voc: 'Monk (MK)', level: data.level || 50, heal: 'Fair Wound Cleansing', mana: 'mana potion', attack: true, ready: true }
+          { slot: 0, voc: 'Monk (MK)', level: 50, heal: 'Spirit Mend', mana: 'mana potion', attack: true, ready: true },
+          { slot: 1, voc: 'Knight (EK)', level: 3, heal: 'Fair Wound Cleansing', mana: 'mana potion', attack: true, ready: true }
         ];
 
         members.forEach((m) => {

@@ -20,30 +20,31 @@
 
   let maxLvl = 0;
   const lvlRe = /(?:lvl|n[ií]vel|level)\s*[:·.]?\s*(\d{1,4})/i;
+  // Busca nível apenas em seletores específicos de personagem/HUD (evita pegar requisitos de hunt como 1500)
   const lvlEls = document.querySelectorAll(
-    ".cyc-char-lvl, .pm-pc-meta, .pm-char-meta, .hd-lvl, .hud-lvl, [class*='lvl'], [class*='level'], #bar-shooters *, .bar-member *"
+    "#bar-shooters .bar-member, .cyc-char-lvl, .pm-pc-meta, .pm-char-meta, .hd-lvl, .hud-lvl, .bar-char-lvl"
   );
   for (const el of lvlEls) {
     const t = (el.textContent || "").trim();
     const m = t.match(lvlRe);
     if (m) {
       const n = parseInt(m[1], 10);
-      if (n > maxLvl && n < 3000) maxLvl = n;
+      if (n > maxLvl && n <= 500) maxLvl = n;
     }
   }
   if (maxLvl === 0) {
-    const allEls = document.querySelectorAll("#header *, #m-dock *, .hud-top *, .player-info *, .cyc-char *");
+    const allEls = document.querySelectorAll("#header *, #m-dock *, .hud-top *, .player-info *");
     for (const el of allEls) {
       if (el.children.length === 0) {
         const m = (el.textContent || "").match(lvlRe);
         if (m) {
           const n = parseInt(m[1], 10);
-          if (n > maxLvl && n < 3000) maxLvl = n;
+          if (n > maxLvl && n <= 500) maxLvl = n;
         }
       }
     }
   }
-  if (maxLvl > 0) res.level = maxLvl;
+  res.level = maxLvl > 0 ? maxLvl : 50;
 
   const goldEl = document.querySelector(".hud-money") || document.querySelector(".mk-goldamt") || document.querySelector(".ac-wallet-val");
   if (goldEl) {
@@ -66,14 +67,17 @@
     const m = raw.match(/(?:lvl|level|n[ií]vel)?\s*[:·.]?\s*(\d{1,4})/i);
     if (m) {
       const parsed = parseInt(m[1], 10);
-      if (parsed > 0 && parsed < 3000) mLvl = parsed;
+      if (parsed > 0 && parsed <= 500) mLvl = parsed;
     }
     const subLvl = el.querySelector(".bar-char-lvl, .lvl, [class*='lvl'], small, b");
     if (!mLvl && subLvl) {
       const sm = (subLvl.textContent || "").match(/\d+/);
-      if (sm) mLvl = parseInt(sm[0], 10);
+      if (sm) {
+        const parsed = parseInt(sm[0], 10);
+        if (parsed > 0 && parsed <= 500) mLvl = parsed;
+      }
     }
-    let voc = idx === 0 ? "Knight (EK)" : (idx === 1 ? "Monk (MK)" : `Slot ${idx}`);
+    let voc = idx === 0 ? "Monk (MK)" : (idx === 1 ? "Knight (EK)" : `Slot ${idx}`);
     if (/monk|mk/i.test(raw)) voc = "Monk (MK)";
     else if (/knight|ek/i.test(raw)) voc = "Knight (EK)";
     else if (/paladin|rp/i.test(raw)) voc = "Paladin (RP)";
@@ -83,15 +87,15 @@
     res.partyMembers.push({
       slot: idx,
       voc: voc,
-      level: mLvl || maxLvl || 50,
+      level: mLvl || (idx === 0 ? 50 : 3),
       active: el.classList.contains("bar-member-active") || true
     });
   });
 
   if (res.partyMembers.length === 0) {
     res.partyMembers = [
-      { slot: 0, voc: "Knight (EK)", level: maxLvl || 50, active: true },
-      { slot: 1, voc: "Monk (MK)", level: maxLvl || 50, active: true }
+      { slot: 0, voc: "Monk (MK)", level: 50, active: true },
+      { slot: 1, voc: "Knight (EK)", level: 3, active: true }
     ];
   }
 

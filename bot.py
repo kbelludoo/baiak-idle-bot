@@ -368,10 +368,14 @@ def main():
             helpers_map = helper_by_slot
 
             total_slots = max(2, party_slots or 2)
+            member_levels = []
             for sid in range(total_slots):
                 found = next((m for m in (raw_members or []) if m.get("slot") == sid), None)
-                voc = (found.get("voc") if found else None) or ("Knight (EK)" if sid == 0 else ("Monk (MK)" if sid == 1 else f"Slot {sid}"))
-                lvl = (found.get("level") if found else None) or player_level or 50
+                voc = (found.get("voc") if found else None) or ("Monk (MK)" if sid == 0 else ("Knight (EK)" if sid == 1 else f"Slot {sid}"))
+                lvl = (found.get("level") if found else None) or (50 if sid == 0 else 3)
+                if lvl > 500:
+                    lvl = 50 if sid == 0 else 3
+                member_levels.append(lvl)
                 s_info = slots_map.get(str(sid), {})
                 h_info = helpers_map.get(sid, {})
                 heal_name = h_info.get("heal") or ("Configurada (<75%)" if s_info.get("heal") else "Nenhuma")
@@ -386,11 +390,15 @@ def main():
                     "ready": bool(s_info.get("ready") or (s_info.get("heal") and s_info.get("mana")))
                 })
 
+            top_level = max(member_levels) if member_levels else 50
+            if player_level and player_level > 500:
+                player_level = top_level
+
             status_data = {
                 "online": bool(ws_connected and (time.time() - last_ws_frame_time < 35)),
                 "connected": ws_connected,
                 "character": char_name,
-                "level": player_level or 50,
+                "level": top_level,
                 "gold": player_gold,
                 "stamina": player_stamina or "42:00",
                 "hunt": current_hunt,
