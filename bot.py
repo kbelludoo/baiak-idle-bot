@@ -1023,7 +1023,7 @@ def main():
                 elif "/jogar" not in page.url:
                     needs_reconnect = True
                     reconnect_reason = f"URL fora de /jogar/: {page.url}"
-                elif not ws_connected and (now - last_ws_close_time > 6):
+                elif not ws_connected and last_ws_close_time > 0 and (now - last_ws_close_time > 8):
                     needs_reconnect = True
                     reconnect_reason = f"WebSocket desconectado há {int(now - last_ws_close_time)}s"
                 elif now - last_ws_frame_time > 30:
