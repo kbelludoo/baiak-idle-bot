@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  baiak-bot-ts:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: baiak-bot-ts
+    restart: always
+    ipc: host
+    shm_size: "256m"
+    environment:
+      - PORT=8080
+      - HOST=0.0.0.0
+      - HEADLESS=true
+      - STREAM=true
+      - BOT_ARGS=--stream
+      - USER_DATA_DIR=/app/data/chrome_profile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
