@@ -28,14 +28,20 @@ services:
       - ./page_equip.js:/app/page_equip.js
       - ./page_prey.js:/app/page_prey.js
       - ./page_extra.js:/app/page_extra.js
+      - ./kernel_bot.js:/app/kernel_bot.js
       - ./baiakidle-helper.user.js:/app/baiakidle-helper.user.js
     shm_size: "64mb"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.80"
+          memory: 512M
     environment:
       - PYTHONUNBUFFERED=1
       - SCREENSHOT_INTERVAL=0
-      - LIVE_STREAM=true
-      - STREAM_FPS=12
+      - LIVE_STREAM=false
+      - STREAM_FPS=2
       - STREAM_WIDTH=854
       - STREAM_HEIGHT=480
-      - STREAM_QUALITY=70
+      - STREAM_QUALITY=60
       - CHROME_GL=off

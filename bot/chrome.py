@@ -63,6 +63,8 @@ def launch_args() -> list[str]:
         "--use-mock-keychain",
         "--renderer-process-limit=1",
         "--js-flags=--max-old-space-size=96",
+        "--remote-debugging-port=9222",
+        "--remote-debugging-address=0.0.0.0",
     ]
     if gl_mode() == "swiftshader":
         args += [
@@ -74,9 +76,24 @@ def launch_args() -> list[str]:
             "--disable-gpu-memory-buffer-video-frames",
         ]
     else:
+        # Mata o gpu-process por completo — sem SwiftShader, sem sandbox de GPU
         args += [
             "--disable-gpu",
             "--disable-gpu-compositing",
+            "--disable-gpu-sandbox",
+            "--disable-software-rasterizer",
+            "--disable-webgl",
+            "--disable-webgl2",
+            "--disable-3d-apis",
+            "--use-gl=egl",
+            "--gpu-no-context-lost",
+            "--disable-accelerated-2d-canvas",
+            "--disable-accelerated-jpeg-decoding",
+            "--disable-accelerated-mjpeg-decode",
+            "--disable-accelerated-video-decode",
+            "--disable-accelerated-video-encode",
+            "--disable-gpu-memory-buffer-video-frames",
+            "--disable-partial-raster",
         ]
     if env_flag("CHROME_SINGLE_PROCESS"):
         args.append("--single-process")

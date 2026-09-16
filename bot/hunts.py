@@ -688,12 +688,12 @@ class HuntProfiler:
                     el = int(self._measure_elapsed())
                     g, k = self._measure_gold_delta(), self._measure_kill_delta()
                     return live, f"sim ok; calibrar amostra ({el}s/{SAMPLE_SEC}s, +{g}g/{k}k)", "sample", False
-                return live, f"sim+amostra: {sim_h['name']} é o gold farm", "farm", False
-            if rec.get("clearly_better") and gold_farm_ready(magic):
-                g_s = round(float(rec.get("gold_h") or 0), 0)
-                return sim_h, f"sim motor: {sim_h['name']} ~{g_s}g/h (amostra só calibra)", "sim", True
-            if not live and gold_farm_ready(magic):
-                return sim_h, f"sim motor: ir para {sim_h['name']} (gold/h)", "sim", False
+            if rec.get("clearly_better"):
+                exp_s = round(float(rec.get("exp_h") or 0), 0)
+                return sim_h, f"rush XP: {sim_h['name']} ~{exp_s} xp/h (maior level no menor tempo)", "sim", True
+            if not live:
+                exp_s = round(float(rec.get("exp_h") or 0), 0)
+                return sim_h, f"rush XP: ir para {sim_h['name']} (~{exp_s} xp/h)", "sim", False
         if live and not self._visit_ready():
             el = int(self._measure_elapsed())
             g, k = self._measure_gold_delta(), self._measure_kill_delta()

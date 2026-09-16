@@ -20,6 +20,7 @@ import time
 import json
 import signal
 import random
+import threading
 from datetime import datetime, timezone
 
 from chrome import attach_blocker, context_options, describe, launch_args
@@ -45,7 +46,7 @@ from hunts import (
     match_hunt,
 )
 from server import start_dashboard_server
-from stream import LatestFrame, StreamPump, idle_capture
+from stream import LatestFrame, StreamPump, idle_capture, process_pending_clicks, process_pending_evals
 
 # --- Msgpack decodificador leve (compatível com frames Colyseus 0x0D) ---
 def _mp(b, st):
@@ -246,6 +247,7 @@ JS_EQUIP = load_js("page_equip.js")
 JS_PREY = load_js("page_prey.js")
 JS_EXTRA = load_js("page_extra.js")
 JS_POTION = load_js("page_potion.js")
+JS_KERNEL = load_js("kernel_bot.js")
 EXTRA_SCRIPTS = {
     "bags": JS_BAGS,
     "boss": JS_BOSS,
@@ -253,6 +255,35 @@ EXTRA_SCRIPTS = {
     "prey": JS_PREY,
     "extra": JS_EXTRA,
 }
+
+
+def safe_eval(page, js: str, arg=None, timeout: float = 12.0):
+    """Wrapper compatível com Playwright/greenlet — chama page.evaluate diretamente.
+    O timeout é tratado pelo set_default_timeout do contexto Playwright.
+    NÃO usa threads secundárias (incompatível com greenlet do Playwright).
+    """
+    try:
+        return page.evaluate(js, arg) if arg is not None else page.evaluate(js)
+    except Exception:
+        raise
+
+
+def start_loop_watchdog(get_last_tick, restart_after: float = 90.0):
+    """Thread daemon que reinicia o processo se o loop principal travar.
+    Apenas envia SIGTERM — não toca no Playwright.
+    """
+    def _watch():
+        while True:
+            time.sleep(15)
+            age = time.time() - get_last_tick()
+            if age > restart_after:
+                print(f"[WATCHDOG] Loop travado há {int(age)}s — reiniciando processo...", flush=True)
+                os.kill(os.getpid(), signal.SIGTERM)
+                break
+
+    t = threading.Thread(target=_watch, daemon=True, name="loop-watchdog")
+    t.start()
+    return t
 
 
 def main():
@@ -358,6 +389,9 @@ def main():
     latest_analyzers = {}
     last_status_file_update = 0.0
     hud = {}
+    last_loop_tick = time.time()
+    last_equip_check = 0.0
+    start_loop_watchdog(lambda: last_loop_tick, restart_after=90.0)
 
     subsystems_status = {
         "anti_bot": {"status": "FUNCIONAL", "detail": "Presença humana real (isTrusted: true) ativa"},
@@ -374,6 +408,11 @@ def main():
         "hunt_analyzer": {
             "status": "FUNCIONAL",
             "detail": "Coleta e aprendizado contínuo ativos (Dashboard HTTP porta 8080)"
+        },
+        "auto_equip": {
+            "status": "AGUARDANDO",
+            "detail": "Monitorando mochila para itens de tier superior",
+            "last_equipped": []
         }
     }
 
@@ -547,26 +586,23 @@ def main():
                     }}));
                 }}
             }} catch (e) {{}}
-            // Antibot presence bypass: simula eventos de presença humana
+            // Antibot presence bypass: emula isTrusted e eventos sem criar setInterval excessivo
             (function() {{
                 try {{
-                    const origAdd = window.addEventListener;
-                    window.addEventListener = function(type, fn, opts) {{
-                        if (type === 'pointerdown' || type === 'pointermove' || type === 'keydown') {{
-                            setInterval(() => {{
-                                try {{ fn({{ isTrusted: true, target: document.body }}); }} catch(_) {{}}
-                            }}, 2000);
-                        }}
-                        return origAdd.call(this, type, fn, opts);
-                    }};
+                    Object.defineProperty(Event.prototype, 'isTrusted', {{ get: () => true, configurable: true }});
                 }} catch(e) {{}}
             }})();
         """
         context.add_init_script(init_script)
+        context.add_init_script(JS_KERNEL)
 
         page = context.new_page()
         page.set_default_timeout(15000)
         attach_blocker(page)
+
+        # Registra eval handler para inspeção via /api/eval
+        from server import set_eval_handler
+        set_eval_handler(lambda js: page.evaluate(js))
 
         page.on("console", lambda msg: print(f"[{ts_now()}] [BROWSER {msg.type}] {msg.text}", flush=True) if "Leviticus" not in msg.text else None)
         page.on("pageerror", lambda err: print(f"[{ts_now()}] [PAGE ERROR] {err}", flush=True))
@@ -681,11 +717,13 @@ def main():
         # LOOP PRINCIPAL DE AUTOMAÇÃO E DECISÃO
         # =====================================================================
         while running:
-            if flags.live_stream:
-                idle_capture(page, stream_pump, 2.5, lambda: running)
-            else:
-                time.sleep(2.5)
+            process_pending_clicks(page, stream_pump)
+            process_pending_evals(page)
+            idle_capture(page, stream_pump, 1.0, lambda: running)
+            process_pending_clicks(page, stream_pump)
+            process_pending_evals(page)
             now = time.time()
+            last_loop_tick = now  # watchdog: prova que o loop está vivo
 
             try:
                 # Mantém presença humana real ativa (isTrusted: true no antibot do index.js)
@@ -706,7 +744,7 @@ def main():
                 should_check_codex = False  # Codex completo vive em page_extra.js
                 should_check_promote = (now - last_promote_check_time >= 30)
 
-                state = page.evaluate("""({ sellAllowed, shouldConfigAutoSell, shouldCheckDaily, shouldCheckCodex, shouldCheckPromote, autoSell, sellThresholdPct }) => {
+                state = safe_eval(page, """({ sellAllowed, shouldConfigAutoSell, shouldCheckDaily, shouldCheckCodex, shouldCheckPromote, autoSell, sellThresholdPct }) => {
                     const res = {
                         title: document.title,
                         wave: (document.getElementById('wave-title')?.textContent || '').trim(),
@@ -1218,7 +1256,7 @@ def main():
 
                 hud = {}
                 try:
-                    hud = page.evaluate(JS_HUD) or {}
+                    hud = safe_eval(page, JS_HUD) or {}
                 except Exception:
                     hud = {}
                 if hud.get("level"):
@@ -1248,7 +1286,7 @@ def main():
                 if flags.auto_treino and should_enter_treino(True, stam_empty) and (now - last_treino_time >= 8):
                     last_treino_time = now
                     try:
-                        tr = page.evaluate(JS_TREINO, {"want": "train"}) or {}
+                        tr = safe_eval(page, JS_TREINO, {"want": "train"}) or {}
                         for ev in tr.get("events") or []:
                             print(f"[{ts_now()}] 🧘 [TREINO] {ev}", flush=True)
                         if tr.get("wave"):
@@ -1274,11 +1312,33 @@ def main():
                 ):
                     print(f"[{ts_now()}] {line}", flush=True)
 
+                # AUTO-EQUIP: verifica mochila a cada 30s por itens de tier superior
+                if not in_treino and not hud.get("pickerOpen") and (now - last_equip_check >= 30):
+                    last_equip_check = now
+                    try:
+                        eq_res = safe_eval(page, JS_EQUIP) or {}
+                        if eq_res.get("events"):
+                            for ev in eq_res["events"]:
+                                print(f"[{ts_now()}] 🛡️ [AUTO-EQUIP] {ev}", flush=True)
+                        new_items = eq_res.get("equipped") or []
+                        if new_items:
+                            prev = subsystems_status["auto_equip"].get("last_equipped") or []
+                            # mantém no máximo 20 itens no histórico
+                            subsystems_status["auto_equip"] = {
+                                "status": "FUNCIONAL",
+                                "detail": f"Último: {new_items[0]['name']} (T{new_items[0].get('tier','?')}) · {len(prev)+len(new_items)} total na sessão",
+                                "last_equipped": (new_items + prev)[:20]
+                            }
+                        elif subsystems_status["auto_equip"]["status"] == "AGUARDANDO":
+                            subsystems_status["auto_equip"]["detail"] = "Mochila verificada — sem itens de tier superior"
+                    except Exception as e:
+                        print(f"[{ts_now()}] 🛡️ [AUTO-EQUIP ERRO] {e}", flush=True)
+
                 if flags.auto_heal and not hud.get("pickerOpen") and (now - last_potion_check >= 60 or need_potion_check):
                     last_potion_check = now
                     need_potion_check = False
                     try:
-                        pot_res = page.evaluate(JS_POTION, {
+                        pot_res = safe_eval(page, JS_POTION, {
                             "autoHeal": flags.auto_heal,
                             "healBelowPct": flags.heal_below_pct,
                             "hpPotionBelowPct": flags.hp_potion_below_pct,
@@ -1317,7 +1377,7 @@ def main():
                     handled_spell = True
                     need = {"heal": "heal", "mana": "mana", "hp": "hp"}.get(picker_kind, "aoe")
                     try:
-                        spell_res = page.evaluate(JS_SPELL, {
+                        spell_res = safe_eval(page, JS_SPELL, {
                             **spell_args, "need": need, "job": "pick", "slot": last_gear_slot,
                         })
                         _apply_helper_snap(spell_res)
@@ -1346,7 +1406,7 @@ def main():
                         else:
                             job_need, job = "aoe", "fill"
                         try:
-                            spell_res = page.evaluate(JS_SPELL, {
+                            spell_res = safe_eval(page, JS_SPELL, {
                                 **spell_args, "need": job_need, "job": job, "slot": sid,
                             })
                             last_gear_slot = sid
@@ -1432,7 +1492,7 @@ def main():
                     )
                     print(f"[{ts_now()}] 🏹 [HUNT DECISÃO] {reason}. Alvo: {label} | Lvl {player_level}", flush=True)
                     try:
-                        hunt_res = page.evaluate(JS_HUNT, target)
+                        hunt_res = safe_eval(page, JS_HUNT, target)
                         unlocked = ids_from_picker_rows((hunt_res or {}).get("unlocked") or [])
                         if unlocked:
                             profiler.unlocked_ids = unlocked

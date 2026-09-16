@@ -147,9 +147,11 @@ class StreamPump:
 
     def _on_cdp_frame(self, params: dict[str, Any]) -> None:
         sid = params.get("sessionId")
-        if sid is not None:
-            with self._lock:
-                self._acks.append(sid)
+        if sid is not None and self._session:
+            try:
+                self._session.send("Page.screencastFrameAck", {"sessionId": sid})
+            except Exception:
+                pass
         try:
             raw = base64.b64decode(params.get("data") or "", validate=False)
         except Exception:
@@ -165,17 +167,7 @@ class StreamPump:
             self.error = ""
 
     def _flush_acks(self) -> None:
-        with self._lock:
-            acks = self._acks
-            self._acks = []
-        sess = self._session
-        if not sess:
-            return
-        for sid in acks:
-            try:
-                sess.send("Page.screencastFrameAck", {"sessionId": sid})
-            except Exception:
-                self._session = None
+        pass
 
     def _stop_cdp(self) -> None:
         sess = self._session
@@ -188,6 +180,81 @@ class StreamPump:
             pass
 
 
+import queue
+
+click_queue: queue.Queue = queue.Queue()
+eval_queue: queue.Queue = queue.Queue()
+
+
+def enqueue_click(x: int, y: int, button: str = "left", timeout: float = 5.0) -> dict[str, Any]:
+    req = {
+        "x": x,
+        "y": y,
+        "button": button,
+        "done": threading.Event(),
+        "result": {"ok": False, "reason": "timeout"},
+    }
+    click_queue.put(req)
+    req["done"].wait(timeout=timeout)
+    return req["result"]
+
+
+def enqueue_eval(js: str, timeout: float = 15.0) -> dict[str, Any]:
+    req = {
+        "js": js,
+        "done": threading.Event(),
+        "result": {"ok": False, "error": "timeout"},
+    }
+    eval_queue.put(req)
+    req["done"].wait(timeout=timeout)
+    return req["result"]
+
+
+def process_pending_evals(page: Any) -> int:
+    count = 0
+    while not eval_queue.empty():
+        req = None
+        try:
+            req = eval_queue.get_nowait()
+            js = str(req.get("js", ""))
+            val = page.evaluate(js)
+            req["result"] = {"ok": True, "result": val}
+            req["done"].set()
+            count += 1
+        except Exception as e:
+            if req and "done" in req and not req["done"].is_set():
+                req["result"] = {"ok": False, "error": str(e)}
+                req["done"].set()
+    return count
+
+
+def process_pending_clicks(page: Any, pump: StreamPump | None = None) -> int:
+    count = 0
+    while not click_queue.empty():
+        req = None
+        try:
+            req = click_queue.get_nowait()
+            cx = int(req.get("x", 0))
+            cy = int(req.get("y", 0))
+            cbtn = str(req.get("button", "left"))
+            page.mouse.click(cx, cy, button=cbtn)
+            time.sleep(0.06)
+            if pump is not None:
+                try:
+                    raw = page.screenshot(type="jpeg", quality=pump.quality, timeout=1500)
+                    pump.frames.push(raw, pump.width, pump.height)
+                except Exception:
+                    pass
+            req["result"] = {"ok": True, "x": cx, "y": cy, "button": cbtn}
+            req["done"].set()
+            count += 1
+        except Exception as e:
+            if req and "done" in req and not req["done"].is_set():
+                req["result"] = {"ok": False, "reason": str(e)}
+                req["done"].set()
+    return count
+
+
 def idle_capture(
     page: Any,
     pump: StreamPump | None,
@@ -195,8 +262,10 @@ def idle_capture(
     should_continue: Callable[[], bool],
 ) -> None:
     end = time.time() + max(0.0, seconds)
-    interval = pump.interval if pump else 0.08
+    interval = pump.interval if pump else 0.1
     while should_continue() and time.time() < end:
+        process_pending_clicks(page, pump)
+        process_pending_evals(page)
         t0 = time.time()
         if pump is not None:
             try:
