@@ -46,6 +46,48 @@ export async function launchBrowser(
   const page = pages.length > 0 ? pages[0] : await browser.newPage();
   await page.setViewport({ width: config.streamWidth, height: config.streamHeight });
 
+  // Injeta autenticação se fornecido token
+  if (config.token) {
+    try {
+      await page.setCookie(
+        { name: 'baiak-idle-token', value: config.token, domain: 'baiakidle.com', path: '/' },
+        { name: 'idle.auth.token', value: config.token, domain: 'baiakidle.com', path: '/' },
+        { name: 'token', value: config.token, domain: 'baiakidle.com', path: '/' }
+      );
+      console.log('[*] [AUTH] Token de sessão injetado com sucesso nos cookies!');
+    } catch (err) {
+      console.warn('[COOKIE AVISO]', err);
+    }
+  }
+
+  // Scripts de inicialização, anti-detecção e token em localStorage
+  await page.evaluateOnNewDocument(`
+    try {
+      delete Object.getPrototypeOf(navigator).webdriver;
+    } catch (e) {}
+    try {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    } catch (e) {}
+    (window as any).chrome = { runtime: {}, app: {}, loadTimes: () => {}, csi: () => {} };
+
+    ${config.token ? `
+      try {
+        localStorage.setItem('baiak-idle-token', ${JSON.stringify(config.token)});
+        localStorage.setItem('idle.auth.token', ${JSON.stringify(config.token)});
+        localStorage.setItem('token', ${JSON.stringify(config.token)});
+      } catch (e) {}
+    ` : ''}
+
+    ${config.reduceVfx ? `
+      try {
+        localStorage.setItem('bs-enabled', '1');
+        localStorage.setItem('baiakidle.settings', JSON.stringify({
+          fxOpacity: 0, music: 0, soundMaster: 0, batterySave: true
+        }));
+      } catch (e) {}
+    ` : ''}
+  `);
+
   // Injeta o Kernel nativo em memória antes de qualquer documento carregar
   await page.evaluateOnNewDocument(KERNEL_SOURCE);
 

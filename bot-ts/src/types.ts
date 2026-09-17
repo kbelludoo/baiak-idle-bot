@@ -67,6 +67,8 @@ export interface BotConfig {
   userDataDir: string;
   chromePath: string;
   targetUrl: string;
+  token: string;
+  reduceVfx: boolean;
 }
 
 export interface TelemetryState {

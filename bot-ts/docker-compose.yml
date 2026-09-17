@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   baiak-bot-ts:
     build:
@@ -9,6 +7,9 @@ services:
     restart: always
     ipc: host
     shm_size: "256m"
+    env_file:
+      - path: .env
+        required: false
     environment:
       - PORT=8080
       - HOST=0.0.0.0

@@ -50,5 +50,7 @@ export function parseConfig(): BotConfig {
     userDataDir: getVal('--user-data-dir', env.USER_DATA_DIR || '/app/data/chrome_profile'),
     chromePath: getVal('--chrome-path', env.CHROME_PATH || '/usr/bin/chromium'),
     targetUrl: env.TARGET_URL || 'https://baiakidle.com/jogar/',
+    token: getVal('--token', env.BAIAK_TOKEN || ''),
+    reduceVfx: has('--reduce-vfx') || env.REDUCE_VFX === '1' || env.REDUCE_VFX === 'true',
   };
 }
