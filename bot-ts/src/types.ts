@@ -35,7 +35,7 @@ export interface HuntArea {
   safety?: 'SEGURO' | 'MODERADO' | 'PERIGOSO';
 }
 
-export type SubsystemStatus = 'FUNCIONAL' | 'AGUARDANDO' | 'AGUARDANDO_REQUISITO' | 'TREINANDO' | 'VERIFICANDO';
+export type SubsystemStatus = 'FUNCIONAL' | 'AGUARDANDO' | 'AGUARDANDO_REQUISITO' | 'TREINANDO' | 'VERIFICANDO' | 'ERRO';
 
 export interface SubsystemInfo {
   status: SubsystemStatus;
@@ -63,7 +63,10 @@ export interface BotConfig {
   sellThresholdPct: number;
   autoTreino: boolean;
   autoBoss: boolean;
+  autoBags: boolean;
   autoEquip: boolean;
+  autoPrey: boolean;
+  autoExtras: boolean;
   userDataDir: string;
   chromePath: string;
   targetUrl: string;
@@ -73,22 +76,29 @@ export interface BotConfig {
 
 export interface TelemetryState {
   online: boolean;
+  connected?: boolean;
+  character?: string | null;
   hunt: string;
   kills: number;
   waves: number;
   loop_mode: boolean;
+  treino?: boolean;
   stamina: string;
   bag_slots: string;
   party_slots: number;
   level: number;
   gold: number;
   shooters: PartyMemberDOM[];
+  analyzers?: Record<string, any>;
+  magic?: Record<string, any>;
   analyzer: {
     exp_hour?: number;
     loot_hour?: number;
     kills_hour?: number;
+    gold_hour?: number;
     deaths: number;
   };
   subsystems: Record<string, SubsystemInfo>;
+  last_events?: string[];
   last_update: string;
 }
