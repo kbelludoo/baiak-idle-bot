@@ -1,13 +1,14 @@
 {
   "name": "baiak-idle-bot-ts",
-  "version": "2.0.0",
-  "description": "Baiak Idle Bot v2 written 100% in TypeScript with Bun in-memory execution",
+  "version": "2.1.0",
+  "description": "Baiak Idle Bot TypeScript/Bun parity port with native WebSocket decoding",
   "module": "src/index.ts",
   "type": "module",
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch src/index.ts",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "puppeteer-core": "^24.4.0"

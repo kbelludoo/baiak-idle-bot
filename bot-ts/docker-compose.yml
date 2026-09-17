@@ -1,8 +1,8 @@
 services:
   baiak-bot-ts:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: bot-ts/Dockerfile
     container_name: baiak-bot-ts
     restart: always
     ipc: host
@@ -14,9 +14,9 @@ services:
       - PORT=8080
       - HOST=0.0.0.0
       - HEADLESS=true
-      - STREAM=true
-      - BOT_ARGS=--stream
+      - LIVE_STREAM=true
       - USER_DATA_DIR=/app/data/chrome_profile
+      - BAIAK_RUNTIME_DIR=/app/runtime
     ports:
       - "8080:8080"
     volumes:
