@@ -1,0 +1,13 @@
+services:
+  baiak-monitor:
+    build: .
+    container_name: baiak-monitor
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - PORT=8081
+      - VPS1_URL=${VPS1_URL:-http://host.docker.internal:8080}
+      - VPS2_URL=${VPS2_URL:-http://137.131.226.117:8080}
