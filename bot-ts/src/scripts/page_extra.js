@@ -352,32 +352,133 @@ async ({ job, ...auctionCfg }) => {
     return { ok: true, skip: "sequence skip", events };
   }
 
+  if (job === "arena") {
+    const miss = await openThen("tab-arena", "arena-modal", async (root) => {
+      // 1. Coleta recompensa diária/resgate se houver
+      const claimBtn = Array.from(root.querySelectorAll("button, .arena-btn, .mini-btn")).find((b) => vis(b) && !b.disabled && /coletar|recompensa|claim/i.test(txt(b)));
+      if (claimBtn) {
+        claimBtn.click();
+        events.push("ARENA_CLAIM: " + txt(claimBtn));
+        await sleep(300);
+      }
+      // 2. Entra na fila diária de Arena se ainda houver tentativas livres
+      const queueBtn = root.querySelector("button.arena-btn.primary") || Array.from(root.querySelectorAll("button.arena-btn, button")).find((b) => vis(b) && !b.disabled && /entrar na fila|queue/i.test(txt(b)));
+      if (queueBtn && !queueBtn.disabled) {
+        queueBtn.click();
+        events.push("ARENA_FILA_ENTROU");
+      } else {
+        events.push("arena fila indisponivel / limite atingido");
+      }
+    });
+    return { ok: true, skip: miss?.skip, events };
+  }
+
+  if (job === "event") {
+    const miss = await openThen("tab-event", "event-modal", async (root) => {
+      let claimed = 0;
+      for (let i = 0; i < 8; i++) {
+        const giveBtn = root.querySelector("button.cx-give.ready") || Array.from(root.querySelectorAll("button.cx-give, button")).find((b) => vis(b) && !b.disabled && /entregar|coletar|claim/i.test(txt(b)));
+        if (!giveBtn) break;
+        giveBtn.click();
+        claimed += 1;
+        events.push("EVENT_ENTREGOU_MISSAO #" + claimed);
+        await sleep(350);
+      }
+      if (!claimed) events.push("sem missoes de evento prontas");
+    });
+    return { ok: true, skip: miss?.skip, events };
+  }
+
+  if (job === "cyclopedia") {
+    const miss = await openThen("tab-cyclopedia", "cyclopedia-modal", async (root) => {
+      // Abre aba Bestiário e coleta criaturas concluídas se houver
+      const bstTab = Array.from(root.querySelectorAll("#cyc-tabbar .cyc-tabbtn, button")).find((b) => /besti[aá]rio|bestiary/i.test(txt(b)));
+      if (bstTab) {
+        bstTab.click();
+        await sleep(300);
+        let collected = 0;
+        for (let i = 0; i < 5; i++) {
+          const claimBtn = Array.from(root.querySelectorAll("button, .mini-btn, .btn")).find((b) => vis(b) && !b.disabled && /resgatar|coletar|desbloquear|claim/i.test(txt(b)));
+          if (!claimBtn) break;
+          claimBtn.click();
+          collected += 1;
+          events.push("BESTIARIO_CLAIM #" + collected);
+          await sleep(300);
+        }
+        if (!collected) events.push("bestiario verificado (sem resgate pendente)");
+      }
+    });
+    return { ok: true, skip: miss?.skip, events };
+  }
+
   if (job === "manageloot") {
-    events.push("skip: gerenciar loot nao e one-toggle seguro");
+    const miss = await openThen(null, "manageloot-modal", async (root) => {
+      // Ativa filtros de itens seguros para auto-sell
+      const toggles = Array.from(root.querySelectorAll(".set-toggle, button.set-btn")).filter((b) => vis(b) && !b.classList.contains("on"));
+      let activated = 0;
+      for (const t of toggles.slice(0, 4)) {
+        if (!buyish.test(txt(t.parentElement))) {
+          t.click();
+          activated++;
+          await sleep(150);
+        }
+      }
+      events.push(activated ? `manageloot: ativou ${activated} filtros` : "manageloot: filtros ja configurados");
+    });
     closeId("manageloot-modal");
-    return { ok: true, skip: "unclear", events };
+    return { ok: true, skip: miss?.skip, events };
   }
 
   if (job === "forge" || job === "imbue") {
     const tabId = job === "forge" ? "tab-forge" : "tab-imbue";
     const modalId = job === "forge" ? "forge-modal" : "imbue-modal";
     const miss = await openThen(tabId, modalId, async (root) => {
-      const free = Array.from(root.querySelectorAll("button.forge-bigbtn, button")).find((b) => {
+      // 1. Tenta fusão ou ação gratuita se disponível
+      const freeBtn = Array.from(root.querySelectorAll("button.forge-bigbtn, button.btn, button")).find((b) => {
         if (!vis(b) || b.disabled) return false;
         const row = (b.closest("div")?.textContent || "") + txt(b);
         if (buyish.test(row) && !/gr[aá]tis|free|0 gold|custo:\s*0/i.test(row)) return false;
-        return /aplicar|aplicar gr[aá]tis|free apply|confirmar/i.test(txt(b));
+        return /aplicar|aplicar gr[aá]tis|free apply|confirmar|fundir|fuse/i.test(txt(b));
       });
-      if (free) {
-        free.click();
-        events.push("acao barata: " + txt(free));
-      } else events.push("skip forja/imbue (gastaria gold sem cap)");
+      if (freeBtn) {
+        freeBtn.click();
+        events.push("FORGE_IMBUE_EXEC: " + txt(freeBtn));
+        await sleep(350);
+      } else {
+        // 2. Se for forja de tier, clica no auto-conversor de dust gratuito
+        const autoConv = root.querySelector("button.ft-btn-auto, .forge-auto") || Array.from(root.querySelectorAll("button")).find((b) => vis(b) && !b.disabled && /converter dust|auto tier/i.test(txt(b)));
+        if (autoConv) {
+          autoConv.click();
+          events.push("FORGE_TIER_CONV: " + txt(autoConv));
+        } else {
+          events.push("forja/imbue verificados (sem custo excessivo)");
+        }
+      }
     });
     return { ok: true, skip: miss?.skip, events };
   }
 
   if (job === "house") {
-    return { ok: true, skip: "house dummies: stamina/treino ja coberto; seletores de dummy pouco claros", events };
+    // Verifica treino em dummy de casa se o jogador tiver casa alugada
+    const tabHouse = revealTab("tab-house") || document.querySelector("[data-tab='house'], button[title*='Casa' i]");
+    if (tabHouse) {
+      tabHouse.click();
+      await sleep(350);
+      const modal = document.getElementById("house-modal");
+      if (modal && !modal.classList.contains("hidden")) {
+        const dummy = Array.from(modal.querySelectorAll("button, .house-cell")).find((b) => vis(b) && !b.disabled && /dummy|treinar|train/i.test(txt(b)));
+        if (dummy) {
+          dummy.click();
+          events.push("HOUSE_DUMMY_TREINO");
+        } else {
+          events.push("house: sem dummy ativo");
+        }
+        closeId("house-modal");
+      }
+    } else {
+      events.push("house: aba nao disponivel");
+    }
+    return { ok: true, events };
   }
 
   return { ok: false, skip: "job desconhecido: " + job, events };

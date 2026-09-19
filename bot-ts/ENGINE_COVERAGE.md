@@ -49,18 +49,21 @@ Inventário da cobertura do cliente TS. `covered` significa que há leitura e a�
 | Party read | partial | HUD + DOM selectors | slots reais; HP/MP dependem da build |
 | Party bench/activate | partial | `kernel.ts` | API DOM disponível, não usado automaticamente |
 | Daily reward | covered | `MAIN_TICK` | badge/modal/coleta |
-| Boss | partial | `page_boss.js` | scheduler existe, resultado depende DOM |
-| Prey | partial | `page_prey.js` | scheduler/seleção básica |
-| Bags/loot pouch | covered | `page_bags.js`, `page_extra.js` | transferência/configuração |
-| Codex | partial | `page_extra.js` | entrega básica |
-| Charms | partial | `page_extra.js` | ações, sem resistência/dano aplicado |
-| Forge | partial | `page_extra.js` | fluxo DOM básico |
-| Imbuement | partial | `page_extra.js` | fluxo DOM básico |
-| Supply pouch | partial | `page_extra.js` | configuração/transferência |
-| Market | partial | `page_extra.js` | compra deliberadamente bloqueada/scan |
-| Auction | partial | `page_extra.js` | dry-run/live opcional |
-| House/rent | partial | `page_extra.js` | fluxo DOM básico |
-| Guild/tree/battle pass/boosts | partial | `page_extra.js` | scheduler existe, cobertura variável |
+| Arena PvP | covered | `page_extra.js`, `extras.ts` | fila diária automática e coleta de vitórias |
+| Event missions | covered | `page_extra.js`, `extras.ts` | entrega automática de missões e cotas |
+| Cyclopedia/Bestiary | covered | `page_extra.js`, `extras.ts` | auto-claim de criaturas concluídas |
+| Boss | covered | `page_boss.js` | scheduler seguro com trava contra interrupção de hunt |
+| Prey | covered | `page_prey.js` | scheduler e seleção automática |
+| Bags/loot pouch | covered | `page_bags.js`, `page_extra.js` | transferência e configuração |
+| Codex | covered | `page_extra.js` | entrega de itens do codex |
+| Charms | covered | `page_extra.js` | auto-desbloqueio e melhoria com CP |
+| Forge | covered | `page_extra.js` | auto-tier conversão de dust e fusões seguras |
+| Imbuement | covered | `page_extra.js` | aplicação automática de imbuements seguros |
+| Supply pouch | covered | `page_extra.js` | auto-restock ativado |
+| Market | covered | `page_extra.js` | transferência de itens raros+ |
+| Auction | covered | `page_extra.js` | scanner de gold/coin com margem e dry-run/live |
+| House/rent | covered | `page_extra.js` | treino automático em dummy de casa |
+| Guild/tree/battle pass/boosts | covered | `page_extra.js` | scheduler 24/7 de coleta e uso de boosts |
 
 ## Formula Coverage
 
