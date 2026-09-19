@@ -229,6 +229,32 @@ def _dig_level(pay, depth=0):
     return None
 
 
+def format_uptime(sec: int) -> str:
+    if sec <= 0:
+        return "0s"
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    s = sec % 60
+    if h > 0:
+        return f"{h}h {m:02d}m {s:02d}s"
+    elif m > 0:
+        return f"{m}m {s:02d}s"
+    else:
+        return f"{s}s"
+
+
+def format_xp(xp: int) -> str:
+    if xp <= 0:
+        return "0"
+    if xp >= 1_000_000_000:
+        return f"{xp / 1_000_000_000:.2f}B"
+    elif xp >= 1_000_000:
+        return f"{xp / 1_000_000:.2f}kk"
+    elif xp >= 1_000:
+        return f"{xp / 1_000:.1f}k"
+    return f"{xp:,}".replace(",", ".")
+
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -322,7 +348,31 @@ def main():
         quality=flags.stream_quality,
         fps=flags.stream_fps,
     )
-    start_dashboard_server(data_dir, port=8080, frames=live_frames if flags.live_stream else None)
+    stream_pump.enabled = flags.live_stream
+
+    force_hunt_switch_requested = False
+
+    def handle_hunt_change(target_hunt: str) -> dict:
+        nonlocal force_hunt_switch_requested
+        target_hunt = (target_hunt or "").strip()
+        if not target_hunt or target_hunt.lower() in ("auto", "automatico"):
+            flags.force_hunt = False
+            flags.hunt_id = ""
+            print(f"[{ts_now()}] 🏹 [HUNT REMOTA] Modo auto ativado pelo Dashboard.", flush=True)
+            return {"ok": True, "mode": "auto", "hunt": "auto", "message": "Modo de hunt automática ativado."}
+        else:
+            flags.force_hunt = True
+            flags.hunt_id = target_hunt
+            force_hunt_switch_requested = True
+            print(f"[{ts_now()}] 🏹 [HUNT REMOTA] Forçando hunt '{target_hunt}' via Dashboard...", flush=True)
+            return {"ok": True, "mode": "forced", "hunt": target_hunt, "message": f"Hunt alterada para {target_hunt}."}
+
+    start_dashboard_server(
+        data_dir,
+        port=8080,
+        frames=live_frames if flags.live_stream else None,
+        on_hunt=handle_hunt_change,
+    )
 
     print("=" * 68)
     print(" ⚔️  BAIAK IDLE — BOT DE ALTO RENDIMENTO COM PROFILER REAL")
@@ -367,6 +417,10 @@ def main():
     char_name = None
     t0 = time.time()
     last_ws_frame_time = time.time()
+    online_connected_start = None
+    ws_disconnect_count = 0
+    last_ws_disconnect_at = 0.0
+    session_raw_xp = 0
     last_hunt_attempt = 0
     last_metric_print = time.time()
     last_bench_check = time.time()
@@ -454,7 +508,7 @@ def main():
         return cached_account_chars
 
     def update_status_file():
-        nonlocal player_level
+        nonlocal player_level, online_connected_start, session_raw_xp
         try:
             acc_chars = sync_account_chars()
             party_members_out = []
@@ -503,9 +557,25 @@ def main():
             top_level = max(member_levels) if member_levels else 52
             player_level = top_level
 
+            is_online = bool(ws_connected and (time.time() - last_ws_frame_time < 35))
+            if not is_online:
+                online_connected_start = None
+            elif online_connected_start is None:
+                online_connected_start = time.time()
+
+            online_uptime_sec = int(time.time() - online_connected_start) if (is_online and online_connected_start) else 0
+
             status_data = {
-                "online": bool(ws_connected and (time.time() - last_ws_frame_time < 35)),
+                "online": is_online,
                 "connected": ws_connected,
+                "online_uptime_seconds": online_uptime_sec,
+                "online_uptime_str": format_uptime(online_uptime_sec) if is_online else "Reconectando...",
+                "ws_disconnect_count": ws_disconnect_count,
+                "last_ws_disconnect_at": last_ws_disconnect_at or None,
+                "session_xp": session_raw_xp,
+                "session_xp_str": format_xp(session_raw_xp),
+                "force_hunt": bool(flags.force_hunt),
+                "force_hunt_id": flags.hunt_id if flags.force_hunt else None,
                 "character": char_name,
                 "level": top_level,
                 "gold": player_gold,
@@ -528,7 +598,8 @@ def main():
                 "analyzers": latest_analyzers,
                 "hunt_matrix": hunt_matrix.matrix,
                 "stream": stream_pump.stats() if flags.live_stream else {"ready": False, "error": "LIVE_STREAM=false"},
-                "last_update": ts_now()
+                "last_update": ts_now(),
+                "last_update_ts": time.time(),
             }
             status_path = os.path.join(data_dir, "status.json")
             with open(status_path, "w", encoding="utf-8") as f:
@@ -619,16 +690,18 @@ def main():
         active_ws = None
 
         def on_websocket(ws):
-            nonlocal ws_connected, last_ws_frame_time, active_ws
+            nonlocal ws_connected, last_ws_frame_time, active_ws, online_connected_start
             if "baiakidle.com" not in ws.url:
                 return
             active_ws = ws
             ws_connected = True
             last_ws_frame_time = time.time()
+            if online_connected_start is None:
+                online_connected_start = time.time()
             print(f"[{ts_now()}] 🌐 [WEBSOCKET CONECTADO] {ws.url[:60]}...", flush=True)
 
             def on_frame(payload):
-                nonlocal kills, waves, player_level, player_stamina, current_hunt, player_gold, char_name, last_ws_frame_time
+                nonlocal kills, waves, player_level, player_stamina, current_hunt, player_gold, char_name, last_ws_frame_time, session_raw_xp
                 last_ws_frame_time = time.time()
                 if not isinstance(payload, (bytes, bytearray)):
                     return
@@ -659,6 +732,13 @@ def main():
                         dug = _dig_level(pay)
                         if dug:
                             player_level = dug
+                        # Extrai XP total da sessão do jogo
+                        rxp = pay.get("rawXp")
+                        if rxp is not None:
+                            try:
+                                session_raw_xp = max(session_raw_xp, int(rxp))
+                            except Exception:
+                                pass
                         # Stamina parsing flexível (int minutos, float 0..1, ou string HH:MM)
                         s_val = pay.get("stamina") or pay.get("staminaMinutes")
                         if s_val is None and isinstance(pay.get("player"), dict):
@@ -684,10 +764,13 @@ def main():
 
             ws.on("framereceived", on_frame)
             def on_close():
-                nonlocal ws_connected, last_ws_close_time, active_ws
+                nonlocal ws_connected, last_ws_close_time, active_ws, online_connected_start, ws_disconnect_count, last_ws_disconnect_at
                 if active_ws == ws:
                     ws_connected = False
                     last_ws_close_time = time.time()
+                    last_ws_disconnect_at = last_ws_close_time
+                    ws_disconnect_count += 1
+                    online_connected_start = None
                     print(f"[{ts_now()}] ⚠️ [WEBSOCKET FECHADO] Conexão encerrada pelo servidor.", flush=True)
             ws.on("close", on_close)
 
@@ -1211,28 +1294,29 @@ def main():
                 elif "/jogar" not in page.url:
                     needs_reconnect = True
                     reconnect_reason = f"URL fora de /jogar/: {page.url}"
-                elif not ws_connected and last_ws_close_time > 0 and (now - last_ws_close_time > 8):
+                elif not ws_connected and last_ws_close_time > 0 and (now - last_ws_close_time > 20):
                     needs_reconnect = True
                     reconnect_reason = f"WebSocket desconectado há {int(now - last_ws_close_time)}s"
-                elif now - last_ws_frame_time > 30:
+                elif not ws_connected and (now - last_ws_frame_time > 120):
                     needs_reconnect = True
-                    reconnect_reason = f"Sem frames WebSocket há {int(now - last_ws_frame_time)}s"
+                    reconnect_reason = f"Sem conexão WebSocket há {int(now - last_ws_frame_time)}s"
 
                 if needs_reconnect:
-                    print(f"[{ts_now()}] 🔄 [WATCHDOG RECONECTAR] {reconnect_reason}. Restaurando sessão...", flush=True)
+                    last_loop_tick = now
+                    print(f"[{ts_now()}] 🔄 [WATCHDOG RECONECTAR] {reconnect_reason}. Tentando reconexão in-page...", flush=True)
                     try:
-                        conn_retry = page.query_selector("#conn-retry")
+                        conn_retry = page.query_selector("#conn-retry, button:has-text('Reconectar'), button:has-text('Reconnect')")
                         if conn_retry and conn_retry.is_visible():
-                            print(f"[{ts_now()}] 🔄 Clicando em botão Reconectar (#conn-retry)...", flush=True)
+                            print(f"[{ts_now()}] 🔄 Clicando em botão Reconectar nativo...", flush=True)
                             conn_retry.click()
-                            time.sleep(4)
-                        else:
+                            time.sleep(3)
+                        elif "/jogar" not in page.url:
+                            print(f"[{ts_now()}] 🔄 URL fora de /jogar/, navegando...", flush=True)
                             page.goto("https://baiakidle.com/jogar/", wait_until="commit", timeout=30000)
-                            if flags.live_stream:
-                                idle_capture(page, stream_pump, 6, lambda: running)
-                                stream_pump.attach_cdp(page)
-                            else:
-                                time.sleep(6)
+                            time.sleep(5)
+                        else:
+                            page.evaluate("() => { const b = document.getElementById('conn-retry') || Array.from(document.querySelectorAll('button')).find(x => /reconectar|reconnect/i.test(x.textContent)); if (b) b.click(); }")
+                            time.sleep(3)
                         last_ws_frame_time = time.time()
                         last_ws_close_time = 0.0
                     except Exception as re_err:
@@ -1267,6 +1351,12 @@ def main():
                     player_stamina = hud["stamina"]
                 if hud.get("analyzers"):
                     latest_analyzers = hud["analyzers"]
+                    hud_rxp = latest_analyzers.get("session_xp") or latest_analyzers.get("raw_xp")
+                    if hud_rxp is not None:
+                        try:
+                            session_raw_xp = max(session_raw_xp, int(hud_rxp))
+                        except Exception:
+                            pass
                 if old_lvl and player_level and player_level > old_lvl:
                     need_potion_check = True
                 if party_slots > last_party_slots:
@@ -1474,11 +1564,19 @@ def main():
                 should_enter, reason = profiler.should_resume_last(
                     flags.auto_hunt, is_city, live_id, force_id
                 )
+                if force_hunt_switch_requested:
+                    force_hunt_switch_requested = False
+                    should_enter = True
+                    reason = f"Comando manual recebido via Dashboard: forçar hunt '{force_id}'"
+                    last_hunt_attempt = 0
+
                 if not game_ready:
                     should_enter = False
-                elif handled_spell and not is_city:
+                elif handled_spell and not is_city and profiler.active_hunt_id is not None and not force_id:
                     should_enter = False
-                if in_treino or stam_empty or not flags.auto_hunt:
+                if (in_treino or stam_empty) and not force_id:
+                    should_enter = False
+                if not flags.auto_hunt and not force_id:
                     should_enter = False
 
                 if should_enter and (now - last_hunt_attempt >= 10):

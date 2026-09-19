@@ -19,6 +19,8 @@ ENV/
 *.log
 bot/data/*
 !bot/data/dashboard.html
+monitor/data/*
+!monitor/data/.gitkeep
 
 # IDEs
 .vscode/

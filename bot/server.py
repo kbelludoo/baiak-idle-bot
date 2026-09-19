@@ -1,6 +1,8 @@
+import hmac
 import json
 import os
 import threading
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 from stream import LatestFrame, write_mjpeg, enqueue_click, enqueue_eval
@@ -10,8 +12,42 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     data_dir = "data"
     frames: LatestFrame | None = None
 
+    def is_authorized_control(self) -> bool:
+        """Allow control only from loopback or with the explicit admin token."""
+        expected = os.environ.get("ADMIN_TOKEN", "").strip()
+        raw = self.headers.get("Authorization") or self.headers.get("X-API-Key") or ""
+        received = raw.removeprefix("Bearer ").strip()
+        if expected and hmac.compare_digest(received, expected):
+            return True
+        return self.client_address[0] in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+
+    def send_json(self, payload: dict, status: int = 200) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def deny_control(self) -> None:
+        self.send_json({"ok": False, "error": "forbidden"}, status=403)
+
     def do_GET(self):
         path = self.path.split("?", 1)[0]
+        if path in ("/healthz", "/healthz/"):
+            status_path = os.path.join(self.data_dir, "status.json")
+            try:
+                with open(status_path, "r", encoding="utf-8") as f:
+                    status = json.load(f)
+                updated_at = float(status.get("last_update_ts") or 0)
+                age_seconds = round(max(0.0, time.time() - updated_at), 1) if updated_at else None
+                ready = bool(updated_at and age_seconds is not None and age_seconds < 45)
+                self.send_json({"ok": ready, "age_seconds": age_seconds}, status=200 if ready else 503)
+            except (OSError, ValueError, TypeError):
+                self.send_json({"ok": False, "error": "status_unavailable"}, status=503)
+            return
         if path in ("/api/status", "/api/status/"):
             self.send_json_file("status.json")
             return
@@ -21,6 +57,20 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if path in ("/api/benchmarks", "/api/benchmarks/"):
             self.send_json_file("benchmarks.json")
             return
+        if path in ("/api/hunts", "/api/hunts/"):
+            try:
+                from hunts import HUNTS_TABLE
+                body = json.dumps({"ok": True, "hunts": HUNTS_TABLE}, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            except Exception as e:
+                self.send_error(500, str(e))
+                return
         if path in ("/", "/dashboard", "/index.html"):
             dash_path = os.path.join(self.data_dir, "dashboard.html")
             if os.path.exists(dash_path):
@@ -121,6 +171,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         path = self.path.split("?", 1)[0]
 
+        if path in ("/api/eval", "/api/eval/", "/api/click", "/api/click/", "/api/hunt", "/api/hunt/") and not self.is_authorized_control():
+            self.deny_control()
+            return
+
         # Endpoint temporário de inspeção — executa JS pelo Playwright
         if path in ("/api/eval", "/api/eval/"):
             try:
@@ -163,6 +217,34 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     resp_data = click_handler(x, y, button)
 
                 resp_bytes = json.dumps(resp_data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(resp_bytes)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(resp_bytes)
+                return
+            except Exception as e:
+                err = json.dumps({"ok": False, "error": str(e)}).encode("utf-8")
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(err)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
+        if path in ("/api/hunt", "/api/hunt/"):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+                data = json.loads(body)
+                hunt_id = str(data.get("hunt_id") or data.get("hunt") or "").strip()
+                auto = bool(data.get("auto") or hunt_id.lower() in ("auto", "automatico", ""))
+                resp_data = {"ok": False, "reason": "no_handler"}
+                if hunt_handler is not None:
+                    resp_data = hunt_handler("auto" if auto else hunt_id)
+                resp_bytes = json.dumps(resp_data, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(resp_bytes)))
@@ -253,8 +335,24 @@ def cdp_dispatch_click(x: int, y: int, button: str = "left") -> dict:
             return {"ok": False, "error": str(e)}
 
 
+    def log_message(self, format, *args):
+        pass
+
+    def log_error(self, format, *args):
+        pass
+
+
+class QuietThreadingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        # Silencia ConnectionResetError e tentativas de scanners externos
+        pass
+
+
 click_handler = cdp_dispatch_click
 eval_handler = None
+hunt_handler = None
 
 
 def set_click_handler(fn):
@@ -267,15 +365,22 @@ def set_eval_handler(fn):
     eval_handler = fn
 
 
-def start_dashboard_server(data_dir: str, port: int = 8080, frames: LatestFrame | None = None, on_click=None, on_eval=None):
+def set_hunt_handler(fn):
+    global hunt_handler
+    hunt_handler = fn
+
+
+def start_dashboard_server(data_dir: str, port: int = 8080, frames: LatestFrame | None = None, on_click=None, on_eval=None, on_hunt=None):
     DashboardHandler.data_dir = data_dir
     DashboardHandler.frames = frames
     if on_click is not None:
         set_click_handler(on_click)
     if on_eval is not None:
         set_eval_handler(on_eval)
+    if on_hunt is not None:
+        set_hunt_handler(on_hunt)
     try:
-        server = ThreadingHTTPServer(("0.0.0.0", port), DashboardHandler)
+        server = QuietThreadingHTTPServer(("0.0.0.0", port), DashboardHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         print(f"[*] 🌐 [DASHBOARD WEB] Servidor ativo em http://0.0.0.0:{port}/ (Dashboard & API em tempo real)", flush=True)

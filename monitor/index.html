@@ -1,20 +1,1165 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Baiak Fleet Control</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Baiak Fleet Control — Live Operations</title>
 <style>
-:root{color-scheme:dark;--bg:#080a0e;--panel:#11151d;--panel2:#171d27;--line:#293344;--muted:#7f8b9d;--text:#f1f4f8;--cyan:#62d9ff;--lime:#a5ee75;--orange:#ffbb69;--red:#ff7185;--purple:#bba1ff}
-*{box-sizing:border-box}body{margin:0;background:linear-gradient(135deg,#0a0d13 0%,#0b1119 55%,#101321 100%);color:var(--text);font:13px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}.shell{max-width:1600px;margin:auto;padding:22px 26px 42px}.top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:18px}.brand{display:flex;gap:13px;align-items:center}.mark{width:40px;height:40px;border:1px solid #3c89a2;border-radius:11px;display:grid;place-items:center;color:var(--cyan);font-weight:900;font-size:18px;background:#0e2630;box-shadow:0 0 28px #35c9ed22}.eyebrow{color:var(--cyan);font-size:10px;letter-spacing:.2em;text-transform:uppercase}.title{font-size:25px;font-weight:800;letter-spacing:-.045em;margin-top:1px}.subtitle{color:var(--muted);margin-top:3px}.clock{text-align:right;color:var(--muted);font-size:11px}.clock strong{display:block;color:var(--text);font-size:13px;margin-top:3px}.fleet-summary{display:grid;grid-template-columns:1.2fr repeat(4,1fr);gap:10px;margin-bottom:18px}.summary{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 15px;min-height:77px}.summary.primary{background:linear-gradient(135deg,#12303b,#101923);border-color:#24647a}.summary .label{display:block;color:var(--muted);font-size:10px;letter-spacing:.12em;text-transform:uppercase}.summary strong{display:block;font-size:22px;line-height:1.2;margin-top:7px}.summary.primary strong{color:var(--cyan)}.summary small{color:var(--muted);display:block;margin-top:2px}.fleet{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}..bot{background:var(--panel);border:1px solid var(--line);border-radius:15px;overflow:hidden}.bot.vps1{--bot:#62d9ff}.bot.vps2{--bot:#bba1ff}.bot-head{display:flex;justify-content:space-between;align-items:center;padding:15px 17px;background:linear-gradient(110deg,#151c27,#10151d);border-bottom:1px solid var(--line)}.bot-id{display:flex;align-items:center;gap:10px}.bot-number{color:var(--bot);font-size:18px;font-weight:900}.bot-host{font-size:12px;color:var(--muted)}.status{display:flex;align-items:center;gap:6px;border:1px solid #304050;padding:5px 9px;border-radius:99px;color:var(--muted);font-size:11px}.status i{width:7px;height:7px;border-radius:50%;background:var(--red)}.status.on{color:var(--lime);border-color:#456638}.status.on i{background:var(--lime);box-shadow:0 0 10px var(--lime)}.bot-body{padding:15px 17px}.hunt-line{display:flex;justify-content:space-between;gap:12px;align-items:end;margin-bottom:14px}.hunt-label{color:var(--muted);font-size:10px;letter-spacing:.13em;text-transform:uppercase}.hunt-name{font-size:21px;font-weight:800;letter-spacing:-.03em;color:var(--bot);margin-top:3px}.decision{color:var(--orange);font-size:11px;text-align:right;max-width:45%}.metrics{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}.metric{padding:10px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);min-width:0}.metric:nth-child(4n){border-right:0}.metric:nth-last-child(-n+4){border-bottom:0}.metric span,.rate span,.block-title{display:block;color:var(--muted);font-size:9px;letter-spacing:.1em;text-transform:uppercase}.metric b{display:block;font-size:17px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.metric.accent b{color:var(--bot)}.rates{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:13px}.rate{background:#0d1219;border:1px solid #222c3a;border-radius:8px;padding:8px}.rate b{display:block;color:var(--bot);font-size:14px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lower{display:grid;grid-template-columns:1.05fr .95fr;gap:12px;margin-top:14px}.block{background:#0d1219;border:1px solid #222c3a;border-radius:10px;padding:11px}.block-title{margin-bottom:8px}.member{display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid #202936}.member:last-child{border-bottom:0}.member b{font-size:12px}.member small{display:block;color:var(--muted);font-size:10px}.ready{color:var(--lime)}.notready{color:var(--orange)}.subsystems{display:flex;flex-wrap:wrap;gap:5px}.subsystem{font-size:10px;color:var(--muted);border:1px solid #283344;border-radius:6px;padding:4px 6px}.subsystem b{color:var(--lime);font-weight:600}.subsystem.warn b{color:var(--orange)}.details{margin-top:11px}.details summary{cursor:pointer;color:var(--muted);font-size:11px}.details pre{white-space:pre-wrap;word-break:break-word;color:#aebbd0;font-size:10px;max-height:180px;overflow:auto}.wide{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:17px}.wide-head{display:flex;justify-content:space-between;align-items:end;margin-bottom:11px}.wide-title{font-weight:750;font-size:16px}.wide-note{color:var(--muted);font-size:11px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{text-align:left;padding:9px;border-bottom:1px solid #242e3d}th{color:var(--muted);font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:500}td.num{text-align:right;color:var(--cyan)}.error{color:var(--red)}@media(max-width:1100px){.fleet-summary{grid-template-columns:repeat(3,1fr)}.summary.primary{grid-column:span 3}.fleet{grid-template-columns:1fr}}@media(max-width:650px){.shell{padding:15px 12px 30px}.top{display:block}.clock{text-align:left;margin-top:12px}.fleet-summary{grid-template-columns:repeat(2,1fr)}.summary.primary{grid-column:span 2}.metrics{grid-template-columns:repeat(2,1fr)}.metric:nth-child(2n){border-right:0}.metric:nth-last-child(-n+4){border-bottom:1px solid var(--line)}.metric:nth-last-child(-n+2){border-bottom:0}.rates{grid-template-columns:repeat(2,1fr)}.lower{grid-template-columns:1fr}.hunt-line{display:block}.decision{max-width:100%;text-align:left;margin-top:8px}}
-</style></head>
-<body><main class="shell">
-<header class="top"><div class="brand"><div class="mark">BF</div><div><div class="eyebrow">Operations / Live Fleet</div><div class="title">Baiak Fleet Control</div><div class="subtitle">Duas VPS, uma leitura operacional. Sem screenshots, baixo tráfego.</div></div></div><div class="clock">ÚLTIMA SINCRONIZAÇÃO<strong id="updated">aguardando</strong><span>polling a cada 5 segundos</span></div></header>
-<section class="fleet-summary" id="summary"></section><section class="fleet" id="fleet"></section><section class="wide"><div class="wide-head"><div class="wide-title">Benchmarks por hunt</div><div class="wide-note">Histórico consolidado das duas VPS</div></div><div id="benchmarks"></div></section>
-</main><script>
-const API='https://disfigure-tribune-silo.ngrok-free.dev',history={};const esc=v=>String(v??'—').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));const num=v=>typeof v==='number'?v.toLocaleString('pt-BR',{maximumFractionDigits:1}):esc(v);
-function pill(s){return`<span class="status ${s?.online?'on':''}"><i></i>${s?.online?'ONLINE':'OFFLINE'}</span>`}function subs(s){return`<div class="subsystems">${Object.entries(s.subsystems||{}).map(([k,v])=>`<span class="subsystem ${(v.status||'').includes('AGUARDANDO')?'warn':''}">${esc(k)} <b>${esc(v.status)}</b></span>`).join('')}</div>`}function party(s){const p=s.party_members||[];if(!p.length)return'<div class="empty">Party não disponível</div>';return p.map(m=>`<div class="member"><div><b>${esc(m.name||('Slot '+m.slot))}</b><small>${esc(m.voc||'')} · lvl ${esc(m.level||'—')}</small></div><small class="${m.ready?'ready':'notready'}">${m.ready?'READY':'NOT READY'}</small></div>`).join('')}
-function card(id,b){const s=b.status||{},a=s.analyzer||{},an=s.analyzers||{},d=s.hunt_decision||{},m=s.hunt_matrix?.[s.last_hunt_id]||s.hunt_matrix?.[Object.keys(s.hunt_matrix||{})[0]]||{},level=Number(s.level)||0,rate=Number(s._levelRate)||0,damage=an.damage||{},taken=an.taken||{};return`<article class="bot ${id}"><div class="bot-head"><div class="bot-id"><div class="bot-number">${id.toUpperCase()}</div><div class="bot-host">${id==='vps1'?'Oracle / 168.138.151.18':'Oracle / 137.131.226.117'}</div></div>${pill(s)}</div><div class="bot-body"><div class="hunt-line"><div><div class="hunt-label">HUNT ATUAL</div><div class="hunt-name">${esc(s.hunt)}</div></div><div class="decision">${esc(d.reason||'Sem decisão registrada')}</div></div><div class="metrics"><div class="metric accent"><span>Nível atual</span><b>${num(level)}</b></div><div class="metric"><span>Gold</span><b>${num(s.gold)}</b></div><div class="metric"><span>Stamina</span><b>${esc(s.stamina)}</b></div><div class="metric"><span>Party</span><b>${num(s.party_slots)}</b></div><div class="metric"><span>Kills</span><b>${num(s.kills)}</b></div><div class="metric"><span>Waves</span><b>${num(s.waves)}</b></div><div class="metric"><span>Sessão</span><b>${num(s.elapsed_minutes)} min</b></div><div class="metric"><span>Loop</span><b>${s.loop_mode?'ON':'OFF'}</b></div></div><div class="rates"><div class="rate"><span>Level / hora</span><b>${num(rate)}</b></div><div class="rate"><span>XP / hora</span><b>${esc(an.xp_per_hour??m.xp_h_display??'—')}</b></div><div class="rate"><span>Loot / hora</span><b>${esc(an.loot_per_hour??m.loot_h_display??'—')}</b></div><div class="rate"><span>Gold / hora</span><b>${num(a.goldPerHour??m.avg_gold_h??0)}</b></div><div class="rate"><span>Kills / hora</span><b>${num(a.killsPerHour??m.avg_kills_h??0)}</b></div><div class="rate"><span>Waves / hora</span><b>${num(m.avg_waves_h??0)}</b></div><div class="rate"><span>Dano / segundo</span><b>${esc(Object.entries(damage).filter(([k])=>k!=='_raw').map(([k,v])=>k+': '+v).join(' · ')||'—')}</b></div><div class="rate"><span>Recebido / segundo</span><b>${esc(Object.entries(taken).filter(([k])=>k!=='_raw').map(([k,v])=>k+': '+v).join(' · ')||'—')}</b></div></div><div class="lower"><div class="block"><div class="block-title">PARTY / FORMAÇÃO</div>${party(s)}</div><div class="block"><div class="block-title">SUBSISTEMAS</div>${subs(s)}</div></div><details class="details"><summary>Estado técnico completo</summary><pre>${esc(JSON.stringify({last_update:s.last_update,treino:s.treino,magic:s.magic,analyzers:an,hunt_matrix:s.hunt_matrix},null,2))}</pre></details></div></article>`}
-function summary(bots){const all=Object.values(bots).map(x=>x.status||{}),online=all.filter(x=>x.online).length,levels=all.map(x=>Number(x.level)||0),kills=all.reduce((n,x)=>n+(Number(x.kills)||0),0),gold=all.reduce((n,x)=>n+(Number(x.gold)||0),0);return`<div class="summary primary"><span class="label">Frota online</span><strong>${online} / ${all.length}</strong><small>monitoramento ativo</small></div><div class="summary"><span class="label">Nível máximo</span><strong>${num(Math.max(...levels,0))}</strong><small>entre os personagens</small></div><div class="summary"><span class="label">Kills totais</span><strong>${num(kills)}</strong><small>sessão combinada</small></div><div class="summary"><span class="label">Gold total</span><strong>${num(gold)}</strong><small>saldo observado</small></div><div class="summary"><span class="label">Última hunt</span><strong>${esc(all.find(x=>x.online)?.hunt||'—')}</strong><small>estado atual</small></div>`}
-function bench(bots){const rows=[];for(const[id,b]of Object.entries(bots)){for(const[h,v]of Object.entries(b.benchmarks||{})){if(h.startsWith('_')||!v||typeof v!=='object')continue;rows.push(`<tr><td>${esc(id)}</td><td>${esc(v.name||h)}</td><td class="num">${num(v.gold_per_hour)}</td><td class="num">${num(v.kills_per_hour)}</td><td>${esc(v.deaths??0)}</td></tr>`)}}return`<table><thead><tr><th>Bot</th><th>Hunt</th><th>Gold/h</th><th>Kills/h</th><th>Deaths</th></tr></thead><tbody>${rows.length?rows.join(''):'<tr><td colspan="5">Sem benchmarks ainda</td></tr>'}</tbody></table>`}
-function rates(d){const now=Date.now();for(const[id,b]of Object.entries(d.bots)){const l=Number(b.status?.level)||0,o=history[id];if(o&&l>0)b.status._levelRate=(l-o.level)/((now-o.time)/3600000);history[id]={level:l,time:now}}}
-async function update(){try{const r=await fetch(API+'/api/overview',{cache:'no-store',headers:{'ngrok-skip-browser-warning':'true'}});if(!r.ok)throw Error('HTTP '+r.status);const d=await r.json();rates(d);summary.innerHTML=summary(d.bots);fleet.innerHTML=Object.entries(d.bots).map(([id,b])=>card(id,b)).join('');benchmarks.innerHTML=bench(d.bots);updated.textContent=new Date(d.generatedAt).toLocaleTimeString('pt-BR')}catch(e){updated.textContent='erro: '+e.message;fleet.innerHTML='<p class="error">Falha ao carregar: '+esc(e.message)+'</p>'}}update();setInterval(update,5000);
-</script></body></html>
+:root {
+  color-scheme: dark;
+  --bg: #080a0e;
+  --panel: #11151d;
+  --panel2: #161c26;
+  --line: #293344;
+  --line-light: #364459;
+  --muted: #7f8b9d;
+  --text: #f1f4f8;
+  --cyan: #62d9ff;
+  --lime: #a5ee75;
+  --orange: #ffbb69;
+  --red: #ff7185;
+  --purple: #bba1ff;
+  --gold: #ffd166;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: radial-gradient(circle at 50% 0%, #101624 0%, #080a0e 70%);
+  color: var(--text);
+  font: 13px/1.45 Inter, ui-sans-serif, system-ui, sans-serif;
+  min-height: 100vh;
+}
+.shell {
+  max-width: 1600px;
+  margin: auto;
+  padding: 22px 26px 42px;
+}
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 20px;
+  margin-bottom: 18px;
+}
+.brand {
+  display: flex;
+  gap: 13px;
+  align-items: center;
+}
+.mark {
+  width: 44px;
+  height: 44px;
+  border: 1px solid #3c89a2;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  color: var(--cyan);
+  font-weight: 900;
+  font-size: 20px;
+  background: #0e2630;
+  box-shadow: 0 0 28px #35c9ed33;
+}
+.eyebrow {
+  color: var(--cyan);
+  font-size: 10px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.title {
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: -.045em;
+  margin-top: 1px;
+}
+.subtitle {
+  color: var(--muted);
+  margin-top: 3px;
+  font-size: 12px;
+}
+.clock {
+  text-align: right;
+  color: var(--muted);
+  font-size: 11px;
+}
+.clock strong {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+  margin-top: 3px;
+}
+.fleet-summary {
+  display: grid;
+  grid-template-columns: 1.2fr repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.summary {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 13px 15px;
+  min-height: 77px;
+}
+.summary.primary {
+  background: linear-gradient(135deg, #12303b, #101923);
+  border-color: #24647a;
+}
+.summary .label {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.summary strong {
+  display: block;
+  font-size: 22px;
+  line-height: 1.2;
+  margin-top: 7px;
+}
+.summary.primary strong {
+  color: var(--cyan);
+}
+.summary small {
+  color: var(--muted);
+  display: block;
+  margin-top: 2px;
+}
+.fleet {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.bot {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+}
+.bot.vps1 { --bot: #62d9ff; --bot-dim: #133444; }
+.bot.vps2 { --bot: #bba1ff; --bot-dim: #2b1f48; }
+.bot-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: linear-gradient(110deg, #151c27, #10151d);
+  border-bottom: 1px solid var(--line);
+}
+.bot-id {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.bot-number {
+  color: var(--bot);
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -.02em;
+}
+.bot-host {
+  font-size: 12px;
+  color: var(--muted);
+}
+.head-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #304050;
+  padding: 5px 10px;
+  border-radius: 99px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.status i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--red);
+}
+.status.on {
+  color: var(--lime);
+  border-color: #456638;
+  background: #142312;
+}
+.status.on i {
+  background: var(--lime);
+  box-shadow: 0 0 10px var(--lime);
+}
+.status.stale { color: var(--orange); border-color: #75542d; background: #2d2114; }
+.status.stale i { background: var(--orange); box-shadow: 0 0 10px var(--orange); }
+.status.api_error, .status.offline { color: var(--red); border-color: #703743; background: #2b151b; }
+.status.api_error i, .status.offline i { background: var(--red); box-shadow: 0 0 10px var(--red); }
+
+.bot-body {
+  padding: 18px 20px;
+}
+
+/* DESTAQUES DA SESSÃO: UPTIME SEM CAIR & XP TOTAL */
+.hero-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.hero-stat {
+  background: #0c1118;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.hero-stat.uptime {
+  border-color: #274b34;
+  background: linear-gradient(135deg, #0e1e17, #0c131a);
+}
+.hero-stat.xp {
+  border-color: #284c68;
+  background: linear-gradient(135deg, #0d2232, #0c131a);
+}
+.hero-stat .hero-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.hero-stat .hero-val {
+  font-size: 20px;
+  font-weight: 800;
+  margin-top: 4px;
+  display: block;
+  letter-spacing: -.02em;
+}
+.hero-stat.uptime .hero-val {
+  color: var(--lime);
+}
+.hero-stat.xp .hero-val {
+  color: var(--cyan);
+}
+.hero-stat small {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* SELEÇÃO DE HUNT INTERATIVA */
+.hunt-section {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.hunt-top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.hunt-curr-info {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.hunt-curr-name {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--bot);
+}
+.mode-pill {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.mode-pill.auto {
+  background: #113426;
+  color: var(--lime);
+  border: 1px solid #236544;
+}
+.mode-pill.forced {
+  background: #392815;
+  color: var(--orange);
+  border: 1px solid #6b4d24;
+}
+.hunt-control-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.hunt-select {
+  flex: 1;
+  background: #090d13;
+  border: 1px solid var(--line-light);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color .15s;
+}
+.hunt-select:focus {
+  border-color: var(--bot);
+}
+.btn-hunt {
+  background: var(--bot-dim);
+  border: 1px solid var(--bot);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 12px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.btn-hunt:hover {
+  filter: brightness(1.2);
+  box-shadow: 0 0 14px var(--bot);
+}
+.btn-hunt:active {
+  transform: scale(0.98);
+}
+.btn-hunt:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.hunt-msg {
+  font-size: 11px;
+  margin-top: 6px;
+  display: block;
+  min-height: 16px;
+}
+.hunt-msg.ok { color: var(--lime); }
+.hunt-msg.err { color: var(--red); }
+.hunt-msg.busy { color: var(--orange); }
+.hunt-readonly {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.hunt-readonly small { color: var(--muted); }
+
+/* GRID DE MÉTRICAS PRINCIPAIS */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0c1118;
+}
+.metric {
+  padding: 10px 12px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.metric:nth-child(4n) { border-right: 0; }
+.metric:nth-last-child(-n+4) { border-bottom: 0; }
+.metric span, .rate span, .block-title {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.metric b {
+  display: block;
+  font-size: 16px;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.metric.gold b { color: var(--gold); }
+.metric.accent b { color: var(--bot); }
+
+/* TAXAS POR HORA */
+.rates {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 7px;
+  margin-top: 14px;
+}
+.rate {
+  background: #0d1219;
+  border: 1px solid #222c3a;
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-width: 0;
+}
+.rate b {
+  display: block;
+  color: var(--bot);
+  font-size: 14px;
+  margin-top: 3px;
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+}
+.rate.wide-rate { grid-column: span 2; }
+
+.lower {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+.block {
+  background: #0d1219;
+  border: 1px solid #222c3a;
+  border-radius: 10px;
+  padding: 12px;
+}
+.block-title {
+  margin-bottom: 8px;
+}
+.member {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid #202936;
+}
+.member:last-child { border-bottom: 0; }
+.member b { font-size: 12px; }
+.member small { display: block; color: var(--muted); font-size: 10px; }
+.ready { color: var(--lime); font-weight: 700; }
+.notready { color: var(--orange); }
+
+.subsystems {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.subsystem {
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid #283344;
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+.subsystem b { color: var(--lime); font-weight: 600; }
+.subsystem.warn b { color: var(--orange); }
+
+.details {
+  margin-top: 12px;
+}
+.details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  user-select: none;
+}
+.details pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #aebbd0;
+  font-size: 10px;
+  max-height: 180px;
+  overflow: auto;
+  background: #090d13;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #222c3a;
+  margin-top: 6px;
+}
+
+.wide {
+  margin-top: 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px 22px;
+}
+.wide-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  margin-bottom: 14px;
+}
+.wide-title { font-weight: 800; font-size: 17px; }
+.wide-note { color: var(--muted); font-size: 11px; }
+.wide-toolbar { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.chart-controls, .benchmark-controls { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+.chart-controls button, .benchmark-controls select, .benchmark-controls input {
+  color: var(--text); background: #0c1118; border: 1px solid var(--line-light); border-radius: 7px; font: inherit;
+}
+.chart-controls button { padding: 6px 10px; cursor: pointer; }
+.chart-controls button[aria-pressed="true"] { color: var(--cyan); border-color: var(--cyan); background: #102633; }
+.benchmark-controls input, .benchmark-controls select { padding: 7px 9px; min-width: 130px; }
+.charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.chart { min-width: 0; background: #0c1118; border: 1px solid #222c3a; border-radius: 10px; padding: 12px; }
+.chart h3 { margin: 0; font-size: 12px; }
+.chart p { margin: 3px 0 10px; color: var(--muted); font-size: 10px; }
+.chart svg { width: 100%; height: 116px; display: block; overflow: visible; }
+.chart .grid-line { stroke: #263242; stroke-width: 1; }
+.chart .legend { display: flex; gap: 10px; color: var(--muted); font-size: 10px; }
+.chart .legend i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; }
+.table-wrap { overflow-x: auto; overscroll-behavior-inline: contain; }
+table { width: 100%; border-collapse: collapse; font-size: 11px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #242e3d; }
+th { color: var(--muted); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; }
+td.num { text-align: right; color: var(--cyan); font-weight: 600; }
+.error { color: var(--red); }
+body, .bot, .bot-body, .metrics, .rates, .lower, .wide { min-width: 0; }
+body { overflow-x: hidden; }
+
+@media (max-width: 1150px) {
+  .fleet { grid-template-columns: 1fr; }
+  .fleet-summary { grid-template-columns: repeat(3, 1fr); }
+  .summary.primary { grid-column: span 3; }
+}
+@media (max-width: 650px) {
+  .shell { padding: 15px 12px 30px; }
+  .top { display: block; }
+  .clock { text-align: left; margin-top: 12px; }
+  .fleet-summary { grid-template-columns: repeat(2, 1fr); }
+  .summary.primary { grid-column: span 2; }
+  .hero-stats { grid-template-columns: 1fr; }
+  .hunt-control-row { flex-direction: column; align-items: stretch; }
+  .hunt-readonly { align-items: flex-start; flex-direction: column; }
+  .metrics { grid-template-columns: repeat(2, 1fr); }
+  .metric:nth-child(2n) { border-right: 0; }
+  .metric:nth-last-child(-n+4) { border-bottom: 1px solid var(--line); }
+  .metric:nth-last-child(-n+2) { border-bottom: 0; }
+  .rates { grid-template-columns: repeat(2, 1fr); }
+  .rate.wide-rate { grid-column: span 2; }
+  .lower { grid-template-columns: 1fr; }
+  .wide { padding: 15px 12px; }
+  .wide-toolbar { align-items: stretch; flex-direction: column; }
+  .charts { grid-template-columns: 1fr; }
+  .benchmark-controls input, .benchmark-controls select { flex: 1; min-width: 0; }
+}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="top">
+    <div class="brand">
+      <div class="mark">BF</div>
+      <div>
+        <div class="eyebrow">Operations / Live Fleet</div>
+        <div class="title">Baiak Fleet Control</div>
+        <div class="subtitle">Controle operacional em tempo real de VPS 1 & VPS 2 com seleção remota de hunts.</div>
+      </div>
+    </div>
+    <div class="clock">
+      ÚLTIMA SINCRONIZAÇÃO
+      <strong id="updated">sincronizando...</strong>
+      <span>atualização a cada 10 segundos</span>
+    </div>
+  </header>
+
+  <section class="fleet-summary" id="summary"></section>
+  <section class="fleet" id="fleet"></section>
+
+  <section class="wide">
+    <div class="wide-toolbar">
+      <div>
+        <div class="wide-title">Tendências operacionais</div>
+        <div class="wide-note">Amostras preservadas por 24 horas no monitor</div>
+      </div>
+      <div class="chart-controls" aria-label="Período dos gráficos">
+        <button type="button" aria-pressed="true" onclick="setHistoryWindow(1)">1 hora</button>
+        <button type="button" aria-pressed="false" onclick="setHistoryWindow(24)">24 horas</button>
+      </div>
+    </div>
+    <div class="charts" id="charts"></div>
+  </section>
+
+  <section class="wide">
+    <div class="wide-toolbar">
+      <div>
+        <div class="wide-title">Benchmarks e Aprendizado de Hunts</div>
+        <div class="wide-note">Rendimento consolidado de cada hunt analisada pelas duas instâncias</div>
+      </div>
+      <div class="benchmark-controls">
+        <input type="search" placeholder="Filtrar hunt" aria-label="Filtrar hunts" oninput="setBenchmarkFilter(this.value)">
+        <select aria-label="Ordenar benchmarks" onchange="setBenchmarkSort(this.value)">
+          <option value="gold">Maior gold/h</option>
+          <option value="kills">Maior kills/h</option>
+          <option value="deaths">Menos mortes</option>
+          <option value="name">Nome da hunt</option>
+        </select>
+      </div>
+    </div>
+    <div id="benchmarks"></div>
+  </section>
+</main>
+
+<script>
+const API = 'https://disfigure-tribune-silo.ngrok-free.dev';
+const PUBLIC_MODE = false;
+const OVERVIEW_PATH = '/api/overview';
+const levelHistory = {};
+const pendingHuntSelections = {};
+let historyWindowHours = 1;
+let benchmarkFilter = '';
+let benchmarkSort = 'gold';
+
+const HUNTS_CATALOG = [
+  { id: 'auto', name: '🤖 AUTOMÁTICO (IA decide por maior lucro/segurança)', min: 0 },
+  { id: 'troll-cave', name: 'Troll Cave (Lvl 1+)', min: 1 },
+  { id: 'elf-lair', name: 'Elf (Lvl 8+)', min: 8 },
+  { id: 'amazon-camp', name: 'Amazon (Lvl 9+)', min: 9 },
+  { id: 'minotaur', name: 'Minotaur (Lvl 10+)', min: 10 },
+  { id: 'cyclopolis', name: 'Cyclopolis (Lvl 15+)', min: 15 },
+  { id: 'corym-cave', name: 'Corym Skirmisher (Lvl 30+)', min: 30 },
+  { id: 'refiner-cave', name: 'Stone Refiner (Lvl 30+)', min: 30 },
+  { id: 'giant-spider', name: 'Giant Spider (Lvl 50+)', min: 50 },
+  { id: 'crawler-cave', name: 'Crawler (Lvl 50+)', min: 50 },
+  { id: 'glooth-cave', name: 'Glooth Bandit (Lvl 60+)', min: 60 },
+  { id: 'hero-cave', name: 'Hero (Lvl 60+)', min: 60 },
+  { id: 'cult-cave', name: 'Cult (Lvl 80+)', min: 80 },
+  { id: 'dragon-lair', name: 'Dragon Lair (Lvl 80+)', min: 80 },
+  { id: 'werebadge-cave', name: 'Werebadge (Lvl 90+)', min: 90 },
+  { id: 'hydra-cave', name: 'Hydra (Lvl 100+)', min: 100 },
+  { id: 'behemoth-cave', name: 'Behemoth (Lvl 100+)', min: 100 },
+  { id: 'orclops-cave', name: 'Orclops (Lvl 100+)', min: 100 },
+  { id: 'grimreaper-cave', name: 'Grim Reaper (Lvl 130+)', min: 130 },
+  { id: 'wyrm-cave', name: 'Wyrm (Lvl 130+)', min: 130 },
+  { id: 'werehyaena-cave', name: 'Werehyaena (Lvl 140+)', min: 140 },
+  { id: 'asura-lair', name: 'Asuras (Lvl 150+)', min: 150 },
+  { id: 'darktorturer-cave', name: 'Dark Torturer (Lvl 150+)', min: 150 },
+  { id: 'wereliones-cave', name: 'Wereliones (Lvl 170+)', min: 170 },
+  { id: 'draken-lair', name: 'Draken (Lvl 180+)', min: 180 },
+  { id: 'mitmah-cave', name: 'Mitmah Seer (Lvl 180+)', min: 180 },
+  { id: 'cobra-cave', name: 'Cobras (Lvl 190+)', min: 190 },
+  { id: 'undeadragon-lair', name: 'Undead Dragon (Lvl 200+)', min: 200 },
+  { id: 'cliffstrider-cave', name: 'Cliff Strider (Lvl 200+)', min: 200 },
+  { id: 'hideous-fungus', name: 'Hideous Fungus (Lvl 200+)', min: 200 },
+  { id: 'magmacrawler-cave', name: 'Magma Crawler (Lvl 200+)', min: 200 },
+  { id: 'falcon', name: 'Falcon (Lvl 210+)', min: 210 },
+  { id: 'vexclaw-lair', name: 'Vexclaw (Lvl 210+)', min: 210 },
+  { id: 'grimeleech-cave', name: 'Grimeleech (Lvl 220+)', min: 220 },
+  { id: 'choking-cave', name: 'Choking Fear (Lvl 240+)', min: 240 },
+  { id: 'crazed-cave', name: "Crazed Elf's (Lvl 240+)", min: 240 },
+  { id: 'guzzlemaw-cave', name: 'Guzzlemaw (Lvl 250+)', min: 250 },
+  { id: 'raubritter-lair', name: 'Raubritter (Lvl 250+)', min: 250 },
+  { id: 'catacomb-cave', name: 'Catacomb (Lvl 250+)', min: 250 },
+  { id: 'prison-cave', name: 'Prison (Lvl 250+)', min: 250 },
+  { id: 'lionknight-cave', name: 'Lion Knight (Lvl 270+)', min: 270 },
+  { id: 'megadragon-cave', name: 'Mega Dragon (Lvl 290+)', min: 290 },
+  { id: 'naga-lair', name: 'Naga Lair (Lvl 300+)', min: 300 },
+  { id: 'trueazura-cave', name: 'True Azura (Lvl 300+)', min: 300 },
+  { id: 'freakishlostsoul-cave', name: 'Freakish Lost Soul (Lvl 300+)', min: 300 },
+  { id: 'bulltaur-cave', name: 'Bulltaur (Lvl 350+)', min: 350 },
+  { id: 'gazer-lair', name: 'Gazer (Lvl 350+)', min: 350 },
+  { id: 'bashmu-cave', name: 'Bashmu (Lvl 350+)', min: 350 },
+  { id: 'inferniarch-lair', name: 'Inferniarch (Lvl 450+)', min: 450 },
+  { id: 'girtablilu-cave', name: 'Girtablilu Warrior (Lvl 460+)', min: 460 },
+  { id: 'livrariaice-cave', name: 'Livraria ICE (Lvl 500+)', min: 500 },
+  { id: 'livrariafire-cave', name: 'Livraria FIRE (Lvl 500+)', min: 500 },
+  { id: 'livrariaearth-cave', name: 'Livraria EARTH (Lvl 500+)', min: 500 },
+  { id: 'livraria-cave', name: 'Livraria ENERGY (Lvl 500+)', min: 500 },
+  { id: 'quararaider-lair', name: 'Quara Raider (Lvl 600+)', min: 600 },
+  { id: 'norcferatu-cave', name: 'Norcferatu (Lvl 600+)', min: 600 },
+  { id: 'lavafungos-cave', name: 'Lavafungos (Lvl 610+)', min: 610 },
+  { id: 'crypt-cave', name: 'Crypt Construct (Lvl 700+)', min: 700 },
+  { id: 'gnomprona2-cave', name: 'Crystal Enigma (Lvl 800+)', min: 800 },
+  { id: 'rottengolem-cave', name: 'Rotten Golem (Lvl 800+)', min: 800 },
+  { id: 'cloakofterror-lair', name: 'Cloak Of Terror (Lvl 800+)', min: 800 },
+  { id: 'gnomprona1-cave', name: 'Monster Graveyard (Lvl 800+)', min: 800 },
+  { id: 'gnomprona3-cave', name: 'Sparkling Pools (Lvl 800+)', min: 800 },
+  { id: 'infernalmdemon-cave', name: 'Infernal Demon (Lvl 800+)', min: 800 },
+  { id: 'darkthais-cave', name: 'Dark Thais (Lvl 800+)', min: 800 }
+];
+
+const esc = v => String(v ?? '—').replace(/[&<>"']/g, x => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[x]));
+
+const num = v => typeof v === 'number' ? v.toLocaleString('pt-BR', { maximumFractionDigits: 1 }) : esc(v);
+
+function formatGold(v) {
+  const n = Number(v) || 0;
+  if (n >= 1_000_000_000) {
+    return `${(n / 1_000_000_000).toFixed(2)}B (${num(n)})`;
+  } else if (n >= 1_000_000) {
+    return `${(n / 1_000_000).toFixed(2)}kk (${num(n)})`;
+  } else if (n >= 1_000) {
+    return `${(n / 1_000).toFixed(1)}k (${num(n)})`;
+  }
+  return num(n);
+}
+
+function formatXp(v) {
+  const n = Number(v) || 0;
+  if (n <= 0) return '0 XP';
+  if (n >= 1_000_000_000) {
+    return `+${(n / 1_000_000_000).toFixed(2)}B XP`;
+  } else if (n >= 1_000_000) {
+    return `+${(n / 1_000_000).toFixed(2)}kk XP`;
+  } else if (n >= 1_000) {
+    return `+${(n / 1_000).toFixed(1)}k XP`;
+  }
+  return `+${num(n)} XP`;
+}
+
+function healthState(bot) {
+  const state = bot?.health?.state;
+  if (state) return state;
+  return bot?.status?.online && bot?.status?.connected ? 'online' : 'offline';
+}
+
+function healthLabel(state) {
+  return ({ online: 'ONLINE', stale: 'ATRASADO', offline: 'OFFLINE', api_error: 'ERRO DE API' })[state] || 'DESCONHECIDO';
+}
+
+function pill(bot) {
+  const state = healthState(bot);
+  const detail = bot?.health?.detail || '';
+  return `<span class="status ${state === 'online' ? 'on' : state}" title="${esc(detail)}"><i></i>${healthLabel(state)}</span>`;
+}
+
+function subs(s) {
+  return `<div class="subsystems">${Object.entries(s.subsystems || {}).map(([k, v]) => `
+    <span class="subsystem ${(v.status || '').includes('AGUARDANDO') ? 'warn' : ''}">
+      ${esc(k)} <b>${esc(v.status)}</b>
+    </span>
+  `).join('')}</div>`;
+}
+
+function party(s) {
+  const p = s.party_members || [];
+  if (!p.length) return '<div class="empty" style="color:var(--muted);padding:8px 0;">Party não disponível</div>';
+  return p.map(m => `
+    <div class="member">
+      <div>
+        <b>${esc(m.name || ('Slot ' + m.slot))}</b>
+        <small>${esc(m.voc || '')} · lvl ${esc(m.level || '—')}</small>
+      </div>
+      <small class="${m.ready ? 'ready' : 'notready'}">${m.ready ? 'READY' : 'NOT READY'}</small>
+    </div>
+  `).join('');
+}
+
+function renderHuntOptions(currentHuntId, isForced, botId) {
+  const selected = pendingHuntSelections[botId] ?? (isForced ? currentHuntId : 'auto');
+  return HUNTS_CATALOG.map(h => {
+    const isSel = (selected === h.id || (!isForced && selected === 'auto' && h.id === 'auto')) ? 'selected' : '';
+    return `<option value="${h.id}" ${isSel}>${esc(h.name)}</option>`;
+  }).join('');
+}
+
+function huntSection(id, s, decision, isForced) {
+  const huntName = esc(s.hunt || s.last_hunt || '—');
+  const mode = isForced ? '🔒 HUNT FIXADA' : '🤖 IA AUTOMÁTICA';
+  if (PUBLIC_MODE) {
+    return `<div class="hunt-section hunt-readonly">
+      <div><div class="hunt-label">HUNT ATIVA</div><div class="hunt-curr-name">${huntName}</div></div>
+      <div><span class="mode-pill ${isForced ? 'forced' : 'auto'}">${mode}</span><small>${esc(decision.reason || 'Telemetria em modo leitura')}</small></div>
+    </div>`;
+  }
+  return `<div class="hunt-section">
+    <div class="hunt-top-bar">
+      <div class="hunt-curr-info"><span style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;">HUNT ATIVA:</span><span class="hunt-curr-name">${huntName}</span></div>
+      <span class="mode-pill ${isForced ? 'forced' : 'auto'}">${mode}</span>
+    </div>
+    <div class="hunt-control-row">
+      <select id="hunt-select-${id}" class="hunt-select" onchange="pendingHuntSelections['${id}'] = this.value">${renderHuntOptions(s.last_hunt_id || s.force_hunt_id, isForced, id)}</select>
+      <button class="btn-hunt" id="btn-hunt-${id}" onclick="changeHunt('${id}')">Mudar Hunt</button>
+    </div>
+    <span class="hunt-msg" id="hunt-msg-${id}"></span>
+    <div style="color:var(--muted);font-size:10px;margin-top:2px;">${esc(decision.reason || 'IA operando normalmente')}</div>
+  </div>`;
+}
+
+function card(id, b) {
+  const s = b.status || {};
+  const a = s.analyzers || {};
+  const an = s.analyzers || {};
+  const d = s.hunt_decision || {};
+  const m = s.hunt_matrix?.[s.last_hunt_id] || s.hunt_matrix?.[Object.keys(s.hunt_matrix || {})[0]] || {};
+  const level = Number(s.level) || 0;
+  const rate = typeof s._levelRate === 'number' ? s._levelRate : null;
+  const damage = an.damage || {};
+  const taken = an.taken || {};
+
+  const isForced = Boolean(s.force_hunt && s.force_hunt_id);
+  const uptimeStr = s.online_uptime_str || (s.online ? `${num(s.elapsed_minutes)}m` : 'Reconectando...');
+  const sessionXpStr = s.session_xp_str || formatXp(s.session_xp || an.session_xp || an.raw_xp || 0);
+
+  return `
+    <article class="bot ${id}">
+      <div class="bot-head">
+        <div class="bot-id">
+          <div class="bot-number">${id.toUpperCase()}</div>
+          <div class="bot-host">${PUBLIC_MODE ? `Oracle ${id.toUpperCase()}` : (id === 'vps1' ? 'Oracle VPS 1 / 168.138.151.18' : 'Oracle VPS 2 / 137.131.226.117')}</div>
+        </div>
+        <div class="head-badges">
+          ${pill(b)}
+        </div>
+      </div>
+
+      <div class="bot-body">
+        <!-- UPTIME CONTÍNUO SEM CAIR & XP TOTAL DA SESSÃO -->
+        <div class="hero-stats">
+          <div class="hero-stat uptime">
+            <div class="hero-label">
+              <span>ONLINE CONTÍNUO (SEM QUEDA)</span>
+              <span style="font-size:12px;">⏱️</span>
+            </div>
+            <strong class="hero-val">${esc(uptimeStr)}</strong>
+            <small>${s.online ? 'Conexão WebSocket estável' : 'Aguardando sincronização'}</small>
+          </div>
+
+          <div class="hero-stat xp">
+            <div class="hero-label">
+              <span>XP TOTAL DESTE TEMPO</span>
+              <span style="font-size:12px;">⚡</span>
+            </div>
+            <strong class="hero-val">${esc(sessionXpStr)}</strong>
+            <small>Taxa atual: ${esc(an.xp_per_hour ?? m.xp_h_display ?? '—')}</small>
+          </div>
+        </div>
+
+        ${huntSection(id, s, d, isForced)}
+
+        <!-- MÉTRICAS GERAIS -->
+        <div class="metrics">
+          <div class="metric accent">
+            <span>Nível atual</span>
+            <b>${num(level)}</b>
+          </div>
+          <div class="metric gold">
+            <span>Gold Total</span>
+            <b title="${num(s.gold)} gold">${formatGold(s.gold)}</b>
+          </div>
+          <div class="metric">
+            <span>Stamina</span>
+            <b>${esc(s.stamina)}</b>
+          </div>
+          <div class="metric">
+            <span>Party pronta</span>
+            <b>${num(s.party_ready ?? (s.party_members || []).filter(m => m.ready).length)} / ${num(s.party_slots)}</b>
+          </div>
+          <div class="metric">
+            <span>Kills na Sessão</span>
+            <b>${num(s.kills)}</b>
+          </div>
+          <div class="metric">
+            <span>Waves</span>
+            <b>${num(s.waves)}</b>
+          </div>
+          <div class="metric">
+            <span>Tempo Total</span>
+            <b>${num(s.elapsed_minutes)} min</b>
+          </div>
+          <div class="metric">
+            <span>Loop Mode</span>
+            <b>${s.loop_mode ? 'ATIVO' : 'OFF'}</b>
+          </div>
+        </div>
+
+        <!-- TAXAS POR HORA -->
+        <div class="rates">
+          <div class="rate">
+            <span>Level / hora</span>
+            <b>${rate === null ? 'Calculando…' : num(rate)}</b>
+          </div>
+          <div class="rate">
+            <span>XP / hora</span>
+            <b>${esc(an.xp_per_hour ?? m.xp_h_display ?? '—')}</b>
+          </div>
+          <div class="rate">
+            <span>Loot / hora</span>
+            <b>${esc(an.loot_per_hour ?? m.loot_h_display ?? '—')}</b>
+          </div>
+          <div class="rate">
+            <span>Gold / hora</span>
+            <b>${num(a.goldPerHour ?? m.avg_gold_h ?? 0)}</b>
+          </div>
+          <div class="rate">
+            <span>Kills / hora</span>
+            <b>${num(a.killsPerHour ?? m.avg_kills_h ?? 0)}</b>
+          </div>
+          <div class="rate">
+            <span>Waves / hora</span>
+            <b>${num(m.avg_waves_h ?? 0)}</b>
+          </div>
+          <div class="rate wide-rate">
+            <span>Dano / seg</span>
+            <b>${esc(Object.entries(damage).filter(([k]) => k !== '_raw').map(([k, v]) => k + ': ' + v).join(' · ') || '—')}</b>
+          </div>
+          <div class="rate wide-rate">
+            <span>Recebido / seg</span>
+            <b>${esc(Object.entries(taken).filter(([k]) => k !== '_raw').map(([k, v]) => k + ': ' + v).join(' · ') || '—')}</b>
+          </div>
+        </div>
+
+        <div class="lower">
+          <div class="block">
+            <div class="block-title">PARTY / FORMAÇÃO ATIVA</div>
+            ${party(s)}
+          </div>
+          <div class="block">
+            <div class="block-title">SUBSISTEMAS & AUTO-AÇÕES</div>
+            ${subs(s)}
+          </div>
+        </div>
+
+        <details class="details">
+          <summary>Ver Telemetria Técnica JSON</summary>
+          <pre>${esc(JSON.stringify({
+            last_update: s.last_update,
+            uptime_seconds: s.online_uptime_seconds,
+            session_xp: s.session_xp,
+            force_hunt: s.force_hunt,
+            force_hunt_id: s.force_hunt_id,
+            treino: s.treino,
+            magic: s.magic,
+            analyzers: an
+          }, null, 2))}</pre>
+        </details>
+      </div>
+    </article>
+  `;
+}
+
+function summary(bots) {
+  const all = Object.values(bots).map(x => x.status || {});
+  const online = all.filter(x => x.online).length;
+  const levels = all.map(x => Number(x.level) || 0);
+  const kills = all.reduce((n, x) => n + (Number(x.kills) || 0), 0);
+  const gold = all.reduce((n, x) => n + (Number(x.gold) || 0), 0);
+  const totalSessionXp = all.reduce((n, x) => n + (Number(x.session_xp) || 0), 0);
+
+  return `
+    <div class="summary primary">
+      <span class="label">FROTA ONLINE</span>
+      <strong>${online} / ${all.length}</strong>
+      <small>monitoramento contínuo</small>
+    </div>
+    <div class="summary">
+      <span class="label">NÍVEL MÁXIMO</span>
+      <strong>${num(Math.max(...levels, 0))}</strong>
+      <small>maior nível entre VPS</small>
+    </div>
+    <div class="summary">
+      <span class="label">XP TOTAL DA SESSÃO</span>
+      <strong>${formatXp(totalSessionXp)}</strong>
+      <small>ganho combinado contínuo</small>
+    </div>
+    <div class="summary">
+      <span class="label">GOLD TOTAL DA CONTA</span>
+      <strong title="${num(gold)} gold">${formatGold(gold)}</strong>
+      <small>saldo lido com precisão</small>
+    </div>
+    <div class="summary">
+      <span class="label">KILLS TOTAIS</span>
+      <strong>${num(kills)}</strong>
+      <small>criaturas eliminadas</small>
+    </div>
+  `;
+}
+
+function bench(bots) {
+  const rows = [];
+  for (const [id, b] of Object.entries(bots)) {
+    for (const [h, v] of Object.entries(b.benchmarks || {})) {
+      if (h.startsWith('_') || !v || typeof v !== 'object') continue;
+      const name = String(v.name || h);
+      if (benchmarkFilter && !name.toLocaleLowerCase('pt-BR').includes(benchmarkFilter)) continue;
+      rows.push({ id, name, gold: Number(v.gold_per_hour) || 0, kills: Number(v.kills_per_hour) || 0, deaths: Number(v.deaths) || 0 });
+    }
+  }
+  rows.sort((a, b) => {
+    if (benchmarkSort === 'name') return a.name.localeCompare(b.name, 'pt-BR');
+    if (benchmarkSort === 'deaths') return a.deaths - b.deaths || b.gold - a.gold;
+    return benchmarkSort === 'kills' ? b.kills - a.kills : b.gold - a.gold;
+  });
+  return `<div class="table-wrap"><table><thead><tr>
+    <th>Bot</th><th>Hunt</th><th style="text-align:right;">Gold / hora</th><th style="text-align:right;">Kills / hora</th><th>Mortes</th>
+  </tr></thead><tbody>${rows.length ? rows.map(row => `<tr>
+    <td><b style="color:var(--${row.id === 'vps1' ? 'cyan' : 'purple'})">${esc(row.id.toUpperCase())}</b></td>
+    <td><b>${esc(row.name)}</b></td><td class="num">${num(row.gold)}</td><td class="num">${num(row.kills)}</td><td>${num(row.deaths)}</td>
+  </tr>`).join('') : '<tr><td colspan="5" style="color:var(--muted);">Nenhuma hunt encontrada</td></tr>'}</tbody></table></div>`;
+}
+
+function chartPoints(historyByBot, field) {
+  const after = Date.now() - historyWindowHours * 3_600_000;
+  return Object.fromEntries(Object.entries(historyByBot || {}).map(([id, values]) => [id, (values || []).filter(point => Date.parse(point.at) >= after && Number.isFinite(Number(point[field])))]));
+}
+
+function trendChart(historyByBot, field, title, note, formatter = num) {
+  const points = chartPoints(historyByBot, field);
+  const all = Object.values(points).flat();
+  if (all.length < 2) return `<article class="chart"><h3>${esc(title)}</h3><p>${esc(note)}</p><p>Coletando amostras para o gráfico…</p></article>`;
+  const values = all.map(point => Number(point[field]));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = Math.max(1, max - min);
+  const colors = { vps1: '#62d9ff', vps2: '#bba1ff' };
+  const lines = Object.entries(points).map(([id, values]) => {
+    const coords = values.map((point, index) => {
+      const x = values.length === 1 ? 0 : (index / (values.length - 1)) * 100;
+      const y = 100 - ((Number(point[field]) - min) / span) * 92 - 4;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    return `<polyline points="${coords}" fill="none" stroke="${colors[id] || '#fff'}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
+  return `<article class="chart"><h3>${esc(title)}</h3><p>${esc(note)} · faixa: ${esc(formatter(min))}–${esc(formatter(max))}</p>
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${esc(title)}"><line class="grid-line" x1="0" x2="100" y1="25" y2="25"/><line class="grid-line" x1="0" x2="100" y1="50" y2="50"/><line class="grid-line" x1="0" x2="100" y1="75" y2="75"/>${lines}</svg>
+    <div class="legend"><span><i style="background:#62d9ff"></i>VPS1</span><span><i style="background:#bba1ff"></i>VPS2</span></div></article>`;
+}
+
+function charts(historyByBot) {
+  return [
+    trendChart(historyByBot, 'xpPerHour', 'XP por hora', 'Taxa estimada'),
+    trendChart(historyByBot, 'lootPerHour', 'Loot por hora', 'Valor estimado'),
+    trendChart(historyByBot, 'deaths', 'Mortes registradas', 'Na hunt ativa'),
+    trendChart(historyByBot, 'uptimeSeconds', 'Uptime WebSocket', 'Quedas aparecem como reinício', value => `${Math.round(Number(value) / 60)} min`),
+  ].join('');
+}
+
+function rates(d) {
+  const now = Date.now();
+  for (const [id, b] of Object.entries(d.bots)) {
+    const level = Number(b.status?.level) || 0;
+    const samples = (d.history?.[id] || []).filter(point => Number(point.level) > 0);
+    if (samples.length >= 2) {
+      const first = samples[0];
+      const last = samples[samples.length - 1];
+      const hours = (Date.parse(last.at) - Date.parse(first.at)) / 3_600_000;
+      if (hours > 0) b.status._levelRate = (Number(last.level) - Number(first.level)) / hours;
+    }
+    const previous = levelHistory[id];
+    if (typeof b.status._levelRate !== 'number' && previous && level > 0) {
+      b.status._levelRate = (level - previous.level) / ((now - previous.time) / 3_600_000);
+    }
+    levelHistory[id] = { level, time: now };
+  }
+}
+
+function setHistoryWindow(hours) {
+  historyWindowHours = hours;
+  document.querySelectorAll('.chart-controls button').forEach(button => button.setAttribute('aria-pressed', String(button.textContent.includes(String(hours)))));
+  if (window.latestFleetData) document.getElementById('charts').innerHTML = charts(window.latestFleetData.history || {});
+}
+
+function setBenchmarkFilter(value) {
+  benchmarkFilter = String(value || '').trim().toLocaleLowerCase('pt-BR');
+  if (window.latestFleetData) document.getElementById('benchmarks').innerHTML = bench(window.latestFleetData.bots);
+}
+
+function setBenchmarkSort(value) {
+  benchmarkSort = value;
+  if (window.latestFleetData) document.getElementById('benchmarks').innerHTML = bench(window.latestFleetData.bots);
+}
+
+async function changeHunt(botId) {
+  if (PUBLIC_MODE) return;
+  const sel = document.getElementById('hunt-select-' + botId);
+  const btn = document.getElementById('btn-hunt-' + botId);
+  const msg = document.getElementById('hunt-msg-' + botId);
+  if (!sel || !btn) return;
+
+  let operatorToken = sessionStorage.getItem('baiak-operator-token');
+  if (!operatorToken) {
+    operatorToken = window.prompt('Informe o token do painel operacional:') || '';
+    if (!operatorToken) {
+      msg.textContent = 'Token de operador necessário para enviar comandos.';
+      msg.className = 'hunt-msg err';
+      return;
+    }
+    sessionStorage.setItem('baiak-operator-token', operatorToken);
+  }
+
+  const huntId = sel.value;
+  btn.disabled = true;
+  msg.className = 'hunt-msg busy';
+  msg.textContent = 'Enviando comando para o bot...';
+
+  try {
+    const res = await fetch(API + '/api/hunt', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + operatorToken,
+        'ngrok-skip-browser-warning': 'true'
+      },
+      body: JSON.stringify({
+        bot: botId,
+        hunt_id: huntId,
+        auto: huntId === 'auto'
+      })
+    });
+
+    const data = await res.json();
+    if (data.ok) {
+      msg.className = 'hunt-msg ok';
+      msg.textContent = '✅ ' + (data.message || 'Comando executado! O bot trocará de hunt em instantes.');
+      pendingHuntSelections[botId] = huntId;
+      setTimeout(update, 1200);
+    } else {
+      msg.className = 'hunt-msg err';
+      msg.textContent = '❌ Erro: ' + (data.error || data.reason || 'Falha ao aplicar hunt');
+    }
+  } catch (err) {
+    msg.className = 'hunt-msg err';
+    msg.textContent = '❌ Erro de rede: ' + err.message;
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => {
+      if (msg && msg.className.includes('ok')) msg.textContent = '';
+    }, 6000);
+  }
+}
+
+async function update() {
+  try {
+    const r = await fetch(API + OVERVIEW_PATH, {
+      cache: 'no-store',
+      headers: { 'ngrok-skip-browser-warning': 'true' }
+    });
+    if (!r.ok) throw Error('HTTP ' + r.status);
+    const d = await r.json();
+    rates(d);
+    window.latestFleetData = d;
+
+    const summaryEl = document.getElementById('summary');
+    const fleetEl = document.getElementById('fleet');
+    const benchEl = document.getElementById('benchmarks');
+    const updatedEl = document.getElementById('updated');
+
+    summaryEl.innerHTML = summary(d.bots);
+    fleetEl.innerHTML = Object.entries(d.bots).map(([id, b]) => card(id, b)).join('');
+    document.getElementById('charts').innerHTML = charts(d.history || {});
+    benchEl.innerHTML = bench(d.bots);
+    updatedEl.textContent = new Date(d.generatedAt).toLocaleTimeString('pt-BR');
+  } catch (e) {
+    const updatedEl = document.getElementById('updated');
+    const fleetEl = document.getElementById('fleet');
+    if (updatedEl) updatedEl.textContent = 'erro: ' + e.message;
+    if (fleetEl) fleetEl.innerHTML = '<p class="error">Falha ao sincronizar frota: ' + esc(e.message) + '</p>';
+  }
+}
+
+update();
+setInterval(update, 10000);
+</script>
+</body>
+</html>

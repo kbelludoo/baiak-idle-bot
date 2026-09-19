@@ -30,12 +30,12 @@ services:
       - ./page_extra.js:/app/page_extra.js
       - ./kernel_bot.js:/app/kernel_bot.js
       - ./baiakidle-helper.user.js:/app/baiakidle-helper.user.js
-    shm_size: "64mb"
+    shm_size: "256m"
     deploy:
       resources:
         limits:
           cpus: "0.80"
-          memory: 512M
+          memory: 768M
     environment:
       - PYTHONUNBUFFERED=1
       - SCREENSHOT_INTERVAL=0
@@ -44,4 +44,10 @@ services:
       - STREAM_WIDTH=854
       - STREAM_HEIGHT=480
       - STREAM_QUALITY=60
-      - CHROME_GL=off
+      - CHROME_GL=swiftshader
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3).read()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s

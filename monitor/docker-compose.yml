@@ -11,3 +11,17 @@ services:
       - PORT=8081
       - VPS1_URL=${VPS1_URL:-http://host.docker.internal:8080}
       - VPS2_URL=${VPS2_URL:-http://137.131.226.117:8080}
+      - SNAPSHOT_INTERVAL_MS=${SNAPSHOT_INTERVAL_MS:-10000}
+      - PUBLIC_ORIGIN=${PUBLIC_ORIGIN:-https://kbelludoo.github.io}
+      - OPERATOR_TOKEN=${OPERATOR_TOKEN:-}
+      - BOT_ADMIN_TOKEN=${BOT_ADMIN_TOKEN:-}
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
+      - ALERT_COOLDOWN_MS=${ALERT_COOLDOWN_MS:-900000}
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "bun", "-e", "await fetch('http://127.0.0.1:8081/healthz').then(r => { if (!r.ok) process.exit(1) })"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
