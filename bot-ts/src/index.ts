@@ -13,6 +13,7 @@ import { TelemetryStore } from "./telemetry";
 import { ProtocolMapper } from "./protocol_mapper";
 import { chooseExplorationTarget } from "./exploration";
 import { rankHuntsObserved } from "./hunt_sim";
+import { helperTrigger } from "./helper_triggers";
 import { ActionQueue, evaluateStaminaTransition } from "./state_machine";
 import type { TelemetryState, SubsystemInfo } from "./types";
 
@@ -375,6 +376,10 @@ async function main() {
   let huntScanInFlight = false;
   let lastHudCheck = 0;
   let cachedHud: any = {};
+  let previousHelperLevel = 0;
+  let previousPartySignature = '';
+  let previousMagicSignature = '';
+  let lastHelperTrigger = 0;
   let needPotionCheck = true;
   let cityStreak = 0;
   let needsHuntEntry = false;
@@ -578,6 +583,27 @@ async function main() {
             }
             magicState = classifyMagic(hud.spells || [], Object.keys(helperBySlot).sort().map((k) => helperBySlot[Number(k)]));
             if (!(telemetry as any).partyMembersRaw?.length) (telemetry as any).partyMembersRaw = hud.partyMembers || [];
+            const partySignature = JSON.stringify((hud.partyMembers || []).map((m: any) => ({ name: m.name, voc: m.voc, level: m.level })));
+            const magicSignature = JSON.stringify({ names: magicState.names, slots: magicState.slots });
+            (telemetry as any).helperTriggerState = helperTrigger({
+              level: telemetry.level,
+              previousLevel: previousHelperLevel,
+              partySignature,
+              previousPartySignature,
+              magic: magicState,
+              magicSignature,
+              previousMagicSignature,
+              hpPct: Number(hud.hpPct || hud.hpPercent || 0) || undefined,
+              manaPct: Number(hud.manaPct || hud.manaPercent || 0) || undefined,
+              damageTakenPerSecond: Number(latestAnalyzers?.taken_per_second || 0) || undefined,
+              maxHp: Number(hud.hpMax || 0) || undefined,
+              now,
+              lastRun: lastHelperTrigger,
+            });
+            (telemetry as any).helperTriggerReasons = (telemetry as any).helperTriggerState.reasons;
+            previousHelperLevel = telemetry.level;
+            previousPartySignature = partySignature;
+            previousMagicSignature = magicSignature;
           } catch (_) {}
         }
 
@@ -815,8 +841,9 @@ async function main() {
               if (spellRes?.events?.length) console.log(`[${new Date().toLocaleTimeString()}] 🔮 [SPELL] ${JSON.stringify(spellRes.events)}`);
             }
           });
-        } else if (!magicState.party_ready && (now - lastSpellGear >= 60000)) {
+        } else if ((telemetry as any).helperTriggerState?.run && now - lastSpellGear >= 30000) {
           lastSpellGear = now;
+          lastHelperTrigger = now;
           actionQueue.enqueue({
             id: "spell_party",
             name: "spell",
