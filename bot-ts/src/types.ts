@@ -55,6 +55,11 @@ export interface BotConfig {
   autoHunt: boolean;
   forceHunt: boolean;
   huntId: string;
+  huntMode: 'last' | 'force' | 'engine' | 'hybrid';
+  exploreSampleSec: number;
+  exploreMaxDeaths: number;
+  exploreMaxDamageTakenPct: number;
+  exploreCooldownSec: number;
   autoHeal: boolean;
   healBelowPct: number;
   hpPotionBelowPct: number;
@@ -64,11 +69,21 @@ export interface BotConfig {
   autoTreino: boolean;
   autoBoss: boolean;
   autoEquip: boolean;
+  autoBags: boolean;
+  autoPrey: boolean;
+  autoExtras: boolean;
+  screenshot: boolean;
   userDataDir: string;
   chromePath: string;
   targetUrl: string;
   token: string;
   reduceVfx: boolean;
+  chromeGl: string;
+  auctionEnabled: boolean;
+  auctionLive: boolean;
+  auctionBudget: number;
+  auctionMinMarginPct: number;
+  auctionMaxItems: number;
 }
 
 export interface TelemetryState {

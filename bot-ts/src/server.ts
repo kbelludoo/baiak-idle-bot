@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 import type { TelemetryState } from './types';
 import type { Page, CDPSession } from 'puppeteer-core';
 
@@ -6,36 +8,76 @@ export interface ServerContext {
   getPage: () => Page | null;
   getCdp: () => CDPSession | null;
   getLatestFrame: () => Buffer | null;
+  dataDir?: string;
+}
+
+function readJsonFile(dataDir: string | undefined, filename: string): Record<string, any> {
+  if (!dataDir) return {};
+  const p = join(dataDir, filename);
+  if (!existsSync(p)) return {};
+  try {
+    return JSON.parse(readFileSync(p, 'utf-8'));
+  } catch (_) {
+    return { error: 'read_failed' };
+  }
 }
 
 export function startServer(port: number, host: string, ctx: ServerContext) {
   const server = Bun.serve({
     port,
     hostname: host,
-    async fetch(req) {
+    async fetch(req, srv) {
       const url = new URL(req.url);
       const path = url.pathname;
 
       const corsHeaders = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key',
       };
 
       if (req.method === 'OPTIONS') {
         return new Response(null, { headers: corsHeaders });
       }
 
+      // Helper de autorização para endpoints de controle crítico (eval, click)
+      const isAuthorizedControl = () => {
+        const clientIp = srv?.requestIP(req)?.address || '';
+        const isLoopback = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === '::ffff:127.0.0.1';
+        const expectedToken = (process.env.ADMIN_TOKEN || process.env.BAIAK_TOKEN || '').trim();
+        const authHeader = req.headers.get('Authorization') || req.headers.get('x-api-key') || '';
+        const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+
+        if (expectedToken && token === expectedToken) return true;
+        // Se não houver token configurado, estritamente restrito a loopback local
+        return isLoopback;
+      };
+
       // API: Status
       if (path === '/api/status' || path === '/api/status/') {
+        const diskStatus = readJsonFile(ctx.dataDir, 'status.json');
+        if (diskStatus && Object.keys(diskStatus).length > 0) {
+          return Response.json(diskStatus, { headers: corsHeaders });
+        }
         const state = ctx.getState();
         return Response.json(state, { headers: corsHeaders });
       }
 
-      // API: Eval
+      // API: Matrix / Benchmarks (paridade com server.py)
+      if (path === '/api/matrix' || path === '/api/matrix/') {
+        return Response.json(readJsonFile(ctx.dataDir, 'hunt_matrix.json'), { headers: corsHeaders });
+      }
+      if (path === '/api/benchmarks' || path === '/api/benchmarks/') {
+        return Response.json(readJsonFile(ctx.dataDir, 'benchmarks.json'), { headers: corsHeaders });
+      }
+
+      // API: Eval (Protegido: requer loopback ou token de admin)
       if (path === '/api/eval' || path === '/api/eval/') {
         if (req.method !== 'POST') {
           return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
+        }
+        if (!isAuthorizedControl()) {
+          return Response.json({ ok: false, error: 'Forbidden: eval requires local loopback or valid Authorization token' }, { status: 403, headers: corsHeaders });
         }
         try {
           const body = await req.json() as { js?: string; expression?: string };
@@ -51,10 +93,13 @@ export function startServer(port: number, host: string, ctx: ServerContext) {
         }
       }
 
-      // API: Click
+      // API: Click (Protegido: requer loopback ou token de admin)
       if (path === '/api/click' || path === '/api/click/') {
         if (req.method !== 'POST') {
           return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
+        }
+        if (!isAuthorizedControl()) {
+          return Response.json({ ok: false, error: 'Forbidden: click requires local loopback or valid Authorization token' }, { status: 403, headers: corsHeaders });
         }
         try {
           const body = await req.json() as { x: number; y: number; button?: 'left' | 'right' | 'middle' };
@@ -76,20 +121,28 @@ export function startServer(port: number, host: string, ctx: ServerContext) {
         }
       }
 
-      // API: Live MJPEG Video Stream
-      if (path === '/stream' || path === '/stream/') {
+      // API: Live MJPEG Video Stream (rotas compat com server.py)
+      if (path === '/stream' || path === '/stream/' || path === '/api/stream' || path === '/api/stream.mjpeg' || path === '/stream.mjpeg') {
         let isClosed = false;
         const stream = new ReadableStream({
           async start(controller) {
             while (!isClosed) {
-              const frame = ctx.getLatestFrame();
-              if (frame) {
-                const header = `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`;
-                controller.enqueue(Buffer.from(header));
-                controller.enqueue(frame);
-                controller.enqueue(Buffer.from('\r\n'));
-              }
-              await new Promise(r => setTimeout(r, 125)); // ~8 FPS
+              try {
+                let frame = ctx.getLatestFrame();
+                if (!frame) {
+                  const p = ctx.getPage();
+                  if (p) {
+                    frame = await p.screenshot({ type: 'jpeg', quality: 50 }).catch(() => null) as Buffer | null;
+                  }
+                }
+                if (frame) {
+                  const header = `--baiakframe\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`;
+                  controller.enqueue(Buffer.from(header));
+                  controller.enqueue(frame);
+                  controller.enqueue(Buffer.from('\r\n'));
+                }
+              } catch (_) {}
+              await new Promise(r => setTimeout(r, 400)); // ~2.5 FPS on-demand
             }
           },
           cancel() {
@@ -99,7 +152,7 @@ export function startServer(port: number, host: string, ctx: ServerContext) {
 
         return new Response(stream, {
           headers: {
-            'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
+            'Content-Type': 'multipart/x-mixed-replace; boundary=baiakframe',
             'Cache-Control': 'no-cache, no-store, must-revalidate',
             'Connection': 'close',
             'Pragma': 'no-cache',
@@ -108,11 +161,68 @@ export function startServer(port: number, host: string, ctx: ServerContext) {
         });
       }
 
+      // API: Screenshot JPEG (rotas compat com server.py)
+      if (path === '/screenshot' || path === '/api/screenshot' || path.startsWith('/api/screenshot') || path === '/screenshot.jpg' || path === '/screenshot_live.jpg') {
+        const frame = ctx.getLatestFrame();
+        if (frame) {
+          return new Response(frame as any, {
+            headers: {
+              'Content-Type': 'image/jpeg',
+              'Cache-Control': 'no-cache',
+              ...corsHeaders,
+            },
+          });
+        }
+        const page = ctx.getPage();
+        if (page) {
+          try {
+            const buf = await page.screenshot({ type: 'jpeg', quality: 70 });
+            return new Response(buf as any, {
+              headers: {
+                'Content-Type': 'image/jpeg',
+                'Cache-Control': 'no-cache',
+                ...corsHeaders,
+              },
+            });
+          } catch (err: any) {
+            return Response.json({ ok: false, error: String(err) }, { status: 500, headers: corsHeaders });
+          }
+        }
+        return Response.json({ ok: false, error: 'page_not_ready' }, { status: 503, headers: corsHeaders });
+      }
+
       // Dashboard Web HTML
       if (path === '/' || path === '/dashboard' || path === '/index.html') {
         return new Response(DASHBOARD_HTML, {
           headers: { 'Content-Type': 'text/html; charset=utf-8', ...corsHeaders }
         });
+      }
+
+      // Static fallback: serve data/<path> como server.py (status/matrix PWA, imgs)
+      if (ctx.dataDir && req.method === 'GET') {
+        const fileName = path.replace(/^\//, '');
+        if (fileName && !fileName.includes('..')) {
+          const fp = join(ctx.dataDir, fileName);
+          if (existsSync(fp)) {
+            try {
+              const content = readFileSync(fp);
+              const mime = fileName.endsWith('.png') ? 'image/png'
+                : fileName.endsWith('.jpg') || fileName.endsWith('.jpeg') ? 'image/jpeg'
+                : fileName.endsWith('.html') ? 'text/html; charset=utf-8'
+                : fileName.endsWith('.json') ? 'application/json; charset=utf-8'
+                : 'text/plain';
+              return new Response(content as any, {
+                headers: {
+                  'Content-Type': mime,
+                  'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
+                  Pragma: 'no-cache',
+                  Expires: '0',
+                  ...corsHeaders,
+                },
+              });
+            } catch (_) {}
+          }
+        }
       }
 
       return new Response('Not Found', { status: 404, headers: corsHeaders });

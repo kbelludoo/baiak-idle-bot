@@ -7,17 +7,27 @@ services:
     restart: always
     ipc: host
     shm_size: "256m"
+    user: "0:0"
     env_file:
       - path: .env
         required: false
+    deploy:
+      resources:
+        limits:
+          cpus: "0.80"
+          memory: 512M
     environment:
-      - PORT=8080
+      - PORT=${PORT:-8080}
       - HOST=0.0.0.0
       - HEADLESS=true
-      - STREAM=true
-      - BOT_ARGS=--stream
-      - USER_DATA_DIR=/app/data/chrome_profile
+      - STREAM=false
+      - CHROME_GL=off
+      - ENABLE_KERNEL=false
+      - GRAPHICS_THROTTLE=${GRAPHICS_THROTTLE:-false}
+      - GRAPHICS_THROTTLE_MS=${GRAPHICS_THROTTLE_MS:-2000}
+      - USER_DATA_DIR=/app/data/chrome_profile_ts
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:${PORT:-8080}"
     volumes:
-      - ./data:/app/data
+      - ./data-ts:/app/data
+      - ./src:/app/src
