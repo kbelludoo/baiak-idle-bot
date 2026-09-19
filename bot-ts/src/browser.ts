@@ -61,7 +61,7 @@ export async function launchBrowser(
     '--password-store=basic',
     '--use-mock-keychain',
     '--renderer-process-limit=1',
-    '--js-flags=--max-old-space-size=96',
+    '--js-flags=--max-old-space-size=512',
     '--remote-debugging-port=9222',
     '--remote-debugging-address=0.0.0.0',
     '--lang=pt-BR',

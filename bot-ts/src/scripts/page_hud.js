@@ -12,6 +12,36 @@
     pickerKind: null
   };
 
+  const parseGoldAmount = (val) => {
+    if (typeof val === 'number') return Math.round(val);
+    const s = String(val || "").replace(/\s/g, "").trim();
+    if (!s) return null;
+    const m = s.match(/([\d.,]+)\s*(kk|k|m|mil)?/i);
+    if (!m) return null;
+    let raw = m[1];
+    const unit = (m[2] || "").toLowerCase();
+
+    let num = 0;
+    if (unit === "kk" || unit === "m") {
+      num = parseFloat(raw.replace(/\./g, "").replace(",", ".")) * 1000000;
+    } else if (unit === "k" || unit === "mil") {
+      num = parseFloat(raw.replace(/\./g, "").replace(",", ".")) * 1000;
+    } else {
+      // Sem sufixo (ex: "1.500.000", "50.000", "1.234", "1234")
+      // Padrão pt-BR do jogo: pontos são separadores de milhar
+      if (raw.includes(".") && raw.includes(",")) {
+        num = parseFloat(raw.replace(/\./g, "").replace(",", "."));
+      } else if (raw.includes(".")) {
+        num = parseInt(raw.replace(/\./g, ""), 10);
+      } else if (raw.includes(",")) {
+        num = parseFloat(raw.replace(",", "."));
+      } else {
+        num = parseInt(raw, 10);
+      }
+    }
+    return isNaN(num) ? null : Math.round(num);
+  };
+
   const nums = (s) => {
     const m = String(s || "").match(/(\d[\d.,]*)/);
     if (!m) return null;
@@ -46,14 +76,15 @@
   }
   res.level = maxLvl > 0 ? maxLvl : null;
 
-  const goldEl = document.getElementById("hud-gold") || document.querySelector(".hud-money") || document.querySelector(".mk-goldamt") || document.querySelector(".ac-wallet-val");
+  const goldEl = document.getElementById("hud-gold")
+    || document.querySelector(".hud-money, .mk-goldamt, .ac-wallet-val, .wallet-gold, #gold-count, [data-gold]");
   if (goldEl) {
-    const g = nums(goldEl.textContent);
+    const g = parseGoldAmount(goldEl.getAttribute("data-gold") || goldEl.textContent);
     if (g != null) res.gold = g;
   }
   if (res.gold == null) {
-    const gm = document.getElementById("gold-count");
-    if (gm) res.gold = nums(gm.textContent);
+    const gm = document.getElementById("gold-count") || document.querySelector("[title*='Gold' i], [aria-label*='Gold' i]");
+    if (gm) res.gold = parseGoldAmount(gm.textContent);
   }
 
   // --- EXTRAÇÃO ROBUSTA DE STAMINA ---
@@ -93,7 +124,9 @@
     const pt = (pctEl.textContent || "").trim();
     if (pt) res.stamina_pct = pt;
   }
-  res.stamina = staminaFound || "42:00";
+  // O HUD renderiza 42:00 como placeholder antes da sincronização.
+  // Sem uma leitura real, não podemos tratar esse placeholder como stamina cheia.
+  res.stamina = staminaFound === "42:00" ? null : (staminaFound || null);
 
   // --- EXTRAÇÃO ROBUSTA DE PARTY MEMBERS ---
   res.partyMembers = [];
@@ -277,7 +310,35 @@
   // Extrai dados dos Analisadores do jogo (#panel-hunt, #panel-dmg, #panel-loot, #panel-supply, #panel-taken, .bs-stats)
   res.analyzers = {};
 
-  // 1. Screensaver / Economy stats bar (.bs-stats)
+  // 1. Screensaver / Economy stats bar (.bs-stats) & Elementos nativos do Hunt Analyzer (#an-*)
+  const anRaw = document.getElementById("an-raw");
+  if (anRaw) {
+    const rawVal = parseGoldAmount(anRaw.textContent);
+    if (rawVal != null) {
+      res.analyzers.session_xp = rawVal;
+      res.analyzers.raw_xp = rawVal;
+    }
+  }
+  const anXph = document.getElementById("an-xph");
+  if (anXph) res.analyzers.xp_per_hour = (anXph.textContent || "").trim();
+  const anSession = document.getElementById("an-session");
+  if (anSession) res.analyzers.session_time = (anSession.textContent || "").trim();
+  const anKills = document.getElementById("an-kills");
+  if (anKills) {
+    const kv = parseGoldAmount(anKills.textContent);
+    if (kv != null) res.analyzers.hunt_kills = kv;
+  }
+  const anLoot = document.getElementById("an-loot");
+  if (anLoot) {
+    const lv = parseGoldAmount(anLoot.textContent);
+    if (lv != null) res.analyzers.loot_value = lv;
+  }
+  const anBalance = document.getElementById("an-balance");
+  if (anBalance) {
+    const bv = parseGoldAmount(anBalance.textContent);
+    if (bv != null) res.analyzers.balance = bv;
+  }
+
   const bsStats = document.querySelector(".bs-stats");
   if (bsStats) {
     const items = bsStats.querySelectorAll(".bs-stat");

@@ -6,8 +6,15 @@ async () => {
   const abo = document.getElementById("autoboss-overlay");
   const aboOn = !!(abo && !abo.classList.contains("hidden"));
   const wave = (document.getElementById("wave-title")?.textContent || "").trim();
+  const waveSub = (document.getElementById("wave-sub")?.textContent || "").trim();
   if (aboOn && /auto\s*boss|boss/i.test((abo.textContent || "") + wave)) {
     return { ok: true, action: "autoboss_ja_ativo", events: ["overlay visivel"] };
+  }
+
+  // Se estiver em combate ativo numa wave de hunt, NÃO interrompe abrindo menu de teleporte
+  const isSafeZone = /cidade|city|templo|temple|treino|safe/i.test(wave + " " + waveSub);
+  if (!isSafeZone && /wave\s*\d+/i.test(waveSub)) {
+    return { ok: true, skip: "em_combate_hunt", events: [`hunt ativa (${wave} - ${waveSub}) - boss ignorado mid-wave`] };
   }
 
   const clickStart = (root) => {

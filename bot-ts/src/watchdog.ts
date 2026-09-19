@@ -69,16 +69,16 @@ export class Watchdog {
         const connOverlay = document.getElementById('conn-overlay');
         if (connOverlay && !connOverlay.classList.contains('hidden')) {
           const retryBtn = document.getElementById('conn-retry') as HTMLElement | null;
-          if (retryBtn && retryBtn.offsetParent !== null) {
+          if (retryBtn) {
             retryBtn.click();
             reconnected = true;
             reason = 'CLICOU_RECONECTAR';
           }
         }
 
-        // Se houver algum botão solto de reconectar
+        // Se houver algum botão solto de reconectar (ex: 'Reassumir aqui' ou 'Entrar de novo')
         const anyRetry = Array.from(document.querySelectorAll('button')).find(b => 
-          (b as HTMLElement).offsetParent !== null && /reconectar|reconnect|retry/i.test(b.textContent || '')
+          /reassumir|entrar|reconectar|reconnect|retry|tentar/i.test(b.textContent || '')
         ) as HTMLElement | undefined;
         if (anyRetry && !reconnected) {
           anyRetry.click();
@@ -104,26 +104,30 @@ export class Watchdog {
         result.reason = 'URL_FORA_DE_JOGAR';
       }
 
-      // 3. Checa watchdog de inatividade do WebSocket (> 120s sem pacotes — paridade com bot.py)
-      if (now - this.lastWsFrameTime > 120000) {
-        console.log(`[WATCHDOG] ⚠️ WebSocket inativo há ${Math.round((now - this.lastWsFrameTime) / 1000)}s. Tentando reconectar...`);
+      // 3. Checa inatividade do WebSocket (> 20s sem pacotes)
+      if (!this.wsConnected || (now - this.lastWsFrameTime > 20000)) {
+        const inactiveSec = Math.round((now - this.lastWsFrameTime) / 1000);
+        console.log(`[WATCHDOG] ⚠️ Conexão inativa há ${inactiveSec}s. Tentando reconectar...`);
 
-        // Primeiro tenta clicar no botão de reconectar
+        // Primeiro tenta clicar no botão de reconectar nativo do jogo
         const clicked = await page.evaluate(() => {
           const retryBtn = document.getElementById('conn-retry');
-          if (retryBtn && retryBtn.offsetParent !== null) {
+          if (retryBtn) {
             retryBtn.click();
             return true;
           }
           return false;
         }).catch(() => false);
 
-        // Se não tem botão, recarrega a página após 180s
-        if (!clicked && now - this.lastWsFrameTime > 180000) {
-          console.log(`[WATCHDOG] ⚠️ Sem botão de reconexão. Recarregando página...`);
-          await page.goto('https://baiakidle.com/jogar/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+        if (clicked) {
           result.reconnected = true;
-          result.reason = 'RELOAD_WS_INATIVO_180S';
+          result.reason = 'CLICOU_CONN_RETRY_WATCHDOG';
+        } else if (now - this.lastWsFrameTime > 35000) {
+          // Se não há botão ou não reconectou em 35s, recarrega a página para acionar o reconnect nativo do Colyseus
+          console.log(`[WATCHDOG] ⚠️ Recarregando página para acionar reconexão nativa...`);
+          await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+          result.reconnected = true;
+          result.reason = 'RELOAD_PAGINA_RECONNECT_NATIVO';
           this.lastWsFrameTime = now;
         }
       }

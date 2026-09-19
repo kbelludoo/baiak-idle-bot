@@ -90,6 +90,7 @@ const FAST_STATE_JS = `() => {
     const pct = text(document.getElementById("stamina-pct"));
     if (/^\d+\s*%$/.test(pct)) stamina = pct;
   }
+  if (stamina === "42:00") stamina = "";
 
   // Loop Toggle sempre ON
   const loop = document.getElementById("loop-toggle");
@@ -491,8 +492,9 @@ async function main() {
         }
       }
 
-      // 1. Checagem do Watchdog (Auto-Reconnect)
-      if (now - lastWatchdogCheck >= 30000) {
+      // 1. Checagem do Watchdog (Auto-Reconnect imediato se offline)
+      const watchdogInterval = watchdog.isConnected() ? 30000 : 3000;
+      if (now - lastWatchdogCheck >= watchdogInterval) {
         lastWatchdogCheck = now;
         const wResult = await watchdog.checkAndRecover(pageRef, cdpRef);
         if (wResult.reconnected) {
