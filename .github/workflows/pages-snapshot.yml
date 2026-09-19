@@ -1,0 +1,42 @@
+name: Publish fleet snapshot to Pages
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch public overview (live, fallback keeps previous snapshot)
+        run: |
+          set +e
+          URL="https://disfigure-tribune-silo.ngrok-free.dev/api/public/overview"
+          OUT="docs/fleet-snapshot.json"
+          TMP="$(mktemp)"
+          CODE="$(curl -s -m 25 -H 'ngrok-skip-browser-warning: true' -o "$TMP" -w '%{http_code}' "$URL")"
+          echo "HTTP $CODE"
+          if [ "$CODE" = "200" ] && python3 -c "import json; d=json.load(open('$TMP')); assert 'bots' in d, 'sem bots'"; then
+            mv "$TMP" "$OUT"
+            echo "snapshot atualizado: $(python3 -c "import json; print(json.load(open('$OUT'))['generatedAt'])")"
+          else
+            echo "mantendo snapshot anterior (túnel fora do ar?)"
+            head -c 500 "$TMP" || true
+            rm -f "$TMP"
+          fi
+      - name: Commit snapshot if changed
+        run: |
+          if git status --short docs/fleet-snapshot.json | grep -q .; then
+            git config user.name "baiak-snapshot-bot"
+            git config user.email "baiak-snapshot-bot@users.noreply.github.com"
+            git add docs/fleet-snapshot.json
+            git commit -m "chore: fleet snapshot $(date -u +%FT%TZ)"
+            git push
+          else
+            echo "sem mudanças no snapshot"
+          fi

@@ -1,0 +1,15 @@
+[Unit]
+Description=Baiak Monitor ngrok tunnel (127.0.0.1:8081)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Restart=always
+RestartSec=5
+ExecStart=/usr/local/bin/ngrok http 127.0.0.1:8081 --log /home/ubuntu/ngrok-monitor.log
+# Garante que o túnel sobrevive a reboot e a quedas do agente.
+
+[Install]
+WantedBy=multi-user.target

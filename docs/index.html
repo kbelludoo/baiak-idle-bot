@@ -610,9 +610,14 @@ body { overflow-x: hidden; }
 </main>
 
 <script>
-const API = 'https://disfigure-tribune-silo.ngrok-free.dev';
+const PARAM_API = new URLSearchParams(location.search).get('api');
+const LIVE_API = (PARAM_API || localStorage.getItem('baiak-live-api') || 'https://disfigure-tribune-silo.ngrok-free.dev').replace(/\/$/, '');
 const PUBLIC_MODE = true;
 const OVERVIEW_PATH = '/api/public/overview';
+// Ordem de tentativa: AO VIVO primeiro, snapshot mesma-origem como fallback
+// (o snapshot é publicado a cada 5 min pela Action pages-snapshot).
+const API_ENDPOINTS = [LIVE_API + OVERVIEW_PATH, './fleet-snapshot.json'];
+try { localStorage.setItem('baiak-live-api', LIVE_API); } catch (_) {}
 const levelHistory = {};
 const pendingHuntSelections = {};
 let historyWindowHours = 1;
@@ -1129,14 +1134,41 @@ async function changeHunt(botId) {
   }
 }
 
+async function fetchFirstOk() {
+  let lastErr = null;
+  for (let i = 0; i < API_ENDPOINTS.length; i++) {
+    const url = API_ENDPOINTS[i];
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 12000);
+      const r = await fetch(url, {
+        cache: 'no-store',
+        signal: ctrl.signal,
+        headers: url.startsWith('http') ? { 'ngrok-skip-browser-warning': 'true' } : {}
+      });
+      clearTimeout(t);
+      if (!r.ok) throw Error('HTTP ' + r.status);
+      const d = await r.json();
+      if (!d || !d.bots) throw Error('payload inválido');
+      return { data: d, source: i === 0 ? 'live' : 'snapshot' };
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || Error('sem endpoints');
+}
+
+function ageLabel(iso) {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return 'há segundos';
+  if (m === 1) return 'há 1 min';
+  if (m < 60) return `há ${m} min`;
+  return `há ${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}min` : ''}`;
+}
+
 async function update() {
   try {
-    const r = await fetch(API + OVERVIEW_PATH, {
-      cache: 'no-store',
-      headers: { 'ngrok-skip-browser-warning': 'true' }
-    });
-    if (!r.ok) throw Error('HTTP ' + r.status);
-    const d = await r.json();
+    const { data: d, source } = await fetchFirstOk();
     rates(d);
     window.latestFleetData = d;
 
@@ -1149,12 +1181,14 @@ async function update() {
     fleetEl.innerHTML = Object.entries(d.bots).map(([id, b]) => card(id, b)).join('');
     document.getElementById('charts').innerHTML = charts(d.history || {});
     benchEl.innerHTML = bench(d.bots);
-    updatedEl.textContent = new Date(d.generatedAt).toLocaleTimeString('pt-BR');
+    const when = new Date(d.generatedAt).toLocaleTimeString('pt-BR');
+    updatedEl.textContent = source === 'live' ? `${when} · AO VIVO` : `${when} · snapshot ${ageLabel(d.generatedAt)}`;
+    updatedEl.style.color = source === 'live' ? '' : 'var(--orange)';
   } catch (e) {
     const updatedEl = document.getElementById('updated');
     const fleetEl = document.getElementById('fleet');
     if (updatedEl) updatedEl.textContent = 'erro: ' + e.message;
-    if (fleetEl) fleetEl.innerHTML = '<p class="error">Falha ao sincronizar frota: ' + esc(e.message) + '</p>';
+    if (fleetEl) fleetEl.innerHTML = '<p class="error">Falha ao sincronizar frota: ' + esc(e.message) + ' · tente ?api=https://sua-url-ngrok</p>';
   }
 }
 

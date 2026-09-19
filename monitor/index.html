@@ -610,9 +610,14 @@ body { overflow-x: hidden; }
 </main>
 
 <script>
-const API = 'https://disfigure-tribune-silo.ngrok-free.dev';
+const PARAM_API = new URLSearchParams(location.search).get('api');
+const LIVE_API = (PARAM_API || localStorage.getItem('baiak-live-api') || 'https://disfigure-tribune-silo.ngrok-free.dev').replace(/\/$/, '');
+const API = LIVE_API;
 const PUBLIC_MODE = false;
 const OVERVIEW_PATH = '/api/overview';
+// No painel servido pela VPS, mesma-origem primeiro; ngrok como fallback remoto.
+const API_ENDPOINTS = [OVERVIEW_PATH, LIVE_API + OVERVIEW_PATH];
+try { localStorage.setItem('baiak-live-api', LIVE_API); } catch (_) {}
 const levelHistory = {};
 const pendingHuntSelections = {};
 let historyWindowHours = 1;
@@ -718,6 +723,43 @@ function formatXp(v) {
   return `+${num(n)} XP`;
 }
 
+function formatUptimeSec(totalSeconds) {
+  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  if (s <= 0) return '0s';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function formatElapsed(totalSeconds, elapsedMin) {
+  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  if (s > 0 && s < 60) return `${s}s`;
+  const m = Math.floor(Number(elapsedMin) || 0);
+  if (m > 0) return `${m} min`;
+  if (s >= 60) return `${Math.floor(s / 60)} min`;
+  return '0s';
+}
+
+function tickUptimes() {
+  const now = Date.now();
+  document.querySelectorAll('[data-tick-base]').forEach(el => {
+    const base = Number(el.getAttribute('data-tick-base')) || 0;
+    const at = Number(el.getAttribute('data-tick-at')) || now;
+    const cur = base + Math.max(0, Math.floor((now - at) / 1000));
+    const kind = el.getAttribute('data-tick-kind');
+    if (kind === 'elapsed') {
+      const m = Math.floor(cur / 60);
+      el.textContent = formatElapsed(cur, m);
+    } else {
+      el.textContent = formatUptimeSec(cur);
+    }
+  });
+}
+setInterval(tickUptimes, 1000);
+
 function healthState(bot) {
   const state = bot?.health?.state;
   if (state) return state;
@@ -799,8 +841,16 @@ function card(id, b) {
   const taken = an.taken || {};
 
   const isForced = Boolean(s.force_hunt && s.force_hunt_id);
-  const uptimeStr = s.online_uptime_str || (s.online ? `${num(s.elapsed_minutes)}m` : 'Reconectando...');
+  const uptimeSec = Number(s.online_uptime_seconds ?? 0) || 0;
+  const elapsedSecForUptime = Number(s.elapsed_seconds ?? 0) || 0;
+  const uptimeBase = uptimeSec > 0 ? uptimeSec : (s.online ? elapsedSecForUptime : 0);
+  const uptimeStr = s.online
+    ? formatUptimeSec(s.online_uptime_seconds ?? uptimeBase)
+    : 'Reconectando...';
   const sessionXpStr = s.session_xp_str || formatXp(s.session_xp || an.session_xp || an.raw_xp || 0);
+  const elapsedSec = elapsedSecForUptime || uptimeSec || (Number(s.elapsed_minutes) || 0) * 60;
+  const elapsedStr = formatElapsed(elapsedSec, s.elapsed_minutes);
+  const tickAt = Date.now();
 
   return `
     <article class="bot ${id}">
@@ -822,7 +872,7 @@ function card(id, b) {
               <span>ONLINE CONTÍNUO (SEM QUEDA)</span>
               <span style="font-size:12px;">⏱️</span>
             </div>
-            <strong class="hero-val">${esc(uptimeStr)}</strong>
+            <strong class="hero-val" ${s.online ? `data-tick-base="${uptimeBase}" data-tick-at="${tickAt}" data-tick-kind="uptime"` : ''}>${esc(uptimeStr)}</strong>
             <small>${s.online ? 'Conexão WebSocket estável' : 'Aguardando sincronização'}</small>
           </div>
 
@@ -866,7 +916,7 @@ function card(id, b) {
           </div>
           <div class="metric">
             <span>Tempo Total</span>
-            <b>${num(s.elapsed_minutes)} min</b>
+            <b data-tick-base="${elapsedSec}" data-tick-at="${tickAt}" data-tick-kind="elapsed">${esc(elapsedStr)}</b>
           </div>
           <div class="metric">
             <span>Loop Mode</span>
@@ -1129,14 +1179,30 @@ async function changeHunt(botId) {
   }
 }
 
+async function fetchFirstOk() {
+  let lastErr = null;
+  for (const url of API_ENDPOINTS) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 12000);
+      const r = await fetch(url, {
+        cache: 'no-store',
+        signal: ctrl.signal,
+        headers: url.startsWith('http') ? { 'ngrok-skip-browser-warning': 'true' } : {}
+      });
+      clearTimeout(t);
+      if (!r.ok) throw Error('HTTP ' + r.status);
+      const d = await r.json();
+      if (!d || !d.bots) throw Error('payload inválido');
+      return d;
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || Error('sem endpoints');
+}
+
 async function update() {
   try {
-    const r = await fetch(API + OVERVIEW_PATH, {
-      cache: 'no-store',
-      headers: { 'ngrok-skip-browser-warning': 'true' }
-    });
-    if (!r.ok) throw Error('HTTP ' + r.status);
-    const d = await r.json();
+    const d = await fetchFirstOk();
     rates(d);
     window.latestFleetData = d;
 
