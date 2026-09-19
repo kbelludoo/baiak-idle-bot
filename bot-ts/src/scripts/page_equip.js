@@ -225,6 +225,7 @@ async () => {
     if (d.slot == null) continue; // sem slot = não equipável (Item genérico, material, stack)
     if (d.slot === "ammo" || d.slot === "backpack") continue;
     if (d.rarity == null) continue; // sem raridade não dá p/ comparar
+    if (d.rarity < 3) continue; // guarda SOMENTE épico(3)/lendário(4)/mítico(5); resto vai p/ lootfilter+venda
     const key = (d.cmp?.hash) || (d.name + "|R" + d.rarity + "|T" + d.ftier + "|U" + d.up + "|" + d.slot);
     if (seen.has(key)) continue;
     seen.add(key);

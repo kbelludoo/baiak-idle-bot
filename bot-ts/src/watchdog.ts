@@ -13,16 +13,19 @@ export class Watchdog {
   private bootStartedAt = Date.now();
   private lastRecoveryAt = 0;
   private recoveryAttempts = 0;
+  private consecutiveInactive = 0;
 
   public onWsOpen() {
     this.wsConnected = true;
     this.everConnected = true;
     this.recoveryAttempts = 0;
+    this.consecutiveInactive = 0;
     this.lastWsFrameTime = Date.now();
   }
 
   public onWsFrame() {
     this.lastWsFrameTime = Date.now();
+    this.consecutiveInactive = 0;
   }
 
   public onWsClose() {
@@ -46,6 +49,14 @@ export class Watchdog {
     const now = Date.now();
 
     try {
+      // A entrada inicial monta centenas de sprites antes de criar a sala
+      // Colyseus. Durante esse período até um page.evaluate simples pode
+      // ficar enfileirado no renderer; não toque no DOM nem recarregue a
+      // página enquanto o boot ainda está dentro da janela de 5 minutos.
+      if (!this.everConnected && now - this.bootStartedAt < 300000) {
+        return result;
+      }
+
       // Não injeta input sintético. O modo idle do bot Python deliberadamente
       // não movimenta mouse/teclado, e o watchdog não deve criar esse sinal.
       // Executa apenas checagem de tela de desconexão e modais no DOM.
@@ -115,16 +126,18 @@ export class Watchdog {
         result.reason = 'URL_FORA_DE_JOGAR';
       }
 
-      // O primeiro handshake pode levar 45–60s nas VPS. Não recarregue a
-      // página nesse intervalo: isso interrompe o socket antes de nascer.
-      if (!this.everConnected && now - this.bootStartedAt < 75000) {
-        return result;
-      }
-
-      // 3. Checa inatividade do WebSocket (> 20s sem pacotes)
-      if (!this.wsConnected || (now - this.lastWsFrameTime > 20000)) {
-        const inactiveSec = Math.round((now - this.lastWsFrameTime) / 1000);
-        if (now - this.lastRecoveryAt < 15000) return result;
+      // 3. Checa inatividade do WebSocket (> 75s sem pacotes).
+      // Farm estável gera poucos ROOM_DATA em farm lento; 45s recarregava a
+      // página no meio da hunt e matava o reconnectionToken (volta p/ Cidade,
+      // que o profiler contava como morte). 75s + 2 checagens consecutivas +
+      // cooldown 30s evita reload em falso sem perder queda real. Reload é o
+      // ÚLTIMO recurso: primeiro tenta o botão nativo do jogo.
+      const inactiveMs = now - this.lastWsFrameTime;
+      if (!this.wsConnected || inactiveMs > 75000) {
+        this.consecutiveInactive += 1;
+        if (this.consecutiveInactive < 2) return result;
+        const inactiveSec = Math.round(inactiveMs / 1000);
+        if (now - this.lastRecoveryAt < 30000) return result;
         this.lastRecoveryAt = now;
         this.recoveryAttempts += 1;
         if (this.recoveryAttempts > 3) {

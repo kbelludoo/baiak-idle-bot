@@ -5,9 +5,29 @@
 
 export interface DecodedFrame {
   opcode: number;
+  /** Nome do frame Colyseus: ROOM_DATA / ROOM_STATE / ROOM_STATE_PATCH / ... */
+  frame?: string;
   type?: string;
   payload?: any;
 }
+
+/** Opcodes Colyseus usados pelo jogo (paridade com baiak-mitm.user.js). */
+export const COLYSEUS_OPCODE: Record<number, string> = {
+  9: 'HANDSHAKE',
+  10: 'JOIN_ROOM',
+  11: 'ERROR',
+  12: 'LEAVE_ROOM',
+  13: 'ROOM_DATA',
+  14: 'ROOM_STATE',
+  15: 'ROOM_STATE_PATCH',
+  16: 'ROOM_DATA_SCHEMA',
+  17: 'ROOM_DATA_BYTES',
+  18: 'PING',
+  19: 'PONG',
+};
+
+/** Nível máximo real do jogo (tabela vai a 800). */
+export const MAX_GAME_LEVEL = 800;
 
 class MsgpackReader {
   private view: DataView;
@@ -237,24 +257,105 @@ class MsgpackReader {
 
 /**
  * Decodifica frame bruto recebido pelo WebSocket.
+ * - 0x0D (13) ROOM_DATA -> [type, payload] msgpack (eventos).
+ * - 0x0E (14) ROOM_STATE / 0x0F (15) PATCH -> estado autoritativo binário
+ *   (@colyseus/schema). Sem o .schema da build não dá para decodificar os
+ *   campos, mas o frame NUNCA pode ser descartado: ele prova que a sala está
+ *   viva e carrega HP/players/huntId/wave/dead/lootGold. Retornamos
+ *   {opcode, frame} para o watchdog/telemetria em vez de null.
  */
 export function decodeFrame(raw: Uint8Array | Buffer): DecodedFrame | null {
   if (!raw || raw.length === 0) return null;
   const opcode = raw[0];
+  const frame = COLYSEUS_OPCODE[opcode];
 
   // Opcode 0x0D (13) = ROOM_DATA no Colyseus
   if (opcode !== 0x0d) {
-    return { opcode };
+    return { opcode, frame };
   }
 
   try {
     const reader = new MsgpackReader(raw.subarray(1));
     const type = reader.read();
     const payload = reader.hasMore ? reader.read() : undefined;
-    return { opcode, type, payload };
+    return { opcode, frame: 'ROOM_DATA', type, payload };
   } catch (err) {
-    return { opcode, type: 'unknown' };
+    return { opcode, frame: 'ROOM_DATA', type: 'unknown' };
   }
+}
+
+/**
+ * Codifica um frame ROOM_DATA (0x0D) [type, payload] para envio direto à sala.
+ * Mesmo codec do cliente real (msgpack) — paridade com baiak-mitm.user.js
+ * `buildDataFrame`. Usado pelo `roomSend()` via `window.__baiak_send` no page:
+ * um `room.send("stage",{huntId})` vira exatamente 1 pacote, sem DOM.
+ */
+export function encodeRoomData(type: string, payload?: any): Uint8Array {
+  const out: number[] = [0x0d];
+  encodeMsgpackValue(type, out);
+  encodeMsgpackValue(payload === undefined ? null : payload, out);
+  return Uint8Array.from(out);
+}
+
+function encodeMsgpackValue(v: any, out: number[]): void {
+  if (v === null || v === undefined) { out.push(0xc0); return; }
+  if (v === true) { out.push(0xc3); return; }
+  if (v === false) { out.push(0xc2); return; }
+  if (typeof v === 'number') {
+    if (Number.isInteger(v)) {
+      if (v >= 0) {
+        if (v < 128) { out.push(v); return; }
+        if (v < 256) { out.push(0xcc, v); return; }
+        if (v < 65536) { out.push(0xcd, (v >>> 8) & 255, v & 255); return; }
+        if (v < 4294967296) { out.push(0xce, (v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255); return; }
+        const hi = Math.floor(v / 4294967296), lo = v % 4294967296;
+        out.push(0xcf, (hi >>> 24) & 255, (hi >>> 16) & 255, (hi >>> 8) & 255, hi & 255,
+          (lo >>> 24) & 255, (lo >>> 16) & 255, (lo >>> 8) & 255, lo & 255);
+        return;
+      }
+      if (v >= -32) { out.push(256 + v); return; }
+      if (v >= -128) { out.push(0xd0, v & 255); return; }
+      if (v >= -32768) { out.push(0xd1, (v >> 8) & 255, v & 255); return; }
+      if (v >= -2147483648) { out.push(0xd2, (v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255); return; }
+      const hi = Math.floor(v / 4294967296), lo = ((v % 4294967296) + 4294967296) % 4294967296;
+      out.push(0xd3, (hi >> 24) & 255, (hi >> 16) & 255, (hi >> 8) & 255, hi & 255,
+        (lo >>> 24) & 255, (lo >>> 16) & 255, (lo >>> 8) & 255, lo & 255);
+      return;
+    }
+    out.push(0xcb);
+    const buf = new ArrayBuffer(8);
+    new DataView(buf).setFloat64(0, v, false);
+    for (const b of new Uint8Array(buf)) out.push(b);
+    return;
+  }
+  if (typeof v === 'string') {
+    const bytes = new TextEncoder().encode(v);
+    const l = bytes.length;
+    if (l < 32) out.push(0xa0 | l);
+    else if (l < 256) out.push(0xd9, l);
+    else if (l < 65536) out.push(0xda, (l >> 8) & 255, l & 255);
+    else out.push(0xdb, (l >>> 24) & 255, (l >>> 16) & 255, (l >>> 8) & 255, l & 255);
+    for (const b of bytes) out.push(b);
+    return;
+  }
+  if (Array.isArray(v)) {
+    const n = v.length;
+    if (n < 16) out.push(0x90 | n);
+    else if (n < 65536) out.push(0xdc, (n >> 8) & 255, n & 255);
+    else out.push(0xdd, (n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255);
+    for (const item of v) encodeMsgpackValue(item, out);
+    return;
+  }
+  if (typeof v === 'object') {
+    const entries = Object.entries(v);
+    const n = entries.length;
+    if (n < 16) out.push(0x80 | n);
+    else if (n < 65536) out.push(0xde, (n >> 8) & 255, n & 255);
+    else out.push(0xdf, (n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255);
+    for (const [k, val] of entries) { encodeMsgpackValue(String(k), out); encodeMsgpackValue(val, out); }
+    return;
+  }
+  out.push(0xc0);
 }
 
 /**

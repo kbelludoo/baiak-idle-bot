@@ -59,7 +59,7 @@
     const m = t.match(lvlRe);
     if (m) {
       const n = parseInt(m[1], 10);
-      if (n > maxLvl && n <= 500) maxLvl = n;
+      if (n > maxLvl && n <= 800) maxLvl = n;
     }
   }
   if (maxLvl === 0) {
@@ -69,64 +69,90 @@
         const m = (el.textContent || "").match(lvlRe);
         if (m) {
           const n = parseInt(m[1], 10);
-          if (n > maxLvl && n <= 500) maxLvl = n;
+          if (n > maxLvl && n <= 800) maxLvl = n;
         }
       }
     }
   }
   res.level = maxLvl > 0 ? maxLvl : null;
 
-  const goldEl = document.getElementById("hud-gold")
-    || document.querySelector(".hud-money, .mk-goldamt, .ac-wallet-val, .wallet-gold, #gold-count, [data-gold]");
-  if (goldEl) {
-    const g = parseGoldAmount(goldEl.getAttribute("data-gold") || goldEl.textContent);
-    if (g != null) res.gold = g;
+  const goldCandidates = [
+    document.getElementById("hud-gold"),
+    document.querySelector(".hud-money, .mk-goldamt, .ac-wallet-val, .wallet-gold, #gold-count, [data-gold]"),
+    document.getElementById("gold-count"),
+    document.querySelector("[title*='Gold' i], [aria-label*='Gold' i], [title*='gold' i], [data-tip*='gold' i]"),
+  ].filter(Boolean);
+  for (const goldEl of goldCandidates) {
+    const rawAttr = goldEl.getAttribute("data-gold") || goldEl.getAttribute("data-value") || goldEl.getAttribute("title") || "";
+    const rawTxt = goldEl.textContent || "";
+    const g = parseGoldAmount(rawAttr) ?? parseGoldAmount(rawTxt);
+    if (g != null && g > 0) { res.gold = g; break; }
+    if (g != null && res.gold == null) res.gold = g;
   }
   if (res.gold == null) {
-    const gm = document.getElementById("gold-count") || document.querySelector("[title*='Gold' i], [aria-label*='Gold' i]");
-    if (gm) res.gold = parseGoldAmount(gm.textContent);
+    const wallet = document.querySelector(".wallet, .hud-wallet, #wallet, .coins, .gold-wrap");
+    if (wallet) {
+      const g = parseGoldAmount(wallet.textContent);
+      if (g != null) res.gold = g;
+    }
   }
 
   // --- EXTRAÇÃO ROBUSTA DE STAMINA ---
+  const normStam = (s) => {
+    const t = String(s || "").trim();
+    if (!t) return null;
+    const pct = t.match(/(\d{1,3})\s*%/);
+    if (pct) return pct[1] + "%";
+    const clock = t.match(/(\d{1,2})\s*:\s*(\d{2})/);
+    if (clock) {
+      const h = parseInt(clock[1], 10), mi = parseInt(clock[2], 10);
+      if (h === 42 && mi === 0) return null;
+      if (h <= 42 && mi <= 59) return h + ":" + String(mi).padStart(2, "0");
+    }
+    const mH = t.match(/(\d{1,2})\s*h/i);
+    const mM = t.match(/(\d{1,3})\s*m/i);
+    if (mH || mM) {
+      const h = mH ? parseInt(mH[1], 10) : 0;
+      const mi = mM ? parseInt(mM[1], 10) : 0;
+      if (h === 42 && mi === 0) return null;
+      if (h <= 42 && mi <= 59) return h + ":" + String(mi).padStart(2, "0");
+    }
+    return null;
+  };
   let staminaFound = null;
-  const stamDirect = document.querySelector("#stamina-time, .stamina-time, .stamina-val, #stamina-val, [data-stamina]");
-  if (stamDirect) {
-    const st = (stamDirect.textContent || "").trim();
-    if (/\d{1,2}:\d{2}/.test(st)) staminaFound = st;
-  }
+  let staminaPctFound = null;
+  const stamDirect = document.querySelector("#stamina-time, .stamina-time, .stamina-val, #stamina-val, [data-stamina], #stamina-panel, .stamina-panel");
+  if (stamDirect) staminaFound = normStam(stamDirect.textContent) || normStam(stamDirect.getAttribute("title") || "");
   if (!staminaFound) {
     const batteryEls = document.querySelectorAll(
-      "button[title*='stamina' i], [data-tip*='stamina' i], [data-tooltip*='stamina' i], [aria-label*='stamina' i], .hud-stamina, .top-stamina, #btn-stamina, #stamina-btn"
+      "button[title*='stamina' i], [data-tip*='stamina' i], [data-tooltip*='stamina' i], [aria-label*='stamina' i], .hud-stamina, .top-stamina, #btn-stamina, #stamina-btn, #stamina-panel, [title*='Stamina' i]"
     );
     for (const b of batteryEls) {
       const tip = b.getAttribute("title") || b.getAttribute("data-tip") || b.getAttribute("data-tooltip") || b.getAttribute("aria-label") || b.textContent || "";
-      const m = tip.match(/(\d{1,2}:\d{2})/);
-      if (m) {
-        staminaFound = m[1];
-        break;
-      }
+      staminaFound = normStam(tip);
+      const pct = String(tip).match(/(\d{1,3})\s*%/);
+      if (pct) staminaPctFound = pct[1] + "%";
+      if (staminaFound) break;
     }
   }
   if (!staminaFound) {
     const headerClocks = document.querySelectorAll("#header *, header *, .hud-top *, .top-bar *, nav *");
     for (const el of headerClocks) {
       if (el.children.length === 0 && !el.closest("#wave-title, .wave-box, .stage-info")) {
-        const m = (el.textContent || "").trim().match(/^(\d{1,2}:\d{2})$/);
-        if (m) {
-          staminaFound = m[1];
-          break;
-        }
+        staminaFound = normStam(el.textContent);
+        if (staminaFound) break;
       }
     }
   }
-  const pctEl = document.getElementById("stamina-pct") || document.querySelector(".stamina-pct");
+  const pctEl = document.getElementById("stamina-pct") || document.querySelector(".stamina-pct, .stamina-pct-val, [data-stamina-pct]");
   if (pctEl) {
     const pt = (pctEl.textContent || "").trim();
+    const m = pt.match(/(\d{1,3})\s*%/);
+    if (m) staminaPctFound = m[1] + "%";
     if (pt) res.stamina_pct = pt;
   }
-  // O HUD renderiza 42:00 como placeholder antes da sincronização.
-  // Sem uma leitura real, não podemos tratar esse placeholder como stamina cheia.
-  res.stamina = staminaFound === "42:00" ? null : (staminaFound || null);
+  // Percentual tem prioridade sobre relógio (mais preciso). Placeholder 42:00 = null.
+  res.stamina = staminaPctFound || staminaFound || null;
 
   // --- EXTRAÇÃO ROBUSTA DE PARTY MEMBERS ---
   res.partyMembers = [];
@@ -211,7 +237,7 @@
       const m = raw.match(/(?:lvl|level|n[ií]vel)\s*[:·.]?\s*(\d{2,4})/i);
       if (m) {
         const parsed = parseInt(m[1], 10);
-        if (parsed >= 10 && parsed <= 5000) mLvl = parsed;
+        if (parsed >= 10 && parsed <= 800) mLvl = parsed;
       }
       let voc = idx === 0 ? "Knight (EK)" : (idx === 1 ? "Druid (ED)" : "Sorcerer (MS)");
       const firstWord = raw.split(/\s+/)[0] || "";

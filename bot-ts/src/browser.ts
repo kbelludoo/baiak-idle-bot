@@ -15,9 +15,9 @@ export interface BrowserContext {
 export async function launchBrowser(
   config: BotConfig,
   onWsOpen: () => void,
-  onWsFrame: () => void,
+  onWsFrame: (meta?: { requestId: string; url: string; opcode: number }) => void,
   onWsClose: () => void,
-  onWsPayload?: (payload: Uint8Array) => void
+  onWsPayload?: (payload: Uint8Array, meta?: { requestId: string; url: string; opcode: number }) => void
 ): Promise<BrowserContext> {
   let latestFrame: Buffer | null = null;
 
@@ -50,7 +50,9 @@ export async function launchBrowser(
     '--disable-background-networking',
     '--disable-breakpad',
     '--disable-domain-reliability',
-    '--disable-features=AudioServiceOutOfProcess,Translate,BackForwardCache,MediaRouter,OptimizationHints,CalculateNativeWinOcclusion,site-per-process',
+    // PixiJS 8 tenta WebGPU antes do WebGL no desktop. Em headless VPS o
+    // WebGPU pode ficar pendurado no adapter; force o fallback WebGL/SwiftShader.
+    '--disable-features=AudioServiceOutOfProcess,Translate,BackForwardCache,MediaRouter,OptimizationHints,CalculateNativeWinOcclusion,WebGPU,site-per-process',
     '--disable-hang-monitor',
     '--disable-ipc-flooding-protection',
     '--disable-popup-blocking',
@@ -108,6 +110,9 @@ export async function launchBrowser(
     executablePath: config.chromePath,
     headless: config.headless,
     userDataDir: config.userDataDir,
+    // VPS com CPU compartilhada pode levar mais de 30s para expor o
+    // endpoint CDP na primeira inicialização do Chromium.
+    timeout: 120000,
     protocolTimeout: 120000,
     // Mesmo UA do bot Python para evitar uma segunda combinação de cliente na VPS.
     env: process.env,
@@ -125,6 +130,19 @@ export async function launchBrowser(
   await page.setUserAgent(
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
   );
+
+  // A sessão atual do jogo autentica tRPC/Colyseus pelo Bearer token. Os
+  // cookies continuam sendo mantidos para compatibilidade, mas não bastam
+  // para a primeira chamada auth.me em uma página nova; sem este cabeçalho o
+  // jogo fica na tela pública e nunca cria o WebSocket da sala.
+  if (config.token) {
+    try {
+      await page.setExtraHTTPHeaders({ Authorization: `Bearer ${config.token}` });
+      console.log('[*] [AUTH] Cabeçalho Bearer configurado para a sessão do jogo.');
+    } catch (err: any) {
+      console.warn(`[AUTH AVISO] Cabeçalho Bearer não configurado: ${err?.message || err}`);
+    }
+  }
 
   // Injeta autenticação se fornecido token
   if (config.token) {
@@ -152,6 +170,11 @@ export async function launchBrowser(
     } catch (e) {}
     try {
       Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
+    } catch (e) {}
+    try {
+      // O motor do jogo só precisa do WebGL; esconder WebGPU evita que o
+      // renderer aguarde indefinidamente um adapter inexistente na VPS.
+      Object.defineProperty(navigator, 'gpu', { get: () => undefined, configurable: true });
     } catch (e) {}
 
     // Modo leve experimental: o servidor continua recebendo WebSocket e o DOM
@@ -220,38 +243,78 @@ export async function launchBrowser(
   const cdp = await page.createCDPSession();
 
   // Monitoramento de WebSocket e Interceptação de Frames Colyseus.
-  // A página também abre sockets de analytics/telemetria; eles não podem
-  // marcar o bot como online nem derrubar o estado quando fecham.
-  const gameSocketIds = new Set<string>();
+  // A página abre hunt + partyhunt + chat + queue em paralelo. Eles NÃO podem
+  // compartilhar um único booleano online: fechar o chat não é cair da hunt.
+  // Por isso rastreamos cada socket por requestId e só consideramos offline
+  // quando NENHUM socket de jogo resta aberto. O payload também carrega
+  // requestId/url/opcode para o handler separar queue/hunt/chat.
+  const gameSockets = new Map<string, { url: string; room: string }>();
+  const guessRoom = (url: string): string => {
+    const u = (url || '').toLowerCase();
+    if (u.includes('partyhunt')) return 'partyhunt';
+    if (u.includes('queue')) return 'queue';
+    if (u.includes('chat')) return 'chat';
+    if (u.includes('hunt')) return 'hunt';
+    if (u.includes('/rt')) return 'rt';
+    return 'unknown';
+  };
   const isGameSocket = (url: string) => /baiakidle\.com/i.test(url || '');
-  await cdp.send('Network.enable').catch(() => {});
+  const anyGameSocketOpen = () => gameSockets.size > 0;
+  await cdp.send('Network.enable').then(() => {
+    console.log('[*] [WS-TS] Monitoramento CDP de WebSocket habilitado.');
+  }).catch((err: any) => {
+    console.warn(`[WS-TS] Falha ao habilitar Network CDP: ${err?.message || err}`);
+  });
+  cdp.on('Network.webSocketWillSendHandshakeRequest', (params: any) => {
+    const url = String(params?.request?.url || '');
+    if (url) console.log(`[*] [WS-TRACE] Handshake solicitado: ${url.slice(0, 180)}`);
+  });
   cdp.on('Network.webSocketCreated', (params: any) => {
     const requestId = String(params?.requestId || '');
     const url = String(params?.url || '');
+    if (url) console.log(`[*] [WS-TRACE] Socket criado: ${url.slice(0, 180)}`);
     if (requestId && isGameSocket(url)) {
-      gameSocketIds.add(requestId);
-      console.log(`[*] [WS-TS] Socket do jogo criado: ${url.slice(0, 120)}`);
-      onWsOpen();
+      const wasEmpty = gameSockets.size === 0;
+      gameSockets.set(requestId, { url, room: guessRoom(url) });
+      console.log(`[*] [WS-TS] Socket do jogo criado: [${guessRoom(url)}] ${url.slice(0, 120)} (total=${gameSockets.size})`);
+      if (wasEmpty) onWsOpen();
     }
   });
   cdp.on('Network.webSocketFrameReceived', (params: any) => {
     const requestId = String(params?.requestId || '');
-    if (!gameSocketIds.has(requestId)) return;
-    onWsFrame();
-    if (onWsPayload && params?.response?.payloadData) {
+    const sock = gameSockets.get(requestId);
+    if (!sock) return;
+    const opcode = Number(params?.response?.opcode ?? 2);
+    const raw = params?.response?.payloadData;
+    onWsFrame({ requestId, url: sock.url, opcode });
+    if (onWsPayload && typeof raw === 'string' && raw.length > 0) {
       try {
-        const opcode = params.response.opcode;
-        const raw = params.response.payloadData;
+        // CDP entrega binário como base64 (opcode 2) e texto como utf-8
+        // (opcode 1: PING/PONG/handshake). Frames fragmentados do Colyseus
+        // chegam como Blob no page mas como frames separados no CDP — cada
+        // frame aqui já é um pacote completo, nunca fatiar no meio.
         const buf = opcode === 2 ? Buffer.from(raw, 'base64') : Buffer.from(raw, 'utf-8');
-        onWsPayload(buf);
+        if (buf.length > 0) onWsPayload(buf, { requestId, url: sock.url, opcode });
       } catch (_) {}
     }
   });
+  cdp.on('Network.webSocketFrameSent', (params: any) => {
+    // Mantém o watchdog vivo em farm silencioso: o cliente envia PING/ready
+    // mesmo quando o servidor não tem loot/combatlog para empurrar.
+    const requestId = String(params?.requestId || '');
+    if (!gameSockets.has(requestId)) return;
+    const sock = gameSockets.get(requestId)!;
+    onWsFrame({ requestId, url: sock.url, opcode: Number(params?.response?.opcode ?? 1) });
+  });
   cdp.on('Network.webSocketClosed', (params: any) => {
     const requestId = String(params?.requestId || '');
-    if (!gameSocketIds.has(requestId)) return;
-    gameSocketIds.delete(requestId);
-    onWsClose();
+    const sock = gameSockets.get(requestId);
+    if (!sock) return;
+    gameSockets.delete(requestId);
+    console.log(`[*] [WS-TS] Socket fechado: [${sock.room}] restam=${gameSockets.size}`);
+    // Só derruba online quando o ÚLTIMO socket de jogo fecha. Fechar só o
+    // chat/queue com a hunt aberta não é queda.
+    if (!anyGameSocketOpen()) onWsClose();
   });
 
   // Captura de Screencast contínua em sessão CDP isolada (para não afogar chamadas de evaluate)
@@ -287,6 +350,40 @@ export async function launchBrowser(
     const failure = req.failure?.()?.errorText || 'unknown';
     console.log(`[REQUEST FAILED] ${req.url()} ${failure}`);
   });
+  page.on('request', (req: any) => {
+    try {
+      const type = req.resourceType?.();
+      const url = req.url();
+      if (type === 'websocket') {
+        console.log(`[*] [WS-REQUEST] ${url.slice(0, 180)}`);
+      } else if (['document', 'xhr', 'fetch'].includes(type) && /baiakidle\.com/i.test(url)) {
+        console.log(`[*] [NET-REQUEST] ${type} ${url.slice(0, 180)}`);
+      }
+      // O Bearer é necessário apenas no domínio do jogo. Removê-lo de
+      // Cloudflare/terceiros evita preflight CORS e não vaza a sessão.
+      const headers = { ...(req.headers?.() || {}) };
+      if (!/^https:\/\/([^/]*\.)?baiakidle\.com\//i.test(url)) {
+        delete headers.authorization;
+      }
+      req.continue({ headers }).catch(() => {});
+    } catch (_) {
+      req.continue().catch(() => {});
+    }
+  });
+  page.on('framenavigated', (frame: any) => {
+    try {
+      if (frame === page.mainFrame()) console.log(`[*] [NAV] ${frame.url().slice(0, 180)}`);
+    } catch (_) {}
+  });
+  page.on('response', (res: any) => {
+    try {
+      const url = res.url();
+      if (/baiakidle\.com\/api\//i.test(url)) {
+        console.log(`[*] [NET-RESPONSE] ${res.status()} ${url.slice(0, 180)}`);
+      }
+    } catch (_) {}
+  });
+  try { await page.setRequestInterception(true); } catch (_) {}
 
   // Tratamento de diálogos do navegador (auto-aceitar)
   page.on('dialog', async (d) => {

@@ -2,28 +2,45 @@ import type { Page } from 'puppeteer-core';
 import type { BotConfig } from './types';
 import { safeEval } from './scripts';
 
-const STAM_CLOCK = /^\s*(\d+)\s*:\s*(\d{1,2})\s*$/;
+const STAM_CLOCK = /(\d{1,2})\s*:\s*(\d{2})/;
 const STAM_PCT = /(\d+)\s*%/;
 
-export function parseStaminaMinutes(text: string | null | undefined): number | null {
-  if (!text) return null;
-  const raw = String(text).trim();
-  const clock = STAM_CLOCK.exec(raw);
-  if (clock) {
-    return parseInt(clock[1], 10) * 60 + parseInt(clock[2], 10);
-  }
-  const pct = STAM_PCT.exec(raw);
-  if (pct) {
-    return parseInt(pct[1], 10);
-  }
-  if (['0', 'empty', 'vazia'].includes(raw)) {
-    return 0;
-  }
-  if (['—', '–', '-', 'desconhecido', 'undefined'].includes(raw)) {
+/** Raridade mínima mantida na mochila: 3 = Epic, 4 = Legendary, 5 = Mythical. */
+export const KEEP_TIER_MIN = 3;
+
+export function parseStaminaMinutes(text: string | number | null | undefined): number | null {
+  if (text === undefined || text === null) return null;
+  if (typeof text === 'number') {
+    if (!Number.isFinite(text)) return null;
+    if (text <= 1.05 && text > 0) return Math.floor(text * 2520);
+    if (text > 1 && text <= 2520) return text === 2520 ? null : Math.floor(text);
     return null;
   }
-  const digits = raw.replace(/[^\d]/g, '');
-  if (digits === '0') return 0;
+  const raw = String(text).trim();
+  if (!raw) return null;
+  if (['—', '–', '-', 'desconhecido', 'undefined'].includes(raw.toLowerCase())) return null;
+  const pct = STAM_PCT.exec(raw);
+  if (pct) return Math.floor((parseInt(pct[1], 10) / 100) * 2520);
+  const clock = STAM_CLOCK.exec(raw);
+  if (clock) {
+    const h = parseInt(clock[1], 10), mi = parseInt(clock[2], 10);
+    if (h <= 42 && mi <= 59 && !(h === 42 && mi === 0)) return h * 60 + mi;
+  }
+  const mH = raw.match(/(\d{1,2})\s*h/i);
+  const mM = raw.match(/(\d{1,3})\s*m/i);
+  if (mH || mM) {
+    const h = mH ? parseInt(mH[1], 10) : 0;
+    const mi = mM ? parseInt(mM[1], 10) : 0;
+    if (h === 42 && mi === 0) return null;
+    if (h <= 42 && mi <= 59) return h * 60 + mi;
+  }
+  if (['0', '0:00', '00:00', 'empty', 'vazia'].includes(raw.toLowerCase())) return 0;
+  const mMin = raw.match(/^(\d{2,4})\s*(?:min)?$/i);
+  if (mMin) {
+    const mins = parseInt(mMin[1], 10);
+    if (mins === 2520) return null;
+    if (mins >= 0 && mins <= 2520) return mins;
+  }
   return null;
 }
 
@@ -93,8 +110,29 @@ export function confirmIsSafeAction(body?: string | null): boolean {
 export function shouldTransferLoot(tier?: number | null, name?: string | null): boolean {
   const label = name || '';
   if (/gold coin|platinum|crystal coin/i.test(label)) return false;
-  if (tier === undefined || tier === null) return /rare|epic|legendary|mythical|raro/i.test(label);
-  return Number(tier) >= 2;
+  if (tier === undefined || tier === null) return /epic|legendary|mythical|mythic|épico|epico|lend[aá]rio/i.test(label);
+  return Number(tier) >= KEEP_TIER_MIN;
+}
+
+export function shouldKeepLoot(tier?: number | null, name?: string | null): boolean {
+  return shouldTransferLoot(tier, name);
+}
+
+export function isTrashLoot(tier?: number | null, name?: string | null): boolean {
+  const label = String(name || '');
+  if (/gold coin|platinum|crystal coin/i.test(label)) return false;
+  if (tier !== undefined && tier !== null && Number.isFinite(Number(tier))) {
+    return Number(tier) < KEEP_TIER_MIN;
+  }
+  // Sem tier legível: só é lixo se claramente comum/incomum/raro sem sinal de épico
+  if (/epic|legendary|mythical|mythic|épico|epico|lend[aá]rio|m[ií]tico/i.test(label)) return false;
+  return true;
+}
+
+/** Pressão da mochila: true quando deve varrer lixo antes de encher (default 50%). */
+export function shouldSweepBag(cur: number, cap: number, thresholdPct = 50): boolean {
+  if (cap <= 0) return false;
+  return (cur / cap) * 100 >= thresholdPct;
 }
 
 export function shouldSkipEquipItem(name?: string | null, equipEnabled = true): boolean {
@@ -133,6 +171,7 @@ function tagLog(key: string, res: any): string[] {
     supply: 'SUPPLY',
     loopcfg: 'LOOPCFG',
     manageloot: 'LOOT',
+    lootfilter: 'LOOTFILTER',
     modals: 'MODAL',
   };
   const label = labels[key] || key.toUpperCase();
@@ -206,6 +245,15 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
       if (eq.ran) {
         busy = true;
         logs.push(...eq.logs);
+      }
+    }
+
+    // Lootfilter anti-encher: vende lixo < épico a cada 75s (guarda só épico/lendário/mítico)
+    if (!busy && config.autoSell && !inTreino) {
+      const lf = await this.run(page, 'lootfilter', now, 75, 'extra', { job: 'lootfilter' }, true);
+      if (lf.ran) {
+        busy = true;
+        logs.push(...lf.logs);
       }
     }
 

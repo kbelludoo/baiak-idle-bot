@@ -15,12 +15,13 @@ services:
       resources:
         limits:
           cpus: "0.80"
-          memory: 512M
+          memory: 768M
     environment:
       - PORT=${PORT:-8080}
       - HOST=0.0.0.0
       - HEADLESS=true
       - STREAM=false
+      - SCREENSHOT_INTERVAL=0
       # O canvas/PixiJS do jogo precisa de WebGL. SwiftShader usa CPU, mas
       # mantém o mapa e o handshake do jogo funcionais em VPS sem GPU.
       - CHROME_GL=${CHROME_GL:-swiftshader}

@@ -238,21 +238,97 @@ async ({ job, ...auctionCfg }) => {
   }
 
   if (job === "market") {
+    // Guarda SOMENTE épico (3) / lendário (4) / mítico (5). Raro (2) ou menor fica na pouch p/ vender.
     let moved = 0;
     const cells = Array.from(document.querySelectorAll("#inv-grid .cell[data-tier], #inv-grid [data-tier]"));
     for (const cell of cells) {
       const tier = Number(cell.dataset.tier);
-      if (!Number.isFinite(tier) || tier < 2) continue;
+      if (!Number.isFinite(tier) || tier < 3) continue;
       const name = (cell.querySelector("img")?.alt || "").toLowerCase();
       if (/gold coin|platinum|crystal coin/.test(name)) continue;
       cell.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: true }));
       moved += 1;
-      events.push("transfer rare+ tier" + tier);
+      events.push("transfer epic+ tier" + tier);
       if (moved >= 8) break;
       await sleep(180);
     }
-    if (!moved) events.push("sem loot raro p/ backpack (sem bid/compra)");
+    if (!moved) events.push("sem loot épico/lendário p/ backpack (sem bid/compra)");
     return { ok: true, action: "transfer_" + moved, events };
+  }
+
+  if (job === "lootfilter") {
+    // Varredura anti-encher: vende/descarta tudo abaixo de épico (tier 0-2) na backpack + pouch.
+    // Épico(3)/Lendário(4)/Mítico(5) nunca são tocados.
+    const KEEP = 3;
+    const closeItem = () => {
+      const modal = document.getElementById("item-modal");
+      if (modal && !modal.classList.contains("hidden")) {
+        const c = document.getElementById("item-modal-close");
+        if (c) c.click();
+        else modal.classList.add("hidden");
+      }
+      document.querySelectorAll(".ctx-menu").forEach((m) => m.remove());
+    };
+    const cells = Array.from(document.querySelectorAll(
+      "#backpack-grid .cell, #backpack-grid [data-tier], #backpack-grid [data-cmpitem], " +
+      "#inv-grid .cell, #inv-grid [data-tier], #inv-grid [data-cmpitem]"
+    ));
+    let sold = 0, kept = 0, skipped = 0;
+    for (const cell of cells.slice(0, 24)) {
+      const tierRaw = cell.dataset?.tier;
+      const tier = tierRaw !== undefined && tierRaw !== "" ? Number(tierRaw) : NaN;
+      const img = cell.querySelector?.("img");
+      const name = ((img?.alt || cell.title || "") + "").trim();
+      if (/gold coin|platinum|crystal coin|glooth bag|backpack/i.test(name)) { skipped++; continue; }
+      if (Number.isFinite(tier) && tier >= KEEP) { kept++; continue; }
+      // Sem tier legível: checa tooltip/raridade no nome antes de vender
+      if (!Number.isFinite(tier)) {
+        const tip = String(cell.dataset?.tiphtml || cell.dataset?.tip || name).toLowerCase();
+        if (/epic|legendary|mythical|mythic|épico|epico|lend[aá]rio|m[ií]tico/.test(tip)) { kept++; continue; }
+        // Item sem raridade e sem slot (material/stack/consumível) não é lixo vendável aqui
+        if (!cell.dataset?.cmpitem && !cell.dataset?.tiphtml && !cell.dataset?.tier) { skipped++; continue; }
+      }
+      cell.click();
+      await sleep(200);
+      const modal = document.getElementById("item-modal");
+      if (!modal || modal.classList.contains("hidden")) { skipped++; continue; }
+      const body = (document.getElementById("item-modal-body")?.textContent || modal.textContent || "");
+      // Revalida raridade dentro do modal (fonte mais completa)
+      const tipFull = String(cell.dataset?.tiphtml || "") + " " + body;
+      if (/epic|legendary|mythical|mythic|épico|epico|lend[aá]rio|m[ií]tico/i.test(tipFull) && /tt-rarity/i.test(String(cell.dataset?.tiphtml || ""))) {
+        kept++;
+        closeItem();
+        await sleep(80);
+        continue;
+      }
+      const sellBtn = Array.from(modal.querySelectorAll("button, .ghost-btn, .mini-btn"))
+        .find((b) => vis(b) && !b.disabled && /^(vender|sell|descartar|descart|delete|drop|jogar fora)$/i.test((b.textContent || "").trim()));
+      if (sellBtn) {
+        sellBtn.click();
+        sold += 1;
+        events.push("vendeu lixo: " + name.slice(0, 36) + " T" + (Number.isFinite(tier) ? tier : "?"));
+        await sleep(300);
+        const confirm = document.getElementById("confirm-modal");
+        if (confirm && !confirm.classList.contains("hidden")) {
+          const bodyC = (document.getElementById("confirm-modal-body")?.textContent || "").toLowerCase();
+          if (/vender|sell|descartar|descart/i.test(bodyC)) {
+            const yes = document.getElementById("confirm-yes") || confirm.querySelector("button.btn-yes, .btn-yes");
+            if (yes && !yes.disabled) yes.click();
+            else { const no = document.getElementById("confirm-no"); if (no) no.click(); }
+          } else {
+            const no = document.getElementById("confirm-no");
+            if (no) no.click();
+          }
+          await sleep(150);
+        }
+      } else {
+        skipped++;
+      }
+      closeItem();
+      await sleep(120);
+      if (sold >= 10) break;
+    }
+    return { ok: true, action: "lootfilter_sold_" + sold, sold, kept, skipped, events };
   }
 
   if (job === "auction") {

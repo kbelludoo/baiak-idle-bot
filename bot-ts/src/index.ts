@@ -15,6 +15,8 @@ import { chooseExplorationTarget } from "./exploration";
 import { rankHuntsObserved } from "./hunt_sim";
 import { helperTrigger } from "./helper_triggers";
 import { ActionQueue, evaluateStaminaTransition } from "./state_machine";
+import { createTrpcClient, normalizeChars } from "./trpc";
+import { roomSend, roomDrainEvents, sendStage } from "./room_send";
 import type { TelemetryState, SubsystemInfo } from "./types";
 
 // ===================================================================
@@ -24,7 +26,43 @@ import type { TelemetryState, SubsystemInfo } from "./types";
 
 const FAST_STATE_JS = `() => {
   const text = (el) => (el?.textContent || "").trim();
-  const digits = (v) => { const s = String(v || "").replace(/[^0-9]/g, ""); return s ? parseInt(s, 10) : 0; };
+  const parseGold = (val) => {
+    if (typeof val === 'number' && Number.isFinite(val)) return Math.floor(val);
+    const s = String(val || "").replace(/\\s+/g, " ").trim();
+    if (!s) return null;
+    const m = s.match(/([\\d.,]+)\\s*(kk|milh(?:oes|oes|ao)?|mi\\b|m\\b|mil\\b|k\\b)?/i);
+    if (!m) return null;
+    const raw = m[1]; const unit = (m[2] || "").toLowerCase();
+    const hasDot = raw.includes("."), hasComma = raw.includes(",");
+    let num;
+    if (hasDot && hasComma) num = parseFloat(raw.replace(/\\./g, "").replace(",", "."));
+    else if (hasComma && !hasDot) num = parseFloat(raw.replace(",", "."));
+    else if (hasDot && !hasComma) num = unit ? parseFloat(raw) : parseInt(raw.replace(/\\./g, ""), 10);
+    else num = parseInt(raw, 10);
+    if (!Number.isFinite(num)) return null;
+    if (unit === "kk" || unit === "m" || unit.startsWith("milh") || unit === "mi") num *= 1000000;
+    else if (unit === "k" || unit === "mil") num *= 1000;
+    return Math.round(num);
+  };
+  const normStam = (s) => {
+    const t = String(s || "").trim();
+    if (!t) return null;
+    const pct = t.match(/(\\d{1,3})\\s*%/);
+    if (pct) return pct[1] + "%";
+    const clock = t.match(/(\\d{1,2})\\s*:\\s*(\\d{2})/);
+    if (clock) {
+      const h = parseInt(clock[1], 10), mi = parseInt(clock[2], 10);
+      if (h === 42 && mi === 0) return null;
+      if (h <= 42 && mi <= 59) return h + ":" + String(mi).padStart(2, "0");
+    }
+    const mH = t.match(/(\\d{1,2})\\s*h/i); const mM = t.match(/(\\d{1,3})\\s*m/i);
+    if (mH || mM) {
+      const h = mH ? parseInt(mH[1], 10) : 0; const mi = mM ? parseInt(mM[1], 10) : 0;
+      if (h === 42 && mi === 0) return null;
+      if (h <= 42 && mi <= 59) return h + ":" + String(mi).padStart(2, "0");
+    }
+    return null;
+  };
   const events = [];
 
   // Fechamento preventivo de modais bloqueantes
@@ -77,20 +115,36 @@ const FAST_STATE_JS = `() => {
     }
   }
 
-  // Gold
-  const gold = digits(text(document.getElementById("hud-gold") || document.querySelector(".hud-money, .mk-goldamt, .ac-wallet-val")));
+  // Gold — robusto a k/kk/m, pt-BR e data-gold; null quando ilegível (nunca 0 fantasma)
+  let gold = null;
+  const goldEls = [
+    document.getElementById("hud-gold"),
+    document.querySelector(".hud-money, .mk-goldamt, .ac-wallet-val, .wallet-gold, #gold-count, [data-gold]"),
+    document.querySelector("[title*='Gold' i], [aria-label*='Gold' i]"),
+  ].filter(Boolean);
+  for (const gEl of goldEls) {
+    const rawAttr = gEl.getAttribute("data-gold") || gEl.getAttribute("data-value") || gEl.getAttribute("title") || "";
+    gold = parseGold(rawAttr);
+    if (gold == null) gold = parseGold(text(gEl));
+    if (gold != null) break;
+  }
 
-  // Stamina
-  let stamina = text(document.getElementById("stamina-time") || document.querySelector(".stamina-time, .stamina-val, #stamina-val, [data-stamina]"));
+  // Stamina — relógio, Xh Ym, % e tooltip; placeholder 42:00 = desconhecido
+  let stamina = normStam(text(document.getElementById("stamina-time") || document.querySelector(".stamina-time, .stamina-val, #stamina-val, [data-stamina]")));
   if (!stamina) {
     const panel = document.getElementById("stamina-panel");
-    stamina = ((panel?.textContent || "").match(/\d{1,2}:\d{2}/) || [])[0] || "";
+    stamina = normStam(panel?.textContent || "") || normStam(panel?.getAttribute("title") || "");
   }
-  if (!stamina) {
-    const pct = text(document.getElementById("stamina-pct"));
-    if (/^\d+\s*%$/.test(pct)) stamina = pct;
+  let staminaPct = normStam(text(document.getElementById("stamina-pct") || document.querySelector(".stamina-pct")));
+  if (!staminaPct) {
+    const bTip = document.querySelector("button[title*='stamina' i], [data-tip*='stamina' i], [aria-label*='stamina' i]");
+    if (bTip) {
+      const tip = bTip.getAttribute("title") || bTip.getAttribute("data-tip") || bTip.getAttribute("aria-label") || bTip.textContent || "";
+      const cand = normStam(tip);
+      if (cand) { if (/%$/.test(cand)) staminaPct = cand; else if (!stamina) stamina = cand; }
+    }
   }
-  if (stamina === "42:00") stamina = "";
+  if (staminaPct && /%$/.test(staminaPct)) stamina = staminaPct;
 
   // Loop Toggle sempre ON
   const loop = document.getElementById("loop-toggle");
@@ -99,6 +153,16 @@ const FAST_STATE_JS = `() => {
     loop.click();
     events.push("ATIVOU_MODO_LOOP");
     loopOn = true;
+  }
+
+  // Mochila/pouch — vários IDs do jogo + fallback por contagem de células
+  let invText = text(document.getElementById("inv-count"))
+    || text(document.getElementById("pouch-count") || document.querySelector(".pouch-count, #supplypouch-count, .supply-count, #bag-count, .bag-count"));
+  if (!invText || !/\\d+\\s*\\/\\s*\\d+/.test(invText)) {
+    const pouchCells = document.querySelectorAll("#inv-grid .cell, #supplypouch-grid .cell").length;
+    const pouchCap = parseInt((document.getElementById("inv-grid")?.getAttribute("data-cap") || document.getElementById("supplypouch-grid")?.getAttribute("data-cap") || "0"), 10) || 0;
+    if (pouchCells > 0 && pouchCap > 0) invText = pouchCells + "/" + pouchCap;
+    else if (pouchCells > 0 && !invText) invText = String(pouchCells);
   }
 
   return {
@@ -110,7 +174,7 @@ const FAST_STATE_JS = `() => {
     gold,
     stamina,
     loopOn,
-    invText: text(document.getElementById("inv-count")),
+    invText,
     connExpired,
     inBatterySaver,
     events
@@ -164,21 +228,33 @@ async function main() {
     const token = config.token || process.env.BAIAK_TOKEN || "";
     if (!token) return cachedAccountChars;
     try {
-      const res = await fetch("https://baiakidle.com/api/trpc/characters.list", {
-        headers: { Authorization: `Bearer ${token}`, "User-Agent": "Mozilla/5.0" },
-        signal: AbortSignal.timeout(5000),
-      } as any);
-      if (res.ok) {
-        const data: any = await res.json();
-        const chars = data?.result?.data || [];
+      // Cliente tRPC real (paridade com o bundle): batch=1 + input {json},
+      // header `authorization: Bearer` (minúsculo). O GET puro antigo caía
+      // em 400/401 e deixava `cachedAccountChars` vazio -> status.json com
+      // "Slot 1/2/3" e vocações chutadas.
+      const trpc = createTrpcClient(token);
+      const raw: any = await trpc.query('characters.list').catch(() => null);
+      const chars = normalizeChars(raw);
+      if (chars.length > 0) {
         const mapping: Record<string, any> = {};
         for (const c of chars) {
           const v = String(c?.vocation || "").toLowerCase();
-          if (v) mapping[v] = { id: c?.id, name: c?.name, vocation: v, level: parseInt(String(c?.level || 1), 10) || 1 };
+          if (v) mapping[v] = { id: c?.id, name: c?.name, vocation: v, level: c?.level || 1 };
         }
-        if (Object.keys(mapping).length > 0) { cachedAccountChars = mapping; lastAccountCharsSync = now; }
+        cachedAccountChars = mapping;
+        lastAccountCharsSync = now;
+        console.log(`[*] [TRPC] characters.list OK (${chars.length} chars)`);
+      } else {
+        console.warn(`[TRPC AVISO] characters.list vazio — mantendo cache (${Object.keys(cachedAccountChars).length})`);
       }
-    } catch (_) {}
+      // Party real quando disponível (slots/HP/MP autoritativos no status).
+      try {
+        const party: any = await trpc.query('characters.myParty').catch(() => null);
+        if (party) (telemetry as any).trpcParty = party;
+      } catch (_) {}
+    } catch (err: any) {
+      console.warn(`[TRPC AVISO] characters.list falhou: ${err?.message || err}`);
+    }
     return cachedAccountChars;
   };
 
@@ -212,6 +288,49 @@ async function main() {
   };
   const actionQueue = new ActionQueue();
   (telemetry as any).partyMembersRaw = [];
+
+  // Fecha picker/modal preso. Toda ação DOM roda dentro de try/finally com
+  // este fechamento: sem ele um timeout de 12-15s deixa o picker aberto e a
+  // próxima ação falha em cascata.
+  const closeStuckModals = async (): Promise<void> => {
+    try {
+      await pageRef?.evaluate(() => {
+        try {
+          const picker = document.getElementById("picker-modal");
+          if (picker && !picker.classList.contains("hidden")) {
+            const c = picker.querySelector("#picker-modal-close, .im-close, .close-btn, .modal-close, [data-close]");
+            if (c) (c as HTMLElement).click();
+            else picker.classList.add("hidden");
+          }
+          const confirm = document.getElementById("confirm-modal");
+          if (confirm && !confirm.classList.contains("hidden") && !/comprar|buy|lance|bid|leil|loja|store|pix|vip|premium|donate/i.test(confirm.textContent || "")) {
+            const yes = Array.from(confirm.querySelectorAll("button, .btn")).find((b) =>
+              /^(ok|yes|sim|confirmar|confirm)$/i.test((b.textContent || "").trim()));
+            if (yes) (yes as HTMLElement).click();
+          }
+        } catch (_) {}
+      }).catch(() => null);
+    } catch (_) {}
+  };
+
+  // Entrada em hunt: DIRETO primeiro (1 pacote `stage`), DOM só como fallback.
+  // `lMe=N=>l.send("stage",{huntId:N})` é o que o botão `.stage-go` chama.
+  const enterHuntDirectOrDom = async (target: { id?: string; name?: string; resumeLast?: boolean }): Promise<any> => {
+    if (target?.id) {
+      try {
+        const ok = await sendStage(pageRef, target.id);
+        if (ok) {
+          console.log(`[${new Date().toLocaleTimeString()}] 🏹 [STAGE-DIRECT] send("stage",{huntId:${target.id}}) aceito (1 pacote)`);
+          return { success: true, hunt: target.id, method: "room-send" };
+        }
+      } catch (_) {}
+    }
+    try {
+      return await safeEval<any>(pageRef, "hunt", target, 12000);
+    } finally {
+      await closeStuckModals();
+    }
+  };
 
   // Status file completo — paridade com bot.py update_status_file()
   const writeStatusFile = () => {
@@ -281,10 +400,30 @@ async function main() {
     } catch (_) {}
   };
 
-  const handleWsPayload = (buf: Uint8Array) => {
+  // Estado do fluxo queue -> hunt (admitToken/fp/ext) + reconnect token.
+  // O jogo exige: joinOrCreate("queue",{token}) -> onMessage("pos"/"go") ->
+  // leave() -> joinOrCreate("hunt",{...admitToken}). O bot só observava; agora
+  // registra cada passo para diagnóstico e resume via reconnectionToken.
+  const queueFlow: { pos: any; admitToken: string | null; lastGoAt: number } = {
+    pos: null, admitToken: null, lastGoAt: 0,
+  };
+
+  const handleWsPayload = (buf: Uint8Array, meta?: { requestId: string; url: string; opcode: number }) => {
     try {
       const fr = decodeFrame(buf);
-      if (!fr || !fr.type) return;
+      if (!fr) return;
+      // ROOM_STATE (14) / PATCH (15): estado autoritativo (HP, players, dead,
+      // huntId, wave, lootGold). Sem o .schema da build não decodificamos os
+      // campos aqui, mas o frame prova vida da sala: alimenta watchdog +
+      // evita o reload de 45s no meio de farm estável. Os valores chegam via
+      // kernel mirror (`window.__baiak_state`) + ROOM_DATA abaixo.
+      if (fr.opcode === 0x0e || fr.opcode === 0x0f) {
+        watchdog.onWsFrame();
+        telemetry.setOnline(true);
+        (telemetry as any).lastRoomStateAt = Date.now();
+        return;
+      }
+      if (!fr.type) return;
       const typ = fr.type;
       const pay = fr.payload;
 
@@ -315,6 +454,45 @@ async function main() {
         writeStatusFile();
       } else if (["state", "init", "sync", "player", "snapshot"].includes(typ)) {
         writeStatusFile();
+      } else if (typ === "pos") {
+        // Fila de entrada: posição na queue.
+        queueFlow.pos = (pay && typeof pay === 'object' && pay.position !== undefined) ? pay.position : pay;
+        console.log(`[${new Date().toLocaleTimeString()}] ⏳ [QUEUE] pos=${JSON.stringify(queueFlow.pos)}`);
+      } else if (typ === "go") {
+        // Admissão: o servidor liberou a hunt — guarda admitToken.
+        const tok = pay && typeof pay === 'object' ? (pay.token || pay.admitToken || null) : null;
+        if (tok) { queueFlow.admitToken = String(tok); queueFlow.lastGoAt = Date.now(); }
+        console.log(`[${new Date().toLocaleTimeString()}] ✅ [QUEUE] admitido (admitToken ${tok ? 'recebido' : 'ausente'})`);
+      } else if (typ === "joined") {
+        const hid = pay && typeof pay === 'object' ? (pay.huntId || null) : null;
+        if (typeof hid === 'string') {
+          telemetry.updateHunt(hid, 'websocket');
+          protocolMapper.setActiveHunt(hid);
+        }
+        (telemetry as any).lastJoined = pay;
+        console.log(`[${new Date().toLocaleTimeString()}] 🏹 [JOINED] hunt=${hid || '?'} wave=${pay?.wave ?? '?'}`);
+        writeStatusFile();
+      } else if (typ === "toHunt" || typ === "resume" || typ === "reconnectOk") {
+        if (typ === "reconnectOk") (telemetry as any).reconnectOk = true;
+        const hid = pay && typeof pay === 'object' ? (pay.huntId || pay.hunt?.id || null) : (typeof pay === 'string' ? pay : null);
+        if (typeof hid === 'string') telemetry.updateHunt(hid, 'websocket');
+        console.log(`[${new Date().toLocaleTimeString()}] 🔄 [${typ.toUpperCase()}] ${typeof hid === 'string' ? hid : ''}`);
+        writeStatusFile();
+      } else if (typ === "toCity") {
+        (telemetry as any).lastToCityAt = Date.now();
+        console.log(`[${new Date().toLocaleTimeString()}] 🏙️ [TOCITY] servidor mandou para cidade`);
+        writeStatusFile();
+      } else if (typ === "takeover" || typ === "serverdrop") {
+        console.log(`[${new Date().toLocaleTimeString()}] ⚠️ [${typ.toUpperCase()}] ${JSON.stringify(pay)?.slice(0, 200)}`);
+        (telemetry as any)[typ] = pay;
+      } else if (typ === "deaths") {
+        (telemetry as any).lastDeaths = (pay && (pay.rows || pay)) || [];
+        console.log(`[${new Date().toLocaleTimeString()}] 💀 [DEATHS] ${(Array.isArray((telemetry as any).lastDeaths) ? (telemetry as any).lastDeaths.length : '?')} registros`);
+      } else if (typ === "dailystatus" || typ === "event" || typ === "eventmeta" || typ === "huntgate" ||
+                 typ === "expeditiongate" || typ === "codexgate" || typ === "charmsgate" || typ === "dungeongate") {
+        (telemetry as any)[`last_${typ}`] = pay;
+      } else if (typ === "party" || typ === "partystate" || typ === "partyApplied" || typ === "partyhunt" || typ === "mine") {
+        // HP/MP/slots autoritativos — cai na digestão genérica da telemetria.
       }
     } catch (_) {}
   };
@@ -388,57 +566,26 @@ async function main() {
   let needPotionCheck = true;
   let cityStreak = 0;
   let needsHuntEntry = false;
+  // Heartbeat anti-stall: se a hunt não progride (kills/waves/gold parados),
+  // força re-entrada em vez de ficar parado até o watchdog recarregar.
+  let lastProgressKills = 0;
+  let lastProgressWaves = 0;
+  let lastProgressGold = 0;
+  let lastProgressTime = Date.now();
+  let lastStallCheck = 0;
+  // Dreno de eventos do kernel hook (cobre Blob/fragmentado que o CDP perde).
+  let lastRoomDrain = 0;
+  // Espelho de estado do kernel (ROOM_DATA + battery-save NWe indireto).
+  let lastRoomStatePull = 0;
 
-  // Aguarda a página carregar, sprites compilarem e o mapa montar (até 120s)
-  console.log("[*] Aguardando montagem do mapa e inicialização do jogo (até 120s)...");
-  const startWait = Date.now();
-  let lastWaitLog = 0;
-  while (Date.now() - startWait < 120000) {
-    try {
-      const state = await pageRef.evaluate(() => {
-        for (const b of document.querySelectorAll<HTMLButtonElement>('button, .btn, [role="button"]')) {
-          const txt = (b.textContent || "").trim().toLowerCase();
-          if (txt === "coletar" && (!b.id || !b.id.includes("daily"))) {
-            b.click();
-          }
-        }
-        const ofl = document.getElementById("offline-modal");
-        if (ofl && !ofl.classList.contains("hidden")) {
-          const c = document.getElementById("offline-modal-close") || ofl.querySelector("button");
-          if (c) c.click();
-          ofl.classList.add("hidden");
-        }
-
-        const lo = document.getElementById("loading-overlay");
-        const ml = document.getElementById("map-loading");
-        const loActive = !!(lo && !lo.classList.contains("done"));
-        const mlActive = !!(ml && !ml.classList.contains("ml-off"));
-
-        const bodyTxt = (document.body?.textContent || "").toLowerCase();
-        const textLoading = bodyTxt.includes("montando o mapa") || bodyTxt.includes("conectando ao servidor") || bodyTxt.includes("carregando sprites") || bodyTxt.includes("carregando texturas");
-        const waveTxt = (document.getElementById("wave-title")?.textContent || document.querySelector(".bs-hunt")?.textContent || "").trim();
-        const titleReady = /^.+\s·\s.+\s—\sBaiak Idle$/i.test(document.title || "");
-        const hasGame = titleReady || (waveTxt.length > 0 && waveTxt !== "—" && waveTxt !== "-");
-        const loading = !hasGame && (loActive || mlActive || textLoading);
-        return { loading, hasGame, waveTxt };
-      }).catch(() => null);
-
-      if (state) {
-        if (!state.loading && state.hasGame) {
-          console.log(`[*] Jogo carregado e mapa pronto em ${Math.round((Date.now() - startWait) / 1000)}s! Hunt atual: ${state.waveTxt}`);
-          if (state.waveTxt && state.waveTxt !== "—") telemetry.updateHunt(state.waveTxt, "dom");
-          await syncAccountChars().catch(() => null);
-          writeStatusFile();
-          break;
-        }
-        if (Date.now() - lastWaitLog >= 10000) {
-          lastWaitLog = Date.now();
-          console.log(`[*] Aguardando mapa montar... (${Math.round((Date.now() - startWait) / 1000)}s decorridos, loading=${state.loading})`);
-        }
-      }
-    } catch (_) {}
-    await new Promise(r => setTimeout(r, 2500));
-  }
+  // Não bloqueie o processo aguardando o canvas/mapa por uma avaliação DOM.
+  // Em uma VPS com renderer saturado essa chamada pode ficar pendente, embora
+  // o WebSocket já consiga negociar em paralelo. O loop operacional e o
+  // watchdog acompanham o boot de forma não bloqueante.
+  console.log("[*] Aguardando handshake do jogo em segundo plano (até 120s)...");
+  await new Promise(r => setTimeout(r, 8000));
+  await syncAccountChars().catch(() => null);
+  writeStatusFile();
 
   // =====================================================================
   // LOOP PRINCIPAL DE OPERAÇÃO (Telemetria Desacoplada e Fila de Ações)
@@ -484,10 +631,20 @@ async function main() {
             timeoutMs: 60000,
             run: async () => {
               console.log(`[${new Date().toLocaleTimeString()}] [FORCE_HUNT] ${telemetry.hunt} -> ${config.huntId}`);
-              const result = await safeEval<any>(pageRef, 'hunt', { id: config.huntId, name: '', resumeLast: false }, 45000);
+              // Direto primeiro (1 pacote), DOM como fallback com finally.
+              const direct = await sendStage(pageRef, config.huntId);
+              const result = direct
+                ? { success: true, hunt: config.huntId, method: 'room-send' }
+                : await (async () => {
+                    try {
+                      return await safeEval<any>(pageRef, 'hunt', { id: config.huntId, name: '', resumeLast: false }, 45000);
+                    } finally {
+                      await closeStuckModals();
+                    }
+                  })();
               console.log(`[${new Date().toLocaleTimeString()}] [FORCE_HUNT RESULT] ${JSON.stringify(result)}`);
               if (result?.success || result?.alreadyThere) {
-                telemetry.updateHunt(result.hunt || config.huntId, 'dom');
+                telemetry.updateHunt(result.hunt || config.huntId, direct ? 'websocket' : 'dom');
                 needsHuntEntry = false;
               }
             },
@@ -506,7 +663,61 @@ async function main() {
           needsHuntEntry = true;
           (profiler as any).unlockedIds = [];
           lastHuntScan = 0;
+          // Re-anuncia presença na sala como o cliente real faz após join.
+          try { await roomSend(pageRef, 'ready', {}); } catch (_) {}
         }
+      }
+
+      // 1b. Dreno de eventos do kernel hook (page-side). O CDP perde binário
+      // fragmentado/Blob (opcode!=2 vira utf-8); o hook no page vê ArrayBuffer
+      // e Blob corretamente. Ingere queue-flow (pos/go/joined/toHunt/resume/
+      // reconnectOk/deaths/...) + party/partystate HP/MP sem DOM polling.
+      if (telemetry.online && now - lastRoomDrain >= 3000) {
+        lastRoomDrain = now;
+        try {
+          const evs = await roomDrainEvents(pageRef);
+          for (const ev of evs.slice(-120)) {
+            try {
+              protocolMapper.ingest(ev.type, ev.payload, 0);
+              telemetry.ingestWebSocketFrame(ev.type, ev.payload);
+              if (ev.type === 'go' && ev.payload && typeof ev.payload === 'object' && ev.payload.token) {
+                queueFlow.admitToken = String(ev.payload.token);
+                queueFlow.lastGoAt = Date.now();
+              } else if (ev.type === 'pos') {
+                queueFlow.pos = (ev.payload && ev.payload.position !== undefined) ? ev.payload.position : ev.payload;
+              } else if (ev.type === 'joined' && ev.payload?.huntId) {
+                telemetry.updateHunt(String(ev.payload.huntId), 'websocket');
+              } else if ((ev.type === 'toHunt' || ev.type === 'resume') && ev.payload) {
+                const hid = typeof ev.payload === 'string' ? ev.payload : (ev.payload.huntId || null);
+                if (typeof hid === 'string') telemetry.updateHunt(hid, 'websocket');
+              } else if (ev.type === 'reconnectOk') {
+                (telemetry as any).reconnectOk = true;
+              }
+            } catch (_) {}
+          }
+          // Espelho de estado (hunt/wave/queue/party) a cada 6s.
+          if (now - lastRoomStatePull >= 6000) {
+            lastRoomStatePull = now;
+            try {
+              const rs = await pageRef?.evaluate(() => {
+                try {
+                  const w = window as any;
+                  return w.__baiak_state ? JSON.parse(JSON.stringify(w.__baiak_state)) : null;
+                } catch { return null; }
+              }).catch(() => null);
+              if (rs) {
+                if (typeof rs.huntId === 'string' && rs.huntId) telemetry.updateHunt(rs.huntId, 'websocket');
+                else if (typeof rs.hunt === 'string' && rs.hunt && rs.hunt !== 'Conectando...') telemetry.updateHunt(rs.hunt, 'websocket');
+                if (rs.queue?.admitToken) { queueFlow.admitToken = String(rs.queue.admitToken); }
+                if (rs.queue?.pos !== null && rs.queue?.pos !== undefined) { queueFlow.pos = rs.queue.pos; }
+                if (Array.isArray(rs.players) && rs.players.length > 0) {
+                  (telemetry as any).roomPlayers = rs.players;
+                }
+                if (rs.lastFrame) watchdog.onWsFrame();
+              }
+            } catch (_) {}
+          }
+        } catch (_) {}
       }
 
       // 2. Cooldowns e flags de verificação periódica
@@ -723,15 +934,19 @@ async function main() {
             priority: 10,
             timeoutMs: 12000,
             run: async () => {
-              console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] Stamina <= 15% (${telemetry.stamina}). Teleportando para Treino Online...`);
-              const tr = await safeEval<any>(pageRef, "treino", { want: "train" }, 10000);
-              if (tr?.events?.length) {
-                for (const ev of tr.events) console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] ${ev}`);
-              }
-              if (tr?.inTreino || tr?.action) {
-                telemetry.inTreino = true;
-                telemetry.updateHunt("Treino Online", "dom");
-                subsystems.auto_treino = { status: "TREINANDO", detail: "Stamina <= 15% — Treino online ativo" };
+              try {
+                console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] Stamina <= 15% (${telemetry.stamina}). Teleportando para Treino Online...`);
+                const tr = await safeEval<any>(pageRef, "treino", { want: "train" }, 10000);
+                if (tr?.events?.length) {
+                  for (const ev of tr.events) console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] ${ev}`);
+                }
+                if (tr?.inTreino || tr?.action) {
+                  telemetry.inTreino = true;
+                  telemetry.updateHunt("Treino Online", "dom");
+                  subsystems.auto_treino = { status: "TREINANDO", detail: "Stamina <= 15% — Treino online ativo" };
+                }
+              } finally {
+                await closeStuckModals();
               }
             }
           });
@@ -757,7 +972,7 @@ async function main() {
               const label = target.id ? `${target.name} (${target.id})` : "última do jogo (pick-current)";
               console.log(`[${new Date().toLocaleTimeString()}] 🏹 [HUNT DECISÃO] ${reason || "Retomando"}. Alvo: ${label} | Lvl ${telemetry.level}`);
 
-              const huntRes = await safeEval<any>(pageRef, "hunt", target, 12000);
+              const huntRes = await enterHuntDirectOrDom(target);
               const unlocked = idsFromPickerRows((huntRes || {}).unlocked || []);
               if (unlocked.length > 0) {
                 (profiler as any).unlockedIds = unlocked;
@@ -774,7 +989,7 @@ async function main() {
               console.log(`[${new Date().toLocaleTimeString()}] 🏹 [RESULTADO TELEPORTE] ${JSON.stringify(huntRes)}`);
               if (huntRes?.success || huntRes?.alreadyThere) {
                 needsHuntEntry = false;
-                telemetry.updateHunt(huntRes.hunt || target.name || target.id, "dom");
+                telemetry.updateHunt(huntRes.hunt || target.name || target.id, huntRes.method === 'room-send' ? 'websocket' : 'dom');
                 huntRetryDelayMs = 8000 + Math.random() * 6000;
               } else {
                 huntRetryDelayMs = 14000 + Math.random() * 12000;
@@ -795,27 +1010,99 @@ async function main() {
           needsHuntEntry = false;
         }
 
-        // Fila de Ação: Auto-Sell Preventivo (Prioridade 5)
-        if (config.autoSell && sellAllowed && telemetry.bagSlots) {
+        // Heartbeat anti-stall: hunt conhecida sem progresso (kills/waves/gold)
+        // por 150s indica teleporte perdido / wave travada — força re-entrada.
+        // State-aware: ROOM_STATE/PATCH recente prova sala viva (farm lento ou
+        // boss longo gera poucos ROOM_DATA mas PATCH continua). Hunt de boss
+        // nunca dispara stall por heurística de kills.
+        if (isKnownHunt && !isCity && !telemetry.inTreino && now - lastStallCheck >= 15000) {
+          lastStallCheck = now;
+          const progressed = telemetry.kills !== lastProgressKills
+            || telemetry.waves !== lastProgressWaves
+            || telemetry.gold !== lastProgressGold;
+          if (progressed) {
+            lastProgressKills = telemetry.kills;
+            lastProgressWaves = telemetry.waves;
+            lastProgressGold = telemetry.gold;
+            lastProgressTime = now;
+          } else if (now - lastProgressTime >= 150000 && telemetry.online) {
+            const roomAliveMs = (telemetry as any).lastRoomStateAt ? now - (telemetry as any).lastRoomStateAt : Infinity;
+            const waveLow = String(wave || '').toLowerCase();
+            const looksBoss = /boss|chefe|final|últim|ultim/.test(waveLow);
+            if (roomAliveMs < 60000) {
+              // Sala viva (PATCH < 60s): só rearma, não re-entra.
+              lastProgressTime = now;
+            } else if (looksBoss) {
+              lastProgressTime = now;
+              console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [STALL] boss longo sem kills em ${wave} — sala viva, sem re-entrada`);
+            } else {
+              needsHuntEntry = true;
+              lastProgressTime = now;
+              console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [STALL] 150s sem progresso em ${wave} (k=${telemetry.kills} w=${telemetry.waves} g=${telemetry.gold}) — forçando re-entrada`);
+            }
+          }
+        } else if (!isKnownHunt || isCity) {
+          // Fora de hunt: não conta stall, só rearma a base
+          if (now - lastStallCheck >= 15000) {
+            lastStallCheck = now;
+            lastProgressKills = telemetry.kills;
+            lastProgressWaves = telemetry.waves;
+            lastProgressGold = telemetry.gold;
+            lastProgressTime = now;
+          }
+        }
+
+        // Fila de Ação: Anti-encher (lootfilter 50% + sell-all no limiar).
+        // Política: guarda SOMENTE épico(3)/lendário(4)/mítico(5). Todo o resto é lixo vendável.
+        if (config.autoSell && telemetry.bagSlots) {
           const m = telemetry.bagSlots.match(/(\d+)\s*\/\s*(\d+)/);
           if (m) {
             const cur = parseInt(m[1], 10);
             const max = parseInt(m[2], 10);
-            if (max > 0 && (cur / max) * 100 >= config.sellThresholdPct) {
+            const pct = max > 0 ? (cur / max) * 100 : 0;
+            // 1) Varredura precoce: vende lixo individual (mantém épico+) a partir de 50%
+            if (max > 0 && pct >= 50 && (now - lastSellTime) >= 60000) {
+              actionQueue.enqueue({
+                id: "lootfilter",
+                name: "lootfilter",
+                priority: 6,
+                timeoutMs: 25000,
+                run: async () => {
+                  try {
+                    // Garante épicos na backpack antes de qualquer venda em massa
+                    const mv = await safeEval<any>(pageRef, "extra", { job: "market" }, 8000).catch(() => null);
+                    const lf = await safeEval<any>(pageRef, "extra", { job: "lootfilter" }, 20000).catch(() => null);
+                    if (lf?.sold > 0 || (mv as any)?.action) {
+                      console.log(`[${new Date().toLocaleTimeString()}] 🗑️ [LOOTFILTER] vendeu=${lf?.sold ?? 0} manteve=${lf?.kept ?? 0} pouch=${telemetry.bagSlots} ${JSON.stringify((lf?.events || []).slice(0, 3))}`);
+                      lastSellTime = Date.now();
+                    }
+                  } finally {
+                    await closeStuckModals();
+                  }
+                }
+              });
+            }
+            // 2) Sell-all de emergência no limiar configurado (após proteger épicos)
+            if (max > 0 && pct >= config.sellThresholdPct && sellAllowed) {
               actionQueue.enqueue({
                 id: "autosell",
                 name: "autosell",
                 priority: 5,
-                timeoutMs: 8000,
+                timeoutMs: 20000,
                 run: async () => {
-                  await pageRef.evaluate(() => {
-                    const sellBtn = document.getElementById("sell-all") as HTMLButtonElement | null;
-                    if (sellBtn && !sellBtn.classList.contains("cd") && !sellBtn.disabled) {
-                      sellBtn.click();
-                    }
-                  }).catch(() => null);
-                  lastSellTime = Date.now();
-                  console.log(`[${new Date().toLocaleTimeString()}] 💰 [AUTO-SELL] Disparado sell-all (Pouch: ${telemetry.bagSlots})`);
+                  try {
+                    await safeEval<any>(pageRef, "extra", { job: "market" }, 8000).catch(() => null);
+                    await pageRef.evaluate(() => {
+                      const sellBtn = document.getElementById("sell-all") as HTMLButtonElement | null;
+                      if (sellBtn && !sellBtn.classList.contains("cd") && !sellBtn.disabled) {
+                        sellBtn.click();
+                      }
+                    }).catch(() => null);
+                    lastSellTime = Date.now();
+                    console.log(`[${new Date().toLocaleTimeString()}] 💰 [AUTO-SELL] Disparado sell-all (Pouch: ${telemetry.bagSlots}, só épico+ protegido)`);
+                  } finally {
+                    await closeStuckModals();
+                  }
                 }
               });
             }
@@ -841,10 +1128,14 @@ async function main() {
             priority: 3,
             timeoutMs: 12000,
             run: async () => {
-              const need = pickerKind === "heal" ? "heal" : pickerKind === "mana" ? "mana" : pickerKind === "hp" ? "hp" : "aoe";
-              const spellRes = await safeEval<any>(pageRef, "spell", { ...spellArgs, need, job: "pick", slot: lastGearSlot }, 10000);
-              applyHelperSnap(spellRes);
-              if (spellRes?.events?.length) console.log(`[${new Date().toLocaleTimeString()}] 🔮 [SPELL] ${JSON.stringify(spellRes.events)}`);
+              try {
+                const need = pickerKind === "heal" ? "heal" : pickerKind === "mana" ? "mana" : pickerKind === "hp" ? "hp" : "aoe";
+                const spellRes = await safeEval<any>(pageRef, "spell", { ...spellArgs, need, job: "pick", slot: lastGearSlot }, 10000);
+                applyHelperSnap(spellRes);
+                if (spellRes?.events?.length) console.log(`[${new Date().toLocaleTimeString()}] 🔮 [SPELL] ${JSON.stringify(spellRes.events)}`);
+              } finally {
+                await closeStuckModals();
+              }
             }
           });
         } else if ((telemetry as any).helperTriggerState?.run && now - lastSpellGear >= 30000) {
@@ -856,27 +1147,31 @@ async function main() {
             priority: 3,
             timeoutMs: 15000,
             run: async () => {
-              const slots = magicState.slots || {};
-              let present = Object.keys(slots).filter((k) => /^\d+$/.test(k)).map(Number);
-              if (!present.length) present = [0, 1];
-              for (const sid of present) {
-                if (sid > 2) continue;
-                const last = spellSlotCooldown.get(sid) || 0;
-                if (now - last < 600000) continue;
-                const kit = slots[String(sid)] || {};
-                if (kit.ready) continue;
-                spellSlotCooldown.set(sid, Date.now());
-                const jobNeed = !kit.heal ? "heal" : !kit.mana ? "mana" : "aoe";
-                const job = !kit.heal || !kit.mana ? "helper" : "fill";
-                const spellRes = await safeEval<any>(pageRef, "spell", { ...spellArgs, need: jobNeed, job, slot: sid }, 10000);
-                lastGearSlot = sid;
-                applyHelperSnap(spellRes);
-                const snap = spellRes?.helper;
-                if (snap) spellSlotState.set(sid, JSON.stringify(snap));
-                if (spellRes && (spellRes.ok || spellRes.events)) {
-                  console.log(`[${new Date().toLocaleTimeString()}] 🔮 [GEAR slot${sid}] ${JSON.stringify(spellRes.events || spellRes)}`);
-                  break;
+              try {
+                const slots = magicState.slots || {};
+                let present = Object.keys(slots).filter((k) => /^\d+$/.test(k)).map(Number);
+                if (!present.length) present = [0, 1];
+                for (const sid of present) {
+                  if (sid > 2) continue;
+                  const last = spellSlotCooldown.get(sid) || 0;
+                  if (now - last < 600000) continue;
+                  const kit = slots[String(sid)] || {};
+                  if (kit.ready) continue;
+                  spellSlotCooldown.set(sid, Date.now());
+                  const jobNeed = !kit.heal ? "heal" : !kit.mana ? "mana" : "aoe";
+                  const job = !kit.heal || !kit.mana ? "helper" : "fill";
+                  const spellRes = await safeEval<any>(pageRef, "spell", { ...spellArgs, need: jobNeed, job, slot: sid }, 10000);
+                  lastGearSlot = sid;
+                  applyHelperSnap(spellRes);
+                  const snap = spellRes?.helper;
+                  if (snap) spellSlotState.set(sid, JSON.stringify(snap));
+                  if (spellRes && (spellRes.ok || spellRes.events)) {
+                    console.log(`[${new Date().toLocaleTimeString()}] 🔮 [GEAR slot${sid}] ${JSON.stringify(spellRes.events || spellRes)}`);
+                    break;
+                  }
                 }
+              } finally {
+                await closeStuckModals();
               }
             }
           });
@@ -892,14 +1187,18 @@ async function main() {
             priority: 2,
             timeoutMs: 12000,
             run: async () => {
-              const potRes = await safeEval<any>(pageRef, "potion", {
-                autoHeal: config.autoHeal,
-                healBelowPct: config.healBelowPct,
-                hpPotionBelowPct: config.hpPotionBelowPct,
-                manaPotionBelowPct: config.manaPotionBelowPct,
-              }, 10000);
-              if (potRes?.events?.length) {
-                for (const ev of potRes.events) console.log(`[${new Date().toLocaleTimeString()}] 🧪 [POTION/CURA] ${ev}`);
+              try {
+                const potRes = await safeEval<any>(pageRef, "potion", {
+                  autoHeal: config.autoHeal,
+                  healBelowPct: config.healBelowPct,
+                  hpPotionBelowPct: config.hpPotionBelowPct,
+                  manaPotionBelowPct: config.manaPotionBelowPct,
+                }, 10000);
+                if (potRes?.events?.length) {
+                  for (const ev of potRes.events) console.log(`[${new Date().toLocaleTimeString()}] 🧪 [POTION/CURA] ${ev}`);
+                }
+              } finally {
+                await closeStuckModals();
               }
             }
           });
@@ -914,17 +1213,21 @@ async function main() {
             priority: 1,
             timeoutMs: 15000,
             run: async () => {
-              const eqRes = await safeEval<any>(pageRef, "equip", null, 12000);
-              if (eqRes?.events?.length) {
-                for (const ev of eqRes.events) console.log(`[${new Date().toLocaleTimeString()}] 🛡️ [AUTO-EQUIP] ${ev}`);
-              }
-              const newItems = eqRes?.equipped || [];
-              if (newItems.length > 0) {
-                subsystems.auto_equip = {
-                  status: "FUNCIONAL",
-                  detail: `Último: ${newItems[0].name} (T${newItems[0].tier ?? "?"})`,
-                  last_equipped: newItems.slice(0, 10),
-                };
+              try {
+                const eqRes = await safeEval<any>(pageRef, "equip", null, 12000);
+                if (eqRes?.events?.length) {
+                  for (const ev of eqRes.events) console.log(`[${new Date().toLocaleTimeString()}] 🛡️ [AUTO-EQUIP] ${ev}`);
+                }
+                const newItems = eqRes?.equipped || [];
+                if (newItems.length > 0) {
+                  subsystems.auto_equip = {
+                    status: "FUNCIONAL",
+                    detail: `Último: ${newItems[0].name} (T${newItems[0].tier ?? "?"})`,
+                    last_equipped: newItems.slice(0, 10),
+                  };
+                }
+              } finally {
+                await closeStuckModals();
               }
             }
           });
@@ -939,8 +1242,12 @@ async function main() {
             priority: 1,
             timeoutMs: 12000,
             run: async () => {
-              const extraLogs = await extrasScheduler.tick(pageRef, config, Date.now(), telemetry.inTreino);
-              for (const log of extraLogs) console.log(`[${new Date().toLocaleTimeString()}] ⚡ ${log}`);
+              try {
+                const extraLogs = await extrasScheduler.tick(pageRef, config, Date.now(), telemetry.inTreino);
+                for (const log of extraLogs) console.log(`[${new Date().toLocaleTimeString()}] ⚡ ${log}`);
+              } finally {
+                await closeStuckModals();
+              }
             }
           });
         }

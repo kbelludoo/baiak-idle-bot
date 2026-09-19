@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { TelemetryStore } from '../src/telemetry';
+import { TelemetryStore, parseGoldAmount, normalizeStamina } from '../src/telemetry';
 
 describe('TelemetryStore (Proteção contra Regressão e Rastreamento de Origem)', () => {
   it('não declara online antes da abertura do WebSocket', () => {
@@ -97,6 +97,52 @@ describe('TelemetryStore (Proteção contra Regressão e Rastreamento de Origem)
     expect(store.hunt).toBe('asura-lair');
     expect(store.getSources().gold).toBe('websocket');
     expect(store.getSources().stamina).toBe('websocket');
+  });
+
+  it('parseGoldAmount lê k/kk/m, pt-BR e data-gold sem zerar', () => {
+    expect(parseGoldAmount('1.5k')).toBe(1500);
+    expect(parseGoldAmount('2,5kk')).toBe(2500000);
+    expect(parseGoldAmount('1.234')).toBe(1234);
+    expect(parseGoldAmount('1.234.567')).toBe(1234567);
+    expect(parseGoldAmount('850k')).toBe(850000);
+    expect(parseGoldAmount('12kk')).toBe(12000000);
+    expect(parseGoldAmount('')).toBeNull();
+    expect(parseGoldAmount(null)).toBeNull();
+    const s = new TelemetryStore();
+    s.updateGold(5000, 'dom');
+    expect(s.gold).toBe(5000);
+    // leitura em branco nunca zera saldo conhecido
+    s.updateGold('', 'dom');
+    expect(s.gold).toBe(5000);
+    s.updateGold(0, 'dom');
+    expect(s.gold).toBe(5000);
+    // sufixo via string funciona
+    s.updateGold('2.5k', 'dom');
+    expect(s.gold).toBe(2500);
+  });
+
+  it('normalizeStamina cobre relógio, XhYm, % e ignora 42:00', () => {
+    expect(normalizeStamina('41:15')).toBe('41:15');
+    expect(normalizeStamina('38h 15m')).toBe('38:15');
+    expect(normalizeStamina('85%')).toBe('85%');
+    expect(normalizeStamina('42:00')).toBeNull();
+    expect(normalizeStamina('—')).toBeNull();
+    expect(normalizeStamina(0.5)).toBe('21:00');
+    const s = new TelemetryStore();
+    s.updateStamina('38h 15m', 'dom');
+    expect(s.stamina).toBe('38:15');
+    s.updateStamina('42:00', 'dom');
+    expect(s.stamina).toBe('38:15');
+  });
+
+  it('ingere hunt/gold de qualquer tipo de frame WS (joined/room/update)', () => {
+    const s = new TelemetryStore();
+    s.ingestWebSocketFrame('joined', { huntId: 'refiner-cave', gold: 123456 });
+    expect(s.hunt).toBe('refiner-cave');
+    expect(s.gold).toBe(123456);
+    s.ingestWebSocketFrame('update', { player: { stamina: '30:00', level: 120 } });
+    expect(s.stamina).toBe('30:00');
+    expect(s.level).toBe(120);
   });
 
   it('gera snapshot com campo sources detalhado', () => {

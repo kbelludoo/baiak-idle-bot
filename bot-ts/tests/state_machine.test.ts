@@ -9,12 +9,27 @@ import {
 
 describe('State Machine & Stamina Transitions', () => {
   it('converte stamina em formato relógio e percentual com precisão', () => {
-    expect(staminaToMinutes('42:00')).toBe(2520);
+    // 42:00 é placeholder pré-sync do HUD — desconhecido, nunca força treino/hunt
+    expect(staminaToMinutes('42:00')).toBeNull();
     expect(staminaToMinutes('06:00')).toBe(360);
     expect(staminaToMinutes('100%')).toBe(2520);
     expect(staminaToMinutes('50%')).toBe(1260);
     expect(staminaToMinutes('15%')).toBe(378);
     expect(staminaToMinutes('—')).toBeNull();
+  });
+
+  it('converte formatos estendidos do jogo (Xh Ym, HH:MM:SS, minutos)', () => {
+    expect(staminaToMinutes('38h 15m')).toBe(2295);
+    expect(staminaToMinutes('41:15:00')).toBe(2475);
+    expect(staminaToMinutes('12h')).toBe(720);
+    expect(staminaToMinutes('Stamina 06:18 restante')).toBe(378);
+    expect(staminaToMinutes('2520')).toBeNull(); // == 42:00 placeholder
+    expect(staminaToMinutes('0:00')).toBe(0);
+  });
+
+  it('placeholder desconhecido nunca força treino', () => {
+    expect(evaluateStaminaTransition('42:00', false, true).action).toBe('continue_hunt');
+    expect(evaluateStaminaTransition('—', false, true).action).toBe('continue_hunt');
   });
 
   it('detecta corretamente stamina <= 15%', () => {

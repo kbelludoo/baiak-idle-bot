@@ -5,12 +5,28 @@
  * (que rodam em fila serializada com timeouts estritos).
  */
 
+export type ActionLane = 'hunt' | 'gear' | 'extras';
+
 export interface ActionTask<T = any> {
   id: string;
   name: string;
   priority: number; // Maior = mais prioritário (ex: 10 para reconexão, 5 para hunt, 1 para equip)
   timeoutMs: number;
   run: () => Promise<T>;
+  /**
+   * Faixa da ação. Só observabilidade + regra de substituição: duas ações na
+   * mesma lane com o mesmo `id` se substituem; lanes diferentes nunca se
+   * canibalizam (antes o dedup era por `name`: `spell`, `extras`, `equip`,
+   * `hunt` se matavam — `extras` 1 job/20s travava boss/prey por minutos).
+   */
+  lane?: ActionLane;
+}
+
+function laneOf(task: ActionTask): ActionLane {
+  if (task.lane) return task.lane;
+  if (task.name === 'hunt' || task.name === 'force-hunt' || task.name === 'treino' || task.name === 'boss') return 'hunt';
+  if (task.name === 'spell' || task.name === 'potion' || task.name === 'equip' || task.name === 'lootfilter' || task.name === 'autosell') return 'gear';
+  return 'extras';
 }
 
 export class ActionQueue {
@@ -20,8 +36,13 @@ export class ActionQueue {
   private isProcessing: boolean = false;
 
   enqueue<T>(task: ActionTask<T>): boolean {
-    // Evita tarefas duplicadas com o mesmo nome em espera ou em execução
-    if (this.queue.some((t) => t.name === task.name) || (this.inFlight && this.inFlight.name === task.name)) {
+    const lane = laneOf(task);
+    task.lane = lane;
+    // Dedup por (lane,id): a mesma ação não entra 2x, mas ações de lanes
+    // diferentes ou ids diferentes nunca se canibalizam. Ex: `spell_picker`
+    // (gear) não mata `spell_party` (gear, id diferente) nem `extras`.
+    if (this.queue.some((t) => t.lane === lane && t.id === task.id) ||
+        (this.inFlight && this.inFlight.lane === lane && this.inFlight.id === task.id)) {
       return false;
     }
     this.queue.push(task);
@@ -41,6 +62,13 @@ export class ActionQueue {
 
   get pendingCount(): number {
     return this.queue.length + (this.inFlight ? 1 : 0);
+  }
+
+  get pendingByLane(): Record<ActionLane, number> {
+    const out: Record<ActionLane, number> = { hunt: 0, gear: 0, extras: 0 };
+    for (const t of this.queue) out[laneOf(t)] += 1;
+    if (this.inFlight) out[laneOf(this.inFlight)] += 1;
+    return out;
   }
 
   get currentAction(): string | null {
@@ -80,21 +108,62 @@ export class ActionQueue {
 
 /**
  * Lógica pura de transição de stamina e treino.
+ * Aceita todos os formatos do jogo (H:MM, HH:MM:SS, Xh Ym, NN%, minutos).
+ * Placeholder 42:00/2520 retorna null (desconhecido, nunca força treino).
  */
-export function staminaToMinutes(staminaStr: string): number | null {
-  if (!staminaStr || staminaStr === '—' || staminaStr === '-') return null;
-  const mClock = staminaStr.match(/^(\d{1,2}):(\d{2})$/);
-  if (mClock) {
-    const hours = parseInt(mClock[1], 10);
-    const mins = parseInt(mClock[2], 10);
-    return hours * 60 + mins;
+export function staminaToMinutes(staminaStr: string | number | null | undefined): number | null {
+  if (staminaStr === undefined || staminaStr === null) return null;
+  if (typeof staminaStr === 'number') {
+    if (!Number.isFinite(staminaStr)) return null;
+    if (staminaStr <= 1.05 && staminaStr > 0) return Math.floor(staminaStr * 2520);
+    if (staminaStr > 1 && staminaStr <= 2520) {
+      if (staminaStr === 2520) return null;
+      return Math.floor(staminaStr);
+    }
+    return null;
   }
-  const mPct = staminaStr.match(/^(\d{1,3})\s*%$/);
-  if (mPct) {
-    const pct = parseInt(mPct[1], 10);
-    // 100% de stamina = 42h = 2520 min
-    return Math.floor((pct / 100) * 2520);
+  const raw = String(staminaStr).trim();
+  if (!raw || raw === '—' || raw === '–' || raw === '-') return null;
+  // canônico H:MM
+  let m = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (m) {
+    const h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
+    if (h === 42 && mi === 0) return null;
+    return h * 60 + mi;
   }
+  // HH:MM:SS
+  m = raw.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+  if (m) {
+    const h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
+    if (h === 42 && mi === 0) return null;
+    return h * 60 + mi;
+  }
+  // percentual
+  m = raw.match(/^(\d{1,3})\s*%$/);
+  if (m) return Math.floor((parseInt(m[1], 10) / 100) * 2520);
+  // embutido: extrai primeiro token válido de strings longas ("Stamina 38h 15m", "41:15 restante")
+  const pct = raw.match(/(\d{1,3})\s*%/);
+  if (pct) return Math.floor((parseInt(pct[1], 10) / 100) * 2520);
+  const clock = raw.match(/(\d{1,2})\s*:\s*(\d{2})/);
+  if (clock) {
+    const h = parseInt(clock[1], 10), mi = parseInt(clock[2], 10);
+    if (h <= 42 && mi <= 59 && !(h === 42 && mi === 0)) return h * 60 + mi;
+  }
+  const mH = raw.match(/(\d{1,2})\s*h/i);
+  const mM = raw.match(/(\d{1,3})\s*m/i);
+  if (mH || mM) {
+    const h = mH ? parseInt(mH[1], 10) : 0;
+    const mi = mM ? parseInt(mM[1], 10) : 0;
+    if (h === 42 && mi === 0) return null;
+    if (h <= 42 && mi <= 59) return h * 60 + mi;
+  }
+  const mMin = raw.match(/^(\d{2,4})\s*(?:min)?$/i);
+  if (mMin) {
+    const mins = parseInt(mMin[1], 10);
+    if (mins === 2520) return null;
+    if (mins >= 0 && mins <= 2520) return mins;
+  }
+  if (/^(0|empty|vazia)$/i.test(raw)) return 0;
   return null;
 }
 
