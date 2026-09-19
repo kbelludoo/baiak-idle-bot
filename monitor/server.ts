@@ -59,7 +59,7 @@ function publicCors() {
   return {
     'Access-Control-Allow-Origin': publicOrigin,
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, ngrok-skip-browser-warning',
     Vary: 'Origin',
   };
 }
