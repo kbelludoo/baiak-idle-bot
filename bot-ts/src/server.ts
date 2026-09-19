@@ -53,6 +53,22 @@ export function startServer(port: number, host: string, ctx: ServerContext) {
         return isLoopback;
       };
 
+      // Healthcheck
+      if (path === '/healthz' || path === '/health') {
+        const state: any = ctx.getState();
+        const online = !!state?.online;
+        const body = JSON.stringify({
+          ok: online,
+          online,
+          connected: online,
+          last_update: state?.last_update || null,
+        });
+        return new Response(body, {
+          status: online ? 200 : 503,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        });
+      }
+
       // API: Status
       if (path === '/api/status' || path === '/api/status/') {
         const diskStatus = readJsonFile(ctx.dataDir, 'status.json');

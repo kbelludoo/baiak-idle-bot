@@ -1,21 +1,58 @@
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import type { BotConfig } from './types';
 
 export function loadDotenv(path?: string): void {
-  const p = path || join(process.cwd(), '.env');
-  if (!existsSync(p)) return;
+  const candidates = [
+    path,
+    join(process.cwd(), '.env'),
+    join(process.cwd(), 'bot-ts', '.env'),
+    join(import.meta.dir, '..', '.env'),
+  ].filter(Boolean) as string[];
+
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      try {
+        const raw = readFileSync(p, 'utf-8');
+        for (const line of raw.split('\n')) {
+          const t = line.trim();
+          if (!t || t.startsWith('#') || !t.includes('=')) continue;
+          const idx = t.indexOf('=');
+          const key = t.slice(0, idx).trim();
+          const val = t.slice(idx + 1).trim();
+          if (key && !(key in process.env)) process.env[key] = val;
+        }
+        break;
+      } catch (_) {}
+    }
+  }
+}
+
+export function findDefaultChromePath(): string {
+  if (process.env.CHROME_PATH && existsSync(process.env.CHROME_PATH)) {
+    return process.env.CHROME_PATH;
+  }
+  const candidates = [
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  // Detecta Chromium instalado no cache do Playwright se disponível
   try {
-    const raw = readFileSync(p, 'utf-8');
-    for (const line of raw.split('\n')) {
-      const t = line.trim();
-      if (!t || t.startsWith('#') || !t.includes('=')) continue;
-      const idx = t.indexOf('=');
-      const key = t.slice(0, idx).trim();
-      const val = t.slice(idx + 1).trim();
-      if (key && !(key in process.env)) process.env[key] = val;
+    const pwDir = join(process.env.HOME || '', '.cache/ms-playwright');
+    if (existsSync(pwDir)) {
+      const dirs = readdirSync(pwDir).filter(d => d.startsWith('chromium-'));
+      for (const d of dirs.sort().reverse()) {
+        const p = join(pwDir, d, 'chrome-linux64', 'chrome');
+        if (existsSync(p)) return p;
+      }
     }
   } catch (_) {}
+  return '/usr/bin/chromium';
 }
 
 function envFlag(name: string, def: boolean): boolean {
@@ -110,8 +147,8 @@ export function parseConfig(): BotConfig {
     autoPrey,
     autoExtras,
     screenshot: envInt('SCREENSHOT_INTERVAL', 0) > 0,
-    userDataDir: getVal('--user-data-dir', env.USER_DATA_DIR || '/app/data/chrome_profile'),
-    chromePath: getVal('--chrome-path', env.CHROME_PATH || '/usr/bin/chromium'),
+    userDataDir: getVal('--user-data-dir', env.USER_DATA_DIR || (existsSync('/app') ? '/app/data/chrome_profile' : join(process.cwd(), 'data', 'chrome_profile'))),
+    chromePath: getVal('--chrome-path', env.CHROME_PATH || findDefaultChromePath()),
     targetUrl: env.TARGET_URL || 'https://baiakidle.com/jogar/',
     token: getVal('--token', env.BAIAK_TOKEN || ''),
     reduceVfx: has('--no-reduce-vfx') ? false : envFlag('REDUCE_VFX', true),

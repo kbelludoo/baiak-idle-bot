@@ -9,9 +9,15 @@ export interface WatchdogResult {
 export class Watchdog {
   private lastWsFrameTime = Date.now();
   private wsConnected = false;
+  private everConnected = false;
+  private bootStartedAt = Date.now();
+  private lastRecoveryAt = 0;
+  private recoveryAttempts = 0;
 
   public onWsOpen() {
     this.wsConnected = true;
+    this.everConnected = true;
+    this.recoveryAttempts = 0;
     this.lastWsFrameTime = Date.now();
   }
 
@@ -43,7 +49,8 @@ export class Watchdog {
       // Não injeta input sintético. O modo idle do bot Python deliberadamente
       // não movimenta mouse/teclado, e o watchdog não deve criar esse sinal.
       // Executa apenas checagem de tela de desconexão e modais no DOM.
-      const domCheck = await page.evaluate(() => {
+      const domCheck = await Promise.race([
+        page.evaluate(() => {
         let reconnected = false;
         let reason = '';
         let cleared = 0;
@@ -86,8 +93,12 @@ export class Watchdog {
           reason = 'CLICOU_BOTAO_RECONEXAO_SOLTO';
         }
 
-        return { reconnected, reason, cleared };
-      });
+          return { reconnected, reason, cleared };
+        }),
+        new Promise<{ reconnected: boolean; reason: string; cleared: number }>((resolve) =>
+          setTimeout(() => resolve({ reconnected: false, reason: 'DOM_TIMEOUT', cleared: 0 }), 5000)
+        ),
+      ]);
 
       if (domCheck.reconnected) {
         result.reconnected = true;
@@ -104,31 +115,54 @@ export class Watchdog {
         result.reason = 'URL_FORA_DE_JOGAR';
       }
 
+      // O primeiro handshake pode levar 45–60s nas VPS. Não recarregue a
+      // página nesse intervalo: isso interrompe o socket antes de nascer.
+      if (!this.everConnected && now - this.bootStartedAt < 75000) {
+        return result;
+      }
+
       // 3. Checa inatividade do WebSocket (> 20s sem pacotes)
       if (!this.wsConnected || (now - this.lastWsFrameTime > 20000)) {
         const inactiveSec = Math.round((now - this.lastWsFrameTime) / 1000);
-        console.log(`[WATCHDOG] ⚠️ Conexão inativa há ${inactiveSec}s. Tentando reconectar...`);
+        if (now - this.lastRecoveryAt < 15000) return result;
+        this.lastRecoveryAt = now;
+        this.recoveryAttempts += 1;
+        if (this.recoveryAttempts > 3) {
+          console.error('[WATCHDOG] 🧯 Três tentativas sem WebSocket; reiniciando processo limpo.');
+          process.exit(1);
+        }
+        console.log(`[WATCHDOG] ⚠️ Conexão inativa há ${inactiveSec}s. Tentativa ${this.recoveryAttempts}...`);
 
         // Primeiro tenta clicar no botão de reconectar nativo do jogo
-        const clicked = await page.evaluate(() => {
+        const clicked = await Promise.race([
+          page.evaluate(() => {
           const retryBtn = document.getElementById('conn-retry');
           if (retryBtn) {
             retryBtn.click();
             return true;
           }
           return false;
-        }).catch(() => false);
+          }).catch(() => false),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000)),
+        ]);
 
         if (clicked) {
           result.reconnected = true;
           result.reason = 'CLICOU_CONN_RETRY_WATCHDOG';
-        } else if (now - this.lastWsFrameTime > 35000) {
-          // Se não há botão ou não reconectou em 35s, recarrega a página para acionar o reconnect nativo do Colyseus
-          console.log(`[WATCHDOG] ⚠️ Recarregando página para acionar reconexão nativa...`);
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
-          result.reconnected = true;
-          result.reason = 'RELOAD_PAGINA_RECONNECT_NATIVO';
-          this.lastWsFrameTime = now;
+        } else {
+          // Uma única recarga controlada é preferível a manter um renderer
+          // travado. Se o driver não responder, o Docker deve recriar tudo.
+          console.log(`[WATCHDOG] ⚠️ Sem botão nativo; recarregando a página...`);
+          try {
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
+            result.reconnected = true;
+            result.reason = 'RELOAD_PAGINA_RECONNECT_NATIVO';
+            this.lastWsFrameTime = Date.now();
+            this.bootStartedAt = Date.now();
+          } catch (reloadErr: any) {
+            console.error(`[WATCHDOG] 🧯 Reload sem resposta: ${reloadErr?.message || reloadErr}`);
+            process.exit(1);
+          }
         }
       }
 

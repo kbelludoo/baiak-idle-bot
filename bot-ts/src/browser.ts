@@ -219,10 +219,24 @@ export async function launchBrowser(
   // Inicia sessão CDP nativa
   const cdp = await page.createCDPSession();
 
-  // Monitoramento de WebSocket e Interceptação de Frames Colyseus
+  // Monitoramento de WebSocket e Interceptação de Frames Colyseus.
+  // A página também abre sockets de analytics/telemetria; eles não podem
+  // marcar o bot como online nem derrubar o estado quando fecham.
+  const gameSocketIds = new Set<string>();
+  const isGameSocket = (url: string) => /baiakidle\.com/i.test(url || '');
   await cdp.send('Network.enable').catch(() => {});
-  cdp.on('Network.webSocketCreated', () => onWsOpen());
+  cdp.on('Network.webSocketCreated', (params: any) => {
+    const requestId = String(params?.requestId || '');
+    const url = String(params?.url || '');
+    if (requestId && isGameSocket(url)) {
+      gameSocketIds.add(requestId);
+      console.log(`[*] [WS-TS] Socket do jogo criado: ${url.slice(0, 120)}`);
+      onWsOpen();
+    }
+  });
   cdp.on('Network.webSocketFrameReceived', (params: any) => {
+    const requestId = String(params?.requestId || '');
+    if (!gameSocketIds.has(requestId)) return;
     onWsFrame();
     if (onWsPayload && params?.response?.payloadData) {
       try {
@@ -233,7 +247,12 @@ export async function launchBrowser(
       } catch (_) {}
     }
   });
-  cdp.on('Network.webSocketClosed', () => onWsClose());
+  cdp.on('Network.webSocketClosed', (params: any) => {
+    const requestId = String(params?.requestId || '');
+    if (!gameSocketIds.has(requestId)) return;
+    gameSocketIds.delete(requestId);
+    onWsClose();
+  });
 
   // Captura de Screencast contínua em sessão CDP isolada (para não afogar chamadas de evaluate)
   if (config.stream) {
