@@ -93,9 +93,9 @@
     const pt = (pctEl.textContent || "").trim();
     if (pt) res.stamina_pct = pt;
   }
-  // Não invente stamina máxima quando o HUD ainda não expôs o valor.
-  // `null` permite ao backend distinguir "sem leitura" de 42:00 real.
-  res.stamina = staminaFound || null;
+  // O HUD renderiza 42:00 como placeholder antes da sincronização.
+  // Sem uma leitura real, não podemos tratar esse placeholder como stamina cheia.
+  res.stamina = staminaFound === "42:00" ? null : (staminaFound || null);
 
   // --- EXTRAÇÃO ROBUSTA DE PARTY MEMBERS ---
   res.partyMembers = [];

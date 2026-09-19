@@ -901,7 +901,11 @@ def main():
 
                     // Extrai Stamina
                     const stamEl = document.getElementById('stamina-time');
-                    if (stamEl) res.stamina = stamEl.textContent.trim();
+                    if (stamEl) {
+                        const staminaText = stamEl.textContent.trim();
+                        // 42:00 é o placeholder do HUD antes da sincronização real.
+                        if (staminaText !== '42:00') res.stamina = staminaText;
+                    }
 
                     // Extrai Gold (busca nos saldos ou elementos do HUD)
                     const goldEl = document.getElementById('gold-count') || document.querySelector('.mk-goldamt, .ac-wallet-val, .wallet, .bp-wallet b, .gold, [data-gold]');
@@ -1340,7 +1344,7 @@ def main():
                     player_level = state["level"]
                 if state.get("gold") is not None:
                     player_gold = state["gold"]
-                if state.get("stamina"):
+                if state.get("stamina") and str(state["stamina"]).strip() != "42:00":
                     player_stamina = state["stamina"]
                 if state.get("partySlotsCount"):
                     party_slots = state["partySlotsCount"]
@@ -1355,7 +1359,7 @@ def main():
                     player_level = hud["level"]
                 if hud.get("gold") is not None:
                     player_gold = hud["gold"]
-                if hud.get("stamina"):
+                if hud.get("stamina") and str(hud["stamina"]).strip() != "42:00":
                     player_stamina = hud["stamina"]
                 if hud.get("analyzers"):
                     latest_analyzers = hud["analyzers"]
