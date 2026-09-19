@@ -55,9 +55,11 @@ export function createTrpcClient(token: string, base: string = TRPC_BASE): TrpcC
     'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
   };
   if (token) {
-    // O jogo envia minúsculo; alguns edges aceitam os dois — manda os dois.
+    // Header names are case-insensitive. Sending both spellings makes
+    // undici/Node emit duplicate Authorization fields, which Cloudflare
+    // rejects as an unauthenticated request. Keep exactly one canonical
+    // header, matching the browser bundle.
     headers['authorization'] = `Bearer ${token}`;
-    headers['Authorization'] = `Bearer ${token}`;
   }
 
   return {

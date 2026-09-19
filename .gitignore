@@ -6,19 +6,11 @@
 !**/.env.example
 **/.env.local
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
-env/
-ENV/
-
 # Logs / dumps locais
 *.log
-bot/data/*
-!bot/data/dashboard.html
+bot-ts/data/*
+bot-ts/data-ts/*
+!bot-ts/data/.gitkeep
 monitor/data/*
 !monitor/data/.gitkeep
 
