@@ -365,6 +365,8 @@ async function main() {
   let lastStatusWrite = 0;
   let lastTreinoTime = 0;
   let lastSpellGear = 0;
+  const spellSlotCooldown = new Map<number, number>();
+  const spellSlotState = new Map<number, string>();
   let lastPickerOpen = false;
   let lastWatchdogCheck = 0;
   let lastForceDebug = 0;
@@ -826,13 +828,18 @@ async function main() {
               if (!present.length) present = [0, 1];
               for (const sid of present) {
                 if (sid > 2) continue;
+                const last = spellSlotCooldown.get(sid) || 0;
+                if (now - last < 600000) continue;
                 const kit = slots[String(sid)] || {};
                 if (kit.ready) continue;
+                spellSlotCooldown.set(sid, Date.now());
                 const jobNeed = !kit.heal ? "heal" : !kit.mana ? "mana" : "aoe";
                 const job = !kit.heal || !kit.mana ? "helper" : "fill";
                 const spellRes = await safeEval<any>(pageRef, "spell", { ...spellArgs, need: jobNeed, job, slot: sid }, 10000);
                 lastGearSlot = sid;
                 applyHelperSnap(spellRes);
+                const snap = spellRes?.helper;
+                if (snap) spellSlotState.set(sid, JSON.stringify(snap));
                 if (spellRes && (spellRes.ok || spellRes.events)) {
                   console.log(`[${new Date().toLocaleTimeString()}] 🔮 [GEAR slot${sid}] ${JSON.stringify(spellRes.events || spellRes)}`);
                   break;
