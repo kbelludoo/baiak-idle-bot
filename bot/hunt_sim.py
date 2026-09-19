@@ -83,8 +83,9 @@ def simulate_hunt(
     if hid == STONE_ID:
         prior = max(prior, STONE_PRIOR)
     gold_kill = float(facts.get("goldKill") or 0) * prior
+    gold_h = kills_h * gold_kill * max(0.25, min(4.0, float(scale or 1.0)))
     exp_kill = float(facts.get("avgExp") or 0)
-    exp_h = kills_h * exp_kill
+    exp_h = kills_h * exp_kill * max(0.25, min(4.0, float(scale or 1.0)))
     incoming = float(facts.get("avgDmg") or 0) * alive / max(ttk, 0.25)
     sustain = max(1, level) * (18 if int(magic.get("heal") or 0) else 8)
     if int(magic.get("power") or 0) <= 0:
@@ -130,8 +131,8 @@ def rank_hunts(
         sim = simulate_hunt(hid, level, magic, scale)
         if sim:
             out.append(sim)
-    # Prioridade absoluta: SOBREVIVÊNCIA (can_tank) + MAIOR XP/HORA
-    out.sort(key=lambda s: (s["can_tank"], s["exp_h"], s["gold_h"]), reverse=True)
+    # Prioridade de simulação: SOBREVIVÊNCIA (can_tank) + MAIOR LUCRO (gold_h) + XP/h
+    out.sort(key=lambda s: (s["can_tank"], s["gold_h"], s.get("exp_h", 0)), reverse=True)
     return out
 
 
@@ -146,10 +147,17 @@ def recommend_switch(
     """Melhor hunt simulada para MAIOR LEVEL NO MENOR TEMPO (rush de XP)."""
     banned = banned or set()
     ranked = [s for s in rank_hunts(ids, level, magic, scale) if s["id"] not in banned]
-    if not ranked:
-        return None
+    ready = gold_farm_ready(magic)
     tankable = [s for s in ranked if s["can_tank"]]
-    best = tankable[0] if tankable else ranked[0]
+    stone = next((s for s in ranked if s["id"] == STONE_ID and s["can_tank"]), None)
+    if ready and stone and STONE_ID in ids:
+        best = stone
+    else:
+        best = tankable[0] if tankable else ranked[0]
+        if not ready and best["id"] == STONE_ID:
+            alt = next((s for s in tankable if s["id"] != STONE_ID), None)
+            if alt:
+                best = alt
 
     live = next((s for s in ranked if s["id"] == live_id), None)
     live_exp = float(live["exp_h"]) if live else 0.0
@@ -166,5 +174,5 @@ def recommend_switch(
         "clearly_better": bool(clearly and best["can_tank"]),
         "can_tank": bool(best["can_tank"]),
         "sim": best,
-        "ready": True,
+        "ready": ready,
     }
