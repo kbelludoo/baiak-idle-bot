@@ -10,8 +10,8 @@
   const state = {
     level: 60,
     gold: 0,
-    stamina: "42:00",
-    stamina_pct: "100%",
+    stamina: null,
+    stamina_pct: null,
     hunt: "",
     last_hunt: "",
     wave: "",

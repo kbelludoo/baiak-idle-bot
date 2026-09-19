@@ -579,7 +579,8 @@ def main():
                 "character": char_name,
                 "level": top_level,
                 "gold": player_gold,
-                "stamina": player_stamina or "42:00",
+                # Sem leitura não significa stamina cheia; mantenha desconhecida.
+                "stamina": player_stamina,
                 "hunt": current_hunt,
                 "last_hunt": profiler.last_played_name or current_hunt,
                 "last_hunt_id": profiler.last_played_id,
@@ -740,9 +741,14 @@ def main():
                             except Exception:
                                 pass
                         # Stamina parsing flexível (int minutos, float 0..1, ou string HH:MM)
-                        s_val = pay.get("stamina") or pay.get("staminaMinutes")
+                        s_val = pay.get("stamina") if "stamina" in pay else pay.get("staminaMinutes")
                         if s_val is None and isinstance(pay.get("player"), dict):
-                            s_val = pay["player"].get("stamina") or pay["player"].get("staminaMinutes")
+                            player_payload = pay["player"]
+                            s_val = (
+                                player_payload.get("stamina")
+                                if "stamina" in player_payload
+                                else player_payload.get("staminaMinutes")
+                            )
                         if s_val is not None:
                             if isinstance(s_val, (int, float)):
                                 s_mins = int(s_val * 2520) if s_val <= 1.0 else int(s_val)
@@ -764,9 +770,11 @@ def main():
 
             ws.on("framereceived", on_frame)
             def on_close():
-                nonlocal ws_connected, last_ws_close_time, active_ws, online_connected_start, ws_disconnect_count, last_ws_disconnect_at
+                nonlocal ws_connected, last_ws_close_time, active_ws, online_connected_start, ws_disconnect_count, last_ws_disconnect_at, player_stamina
                 if active_ws == ws:
                     ws_connected = False
+                    # O valor anterior não é confiável enquanto a sessão está caída.
+                    player_stamina = None
                     last_ws_close_time = time.time()
                     last_ws_disconnect_at = last_ws_close_time
                     ws_disconnect_count += 1
