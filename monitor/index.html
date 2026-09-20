@@ -690,6 +690,7 @@ const OVERVIEW_PATH = '/api/overview';
 const API_ENDPOINTS = [OVERVIEW_PATH, LIVE_API + OVERVIEW_PATH];
 try { localStorage.setItem('baiak-live-api', LIVE_API); } catch (_) {}
 const levelHistory = {};
+const maxObservedLevels = {};
 const pendingHuntSelections = {};
 const huntCategorySelections = {};
 let historyWindowHours = 1;
@@ -899,11 +900,6 @@ function parseHuntMetric(value) {
 function huntMetricValue(status, huntId, category) {
   const sources = [];
   if (status) sources.push(status);
-  // Inclui também os dados coletados pela frota inteira se disponíveis
-  const allBots = window.latestFleetData?.bots || {};
-  for (const b of Object.values(allBots)) {
-    if (b?.status && b.status !== status) sources.push(b.status);
-  }
 
   const keys = category === 'xp'
     ? ['xpPerHour', 'xp_per_hour', 'avg_xp_h', 'xp_h', 'xp_h_display']
@@ -980,7 +976,7 @@ function renderHuntPicker(botId, status, isForced) {
       </div>
     </div>
     <div class="hunt-control-row">
-      <select id="hunt-select-${botId}" class="hunt-select" aria-label="Escolher hunt por ${categoryLabel}" onchange="pendingHuntSelections['${botId}'] = this.value">${renderHuntOptions(status.last_hunt_id || status.force_hunt_id, isForced, botId, status, category)}</select>
+      <select id="hunt-select-${botId}" class="hunt-select" aria-label="Escolher hunt por ${categoryLabel}" onchange="pendingHuntSelections['${botId}'] = this.value">${renderHuntOptions(status.selected_hunt_id || status.last_hunt_id || status.force_hunt_id, isForced, botId, status, category)}</select>
       <button class="btn-hunt" id="btn-hunt-${botId}" onclick="changeHunt('${botId}')">Mudar Hunt</button>
     </div>
     <div class="hunt-picker-note">Lista ordenada por ${categoryLabel}. A troca só acontece após finalizar o estágio atual.</div>
@@ -1000,24 +996,27 @@ function setHuntCategory(botId, category) {
 function huntSection(id, s, decision, isForced) {
   const stage = huntStageInfo(s);
   const huntName = esc(huntNameWithoutStage(stage.raw || s.last_hunt || s.hunt || '—'));
-  const mode = isForced ? '🎮 ESCOLHA MANUAL' : '🎮 ÚLTIMA HUNT';
+  const mode = '🎮 ESCOLHA MANUAL';
+  const decisionText = s.hunt_control === 'manual'
+    ? (s.pending_hunt_id ? `Aguardando finalizar o estágio para trocar para ${s.pending_hunt_name || s.pending_hunt_id}` : 'Alvo fixado pelo jogador')
+    : (decision.reason || 'Telemetria em modo leitura');
   const stageBadge = stage.label ? `<span class="hunt-stage">ESTÁGIO ${esc(stage.label)}</span>` : '';
   const pending = s.pending_hunt_id ? `<div class="hunt-pending">⏳ Troca solicitada para <b>${esc(s.pending_hunt_name || s.pending_hunt_id)}</b>. A hunt atual será finalizada antes da troca.</div>` : '';
   if (PUBLIC_MODE) {
     return `<div class="hunt-section hunt-readonly">
       <div><div class="hunt-label">HUNT ATIVA</div><div class="hunt-curr-info"><div class="hunt-curr-name">${huntName}</div>${stageBadge}</div>${pending}</div>
-      <div><span class="mode-pill ${isForced ? 'forced' : 'auto'}">${mode}</span><small>${esc(decision.reason || 'Telemetria em modo leitura')}</small></div>
+      <div><span class="mode-pill forced">${mode}</span><small>${esc(decisionText)}</small></div>
     </div>`;
   }
   return `<div class="hunt-section">
     <div class="hunt-top-bar">
       <div class="hunt-curr-info"><span style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;">HUNT ATIVA:</span><span class="hunt-curr-name">${huntName}</span>${stageBadge}</div>
-      <span class="mode-pill ${isForced ? 'forced' : 'auto'}">${mode}</span>
+      <span class="mode-pill forced">${mode}</span>
     </div>
     ${renderHuntPicker(id, s, isForced)}
     ${pending}
     <span class="hunt-msg" id="hunt-msg-${id}"></span>
-    <div style="color:var(--muted);font-size:10px;margin-top:2px;">${esc(decision.reason || 'Escolha manual ativa')}</div>
+    <div style="color:var(--muted);font-size:10px;margin-top:2px;">${esc(decisionText)}</div>
   </div>`;
 }
 
@@ -1029,7 +1028,13 @@ function card(id, b) {
   const sessionMetrics = s.session_metrics || {};
   const d = s.hunt_decision || {};
   const m = s.hunt_matrix?.[s.last_hunt_id] || s.hunt_matrix?.[Object.keys(s.hunt_matrix || {})[0]] || {};
-  const level = Number(s.level) || 0;
+  const partyLevels = (s.party_members || []).map(m => Number(m.level) || 0).filter(lvl => lvl > 0);
+  const rawStatusLevel = Number(s.level) || 0;
+  const bestCandidateLevel = Math.max(rawStatusLevel, ...partyLevels, 0);
+  if (bestCandidateLevel > (maxObservedLevels[id] || 0)) {
+    maxObservedLevels[id] = bestCandidateLevel;
+  }
+  const level = maxObservedLevels[id] || bestCandidateLevel || 0;
   const rate = Number.isFinite(Number(s.level_per_hour)) ? Number(s.level_per_hour)
     : (typeof s._levelRate === 'number' ? s._levelRate : null);
   const damage = an.damage || {};
@@ -1057,7 +1062,7 @@ function card(id, b) {
   const rawXpRate = selected.xp_per_hour ?? an.xp_per_hour;
   let parsedXpRate = parseHuntMetric(rawXpRate);
   if (!(parsedXpRate > 0)) {
-    parsedXpRate = huntMetricValue(s, s.last_hunt_id || s.force_hunt_id, 'xp') || liveXpPerHour;
+    parsedXpRate = huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'xp') || liveXpPerHour;
   }
   const displayXpHour = parsedXpRate > 0 ? `${formatXp(parsedXpRate)}/h` : 'Calculando…';
 
@@ -1065,7 +1070,7 @@ function card(id, b) {
   const rawLootRate = selected.loot_per_hour ?? an.loot_per_hour;
   let parsedLootRate = parseHuntMetric(rawLootRate);
   if (!(parsedLootRate > 0)) {
-    parsedLootRate = huntMetricValue(s, s.last_hunt_id || s.force_hunt_id, 'loot');
+    parsedLootRate = huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'loot');
   }
   const displayLootHour = parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : 'Calculando…';
 
