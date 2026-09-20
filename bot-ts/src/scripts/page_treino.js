@@ -21,6 +21,27 @@ async ({ want }) => {
     await sleep(300);
   };
 
+  if (want === "resume" || want === "hunt") {
+    if (!inTreino) return { ok: true, action: "ja_fora_treino", inTreino: false, wave, stamina: stam, events };
+    await closePickerIfNotTrain();
+    const waveTitle = document.getElementById("wave-title");
+    if (!waveTitle) return { ok: false, reason: "no-wave-title", inTreino: true, events };
+    waveTitle.click();
+    let tpMenu = null;
+    for (let i = 0; i < 14; i++) {
+      await sleep(120);
+      tpMenu = document.getElementById("teleport-menu");
+      if (tpMenu && !tpMenu.classList.contains("hidden")) break;
+    }
+    const huntsBtn = document.querySelector('#teleport-menu .tp-opt[data-tp="hunts"]')
+      || Array.from(document.querySelectorAll("#teleport-menu .tp-opt, button.tp-opt, [data-tp]"))
+        .find((b) => /^hunts?$/i.test((b.textContent || "").trim()));
+    if (!huntsBtn) return { ok: false, reason: "no-hunts-btn", inTreino: true, events };
+    huntsBtn.click();
+    events.push("abriu Hunts para retomar");
+    await sleep(450);
+    return { ok: true, action: "retomando_hunts", inTreino: false, wave: "Hunts", events };
+  }
   if (want !== "train") {
     return { ok: true, inTreino, wave, stamina: stam, pct: pctTxt, events };
   }

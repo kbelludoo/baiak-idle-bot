@@ -86,22 +86,12 @@ export class Watchdog {
         // Checa tela de desconexão (#conn-overlay / #conn-retry)
         const connOverlay = document.getElementById('conn-overlay');
         if (connOverlay && !connOverlay.classList.contains('hidden')) {
-          const retryBtn = document.getElementById('conn-retry') as HTMLElement | null;
+          const retryBtn = (document.getElementById('conn-retry') || connOverlay.querySelector('button')) as HTMLElement | null;
           if (retryBtn) {
             retryBtn.click();
             reconnected = true;
             reason = 'CLICOU_RECONECTAR';
           }
-        }
-
-        // Se houver algum botão solto de reconectar (ex: 'Reassumir aqui' ou 'Entrar de novo')
-        const anyRetry = Array.from(document.querySelectorAll('button')).find(b => 
-          /reassumir|entrar|reconectar|reconnect|retry|tentar/i.test(b.textContent || '')
-        ) as HTMLElement | undefined;
-        if (anyRetry && !reconnected) {
-          anyRetry.click();
-          reconnected = true;
-          reason = 'CLICOU_BOTAO_RECONEXAO_SOLTO';
         }
 
           return { reconnected, reason, cleared };
@@ -126,35 +116,43 @@ export class Watchdog {
         result.reason = 'URL_FORA_DE_JOGAR';
       }
 
-      // 3. Checa inatividade do WebSocket (> 75s sem pacotes).
-      // Farm estável gera poucos ROOM_DATA em farm lento; 45s recarregava a
-      // página no meio da hunt e matava o reconnectionToken (volta p/ Cidade,
-      // que o profiler contava como morte). 75s + 2 checagens consecutivas +
-      // cooldown 30s evita reload em falso sem perder queda real. Reload é o
-      // ÚLTIMO recurso: primeiro tenta o botão nativo do jogo.
+      // 3. Checa inatividade do WebSocket.
+      // O Colyseus client nativo do jogo tenta reconectar automaticamente com
+      // reconnectionToken (backoff 0s..16s). Recarregar antes disso invalida o
+      // token e causa "seat reservation expired". Damos tolerância de 35s
+      // quando desconectado e 90s em silêncio de frames.
       const inactiveMs = now - this.lastWsFrameTime;
-      if (!this.wsConnected || inactiveMs > 75000) {
+      const inactiveThreshold = !this.wsConnected ? 35000 : 90000;
+      if (inactiveMs > inactiveThreshold) {
         this.consecutiveInactive += 1;
-        if (this.consecutiveInactive < 2) return result;
+        if (this.consecutiveInactive < 3) return result;
         const inactiveSec = Math.round(inactiveMs / 1000);
         if (now - this.lastRecoveryAt < 30000) return result;
         this.lastRecoveryAt = now;
         this.recoveryAttempts += 1;
-        if (this.recoveryAttempts > 3) {
-          console.error('[WATCHDOG] 🧯 Três tentativas sem WebSocket; reiniciando processo limpo.');
-          process.exit(1);
+        if (this.recoveryAttempts > 5) {
+          console.warn('[WATCHDOG] ⚠️ Múltiplas tentativas sem WebSocket; reabrindo URL /jogar/ de forma limpa...');
+          this.recoveryAttempts = 0;
+          this.lastWsFrameTime = Date.now();
+          this.bootStartedAt = Date.now();
+          try {
+            await page.goto('https://baiakidle.com/jogar/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            result.reconnected = true;
+            result.reason = 'GOTO_JOGAR_WATCHDOG';
+          } catch (_) {}
+          return result;
         }
         console.log(`[WATCHDOG] ⚠️ Conexão inativa há ${inactiveSec}s. Tentativa ${this.recoveryAttempts}...`);
 
         // Primeiro tenta clicar no botão de reconectar nativo do jogo
         const clicked = await Promise.race([
           page.evaluate(() => {
-          const retryBtn = document.getElementById('conn-retry');
-          if (retryBtn) {
-            retryBtn.click();
-            return true;
-          }
-          return false;
+            const retryBtn = document.getElementById('conn-retry');
+            if (retryBtn) {
+              retryBtn.click();
+              return true;
+            }
+            return false;
           }).catch(() => false),
           new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000)),
         ]);
@@ -163,18 +161,16 @@ export class Watchdog {
           result.reconnected = true;
           result.reason = 'CLICOU_CONN_RETRY_WATCHDOG';
         } else {
-          // Uma única recarga controlada é preferível a manter um renderer
-          // travado. Se o driver não responder, o Docker deve recriar tudo.
+          // Uma única recarga controlada quando não há botão nativo
           console.log(`[WATCHDOG] ⚠️ Sem botão nativo; recarregando a página...`);
           try {
-            await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
             result.reconnected = true;
             result.reason = 'RELOAD_PAGINA_RECONNECT_NATIVO';
             this.lastWsFrameTime = Date.now();
             this.bootStartedAt = Date.now();
           } catch (reloadErr: any) {
-            console.error(`[WATCHDOG] 🧯 Reload sem resposta: ${reloadErr?.message || reloadErr}`);
-            process.exit(1);
+            console.warn(`[WATCHDOG] Reload timeout/aviso: ${reloadErr?.message || reloadErr}`);
           }
         }
       }

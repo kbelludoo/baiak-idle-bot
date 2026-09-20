@@ -103,28 +103,41 @@ async (target) => {
     }
   }
 
-  // Localiza gatilho de teleporte: wave-title ou botão com title/aria de teleporte
-  const waveTitle = document.getElementById("wave-title")
-    || document.querySelector("[title*='Teleporte' i], [aria-label*='Teleporte' i]");
-  if (!waveTitle) return { success: false, reason: "no-wave-title", dbg };
+  // Se o seletor já estiver aberto, aproveita direto sem re-abrir teleporte
+  const pickerDirect = document.getElementById("picker-modal");
+  const pickerAlreadyOpen = !!(pickerDirect && !pickerDirect.classList.contains("hidden") && visible(pickerDirect));
 
-  waveTitle.click();
-  let tpMenu = null;
-  tpMenu = await waitFor(() => {
-    const menu = document.getElementById("teleport-menu");
-    return menu && !menu.classList.contains("hidden") && visible(menu) ? menu : null;
-  });
-  dbg.hasTp = !!(tpMenu && !tpMenu.classList.contains("hidden"));
+  if (!pickerAlreadyOpen) {
+    // Localiza gatilho de teleporte: wave-title ou botão com title/aria de teleporte
+    // Fallbacks genéricos quando a build renomeia IDs (bs-hunt/stage-name).
+    const waveTitle = document.getElementById("wave-title")
+      || document.querySelector(".bs-hunt, .stage-name, .stage-name-line, [class*='wave-title' i], [class*='hunt-title' i]")
+      || document.querySelector("[title*='Teleporte' i], [aria-label*='Teleporte' i]");
+    if (!waveTitle) return { success: false, reason: "no-wave-title", dbg };
 
-  const tpBtn = document.querySelector('#teleport-menu .tp-opt[data-tp="hunts"]')
-    || Array.from(document.querySelectorAll("#teleport-menu .tp-opt, button, .tp-opt"))
-      .find((b) => /hunts|fases/i.test((b.textContent || "").trim()));
-  if (!tpBtn) return { success: false, reason: "no-hunts-btn", dbg, rows: 0, unlocked: [] };
-  tpBtn.click();
+    waveTitle.click();
+    let tpMenu = null;
+    tpMenu = await waitFor(() => {
+      const menu = document.getElementById("teleport-menu")
+        || document.querySelector("[class*='teleport-menu' i], [id*='teleport' i]");
+      return menu && !menu.classList.contains("hidden") && visible(menu) ? menu : null;
+    }, 2500, 150);
+    dbg.hasTp = !!(tpMenu && !tpMenu.classList.contains("hidden"));
+
+    const tpScope = tpMenu || document;
+    const tpBtn = document.querySelector('#teleport-menu .tp-opt[data-tp="hunts"]')
+      || (tpScope.querySelector ? tpScope.querySelector('.tp-opt[data-tp="hunts"]') : null)
+      || Array.from(tpScope.querySelectorAll('#teleport-menu .tp-opt, button, .tp-opt, [class*="tp-opt" i]'))
+        .find((b) => /hunts|fases/i.test((b.textContent || "").trim()))
+      || Array.from(document.querySelectorAll("button, [role='button']"))
+        .find((b) => /^(hunts|fases|caçar)$/i.test((b.textContent || "").trim()));
+    if (!tpBtn) return { success: false, reason: "no-hunts-btn", dbg, rows: 0, unlocked: [] };
+    tpBtn.click();
+  }
 
   let rows = [];
-  for (let i = 0; i < 40; i++) {
-    await sleep(200);
+  for (let i = 0; i < 8; i++) {
+    await sleep(100);
     await revealRows();
     const picker = document.getElementById("picker-modal");
     dbg.pickerTitle = (picker?.querySelector(".im-title")?.textContent || "").trim();
@@ -134,12 +147,17 @@ async (target) => {
       .find((b) => /^(todas|all)$/i.test((b.textContent || "").trim()));
     if (catAll && !catAll.classList.contains("active") && !catAll.classList.contains("on") && !catAll.classList.contains("sp-cat-on") && i <= 2) {
       catAll.click();
-      await sleep(150);
+      await sleep(100);
     }
 
     rows = Array.from(document.querySelectorAll(
-      "#picker-modal .hunt-grid .stage-row, #picker-modal .stage-row, .hunt-grid .stage-row"
+      "#picker-modal .hunt-grid .stage-row, #picker-modal .stage-row, .hunt-grid .stage-row, #picker-modal [class*='stage-row' i], #picker-modal [class*='hunt-row' i], #picker-modal [data-hunt]"
     ));
+    if (rows.length === 0) {
+      // Fallback: qualquer linha clicável dentro do picker com data-hunt ou texto de hunt.
+      const fallback = Array.from(document.querySelectorAll("#picker-modal [data-hunt], #picker-modal .im-card, #picker-modal button"));
+      if (fallback.length > 5) rows = fallback;
+    }
     if (rows.length > 5) break;
   }
 
@@ -205,8 +223,8 @@ async (target) => {
     return { success: false, rows: rows.length, unlocked, reason: "locked", dbg };
   }
 
-  const findGo = () => row.querySelector("button.stage-go")
-    || Array.from(row.querySelectorAll("button")).find((b) => /caçar|cacar|hunt|ir|escolher/i.test(b.textContent || ""));
+  const findGo = () => row.querySelector("button.stage-go, [class*='stage-go' i], [class*='go-btn' i]")
+    || Array.from(row.querySelectorAll("button, [role='button'], .btn")).find((b) => /caçar|cacar|hunt|ir|escolher|jogar|entrar/i.test(b.textContent || ""));
 
   let goBtn = findGo();
   // Só considera "já está lá" se o wave-title ao vivo também bate com o alvo.
@@ -221,8 +239,8 @@ async (target) => {
 
   if (!row.classList.contains("expanded")) {
     row.click();
-    await sleep(400);
-    goBtn = await waitFor(findGo, 5000, 200);
+    await sleep(250);
+    goBtn = await waitFor(findGo, 2500, 150);
   }
 
   if (goBtn && !goBtn.disabled) {

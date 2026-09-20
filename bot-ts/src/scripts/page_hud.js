@@ -96,6 +96,23 @@
       if (g != null) res.gold = g;
     }
   }
+  // Espelhos do kernel (ROOM_DATA/battery-save) quando o DOM mudou de ID.
+  if (res.gold == null) {
+    try {
+      const mg = window.__baiak_telemetry?.gold ?? window.__baiak_engine?.state?.gold;
+      if (typeof mg === "number" && Number.isFinite(mg) && mg >= 0) res.gold = Math.floor(mg);
+    } catch (_) {}
+  }
+  if (res.gold == null) {
+    const generic = document.querySelectorAll("[class*='gold' i], [id*='gold' i], [class*='wallet' i], [id*='wallet' i], [class*='coin' i], [class*='money' i]");
+    for (const gEl of Array.from(generic).slice(0, 20)) {
+      if (gEl.closest && gEl.closest("#picker-modal, #confirm-modal, .modal")) continue;
+      const t = (gEl.textContent || "").trim().slice(0, 40);
+      if (!t || t.length > 30) continue;
+      const g = parseGoldAmount(t);
+      if (g != null && g >= 0) { res.gold = g; break; }
+    }
+  }
 
   // --- EXTRAÇÃO ROBUSTA DE STAMINA ---
   const normStam = (s) => {
@@ -142,6 +159,20 @@
         staminaFound = normStam(el.textContent);
         if (staminaFound) break;
       }
+    }
+  }
+  if (!staminaFound && !staminaPctFound) {
+    try {
+      const ms = window.__baiak_telemetry?.stamina || window.__baiak_engine?.state?.stamina;
+      const cand = normStam(ms || "");
+      if (cand) staminaFound = cand;
+    } catch (_) {}
+  }
+  if (!staminaFound && !staminaPctFound) {
+    const genericS = document.querySelectorAll("[class*='stamina' i], [id*='stamina' i]");
+    for (const sEl of Array.from(genericS).slice(0, 10)) {
+      const cand = normStam(sEl.textContent) || normStam(sEl.getAttribute && (sEl.getAttribute("title") || ""));
+      if (cand) { staminaFound = cand; break; }
     }
   }
   const pctEl = document.getElementById("stamina-pct") || document.querySelector(".stamina-pct, .stamina-pct-val, [data-stamina-pct]");
@@ -255,6 +286,37 @@
         active: true
       });
     });
+  }
+
+  // Fallback 1b: espelhos do kernel (ROOM_DATA/party) quando o DOM mudou de classe.
+  if (res.partyMembers.length === 0) {
+    try {
+      const mirror = window.__baiak_state?.players || window.__baiak_state?.party || window.__baiak_engine?.party || [];
+      if (Array.isArray(mirror) && mirror.length > 0) {
+        mirror.slice(0, 12).forEach((p, i) => {
+          if (!p || typeof p !== "object") return;
+          const lvl = Number(p.level ?? p.lvl) || null;
+          const vocRaw = String(p.vocation || p.voc || "");
+          let voc = i === 0 ? "Knight (EK)" : (i === 1 ? "Druid (ED)" : "Sorcerer (MS)");
+          if (/knight|ek/i.test(vocRaw)) voc = "Knight (EK)";
+          else if (/druid|ed/i.test(vocRaw)) voc = "Druid (ED)";
+          else if (/sorcerer|ms/i.test(vocRaw)) voc = "Sorcerer (MS)";
+          else if (/paladin|rp/i.test(vocRaw)) voc = "Paladin (RP)";
+          else if (/monk|mk/i.test(vocRaw)) voc = "Monk (MK)";
+          res.partyMembers.push({
+            slot: Number(p.slot ?? i),
+            name: typeof p.name === "string" ? p.name : null,
+            voc,
+            level: lvl && lvl >= 10 && lvl <= 800 ? lvl : null,
+            active: true,
+          });
+        });
+      } else if (window.__baiak_state?.bsParty && Array.isArray(window.__baiak_state.bsParty)) {
+        window.__baiak_state.bsParty.slice(0, 12).forEach((t, idx) => {
+          res.partyMembers.push({ slot: idx, name: null, voc: idx === 0 ? "Knight (EK)" : (idx === 1 ? "Druid (ED)" : "Sorcerer (MS)"), level: null, active: true });
+        });
+      }
+    } catch (_) {}
   }
 
   // Fallback 2: slots padrão baseados nas vocações ativas

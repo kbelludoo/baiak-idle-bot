@@ -23,10 +23,6 @@ export const KERNEL_SOURCE = `
 
   function dismissModals() {
     try {
-      const coletarBtn = Array.from(document.querySelectorAll('button, .btn, [role="button"]')).find(b =>
-        b.offsetParent !== null && (b.textContent || '').trim().toLowerCase().includes('coletar') && !b.id.includes('daily')
-      );
-      if (coletarBtn) { coletarBtn.click(); log("Auto-coletou recompensas acumuladas"); }
       const oflModal = document.getElementById('offline-modal');
       if (oflModal && !oflModal.classList.contains('hidden')) {
         const c = document.getElementById('offline-modal-close') || oflModal.querySelector('button');
@@ -37,6 +33,11 @@ export const KERNEL_SOURCE = `
       if (connOverlay && !connOverlay.classList.contains('hidden')) {
         const retryBtn = document.getElementById('conn-retry');
         if (retryBtn && retryBtn.offsetParent !== null) { retryBtn.click(); log("Auto-reconectando sessão"); }
+      }
+      const rwModal = document.getElementById('reward-modal') || document.querySelector('.reward-modal, .collect-modal');
+      if (rwModal && !rwModal.classList.contains('hidden')) {
+        const btn = rwModal.querySelector('button');
+        if (btn) btn.click();
       }
     } catch (_) {}
   }
@@ -99,7 +100,17 @@ export const KERNEL_SOURCE = `
         const g = parseGoldK(goldEl.getAttribute("data-gold") || goldEl.textContent);
         if (g != null && g > 0) state.gold = g;
       }
-      const stamDirect = document.querySelector("#stamina-time, .stamina-time, .stamina-val, #stamina-val, [data-stamina], #stamina-panel");
+      if (!state.gold) {
+        try {
+          const generic = document.querySelectorAll("[class*='gold' i], [id*='gold' i], [class*='wallet' i], [class*='coin' i]");
+          for (const ge of Array.from(generic).slice(0, 10)) {
+            if (ge.closest && ge.closest("#picker-modal, #confirm-modal")) continue;
+            const g2 = parseGoldK((ge.textContent || "").slice(0, 40));
+            if (g2 != null && g2 > 0) { state.gold = g2; break; }
+          }
+        } catch (_) {}
+      }
+      const stamDirect = document.querySelector("#stamina-time, .stamina-time, .stamina-val, #stamina-val, [data-stamina], #stamina-panel, .hud-stamina");
       if (stamDirect) {
         const st = normStamK(stamDirect.textContent || stamDirect.getAttribute("title") || "");
         if (st) state.stamina = st;
@@ -109,7 +120,19 @@ export const KERNEL_SOURCE = `
         const pct = normStamK(pctEl?.textContent || "");
         if (pct) state.stamina = pct;
       }
-      const memberEls = Array.from(document.querySelectorAll("#bar-shooters .bar-member"));
+      if (!normStamK(state.stamina)) {
+        try {
+          const genericS = document.querySelectorAll("[class*='stamina' i], [id*='stamina' i]");
+          for (const se of Array.from(genericS).slice(0, 10)) {
+            const cand = normStamK(se.textContent || se.getAttribute("title") || "");
+            if (cand) { state.stamina = cand; break; }
+          }
+        } catch (_) {}
+      }
+      let memberEls = Array.from(document.querySelectorAll("#bar-shooters .bar-member"));
+      if (memberEls.length === 0) {
+        memberEls = Array.from(document.querySelectorAll(".bs-party-name, .party-member, [class*='bar-member']")).slice(0, 12);
+      }
       if (memberEls.length > 0) {
         state.partyMembers = memberEls.map((el, idx) => {
           const raw = (el.textContent || "").trim();
@@ -160,8 +183,9 @@ export const KERNEL_SOURCE = `
 
   let lastHelperCheck = 0;
   async function ensurePartyReady() {
+    if (window.__baiak_helper_configured) return;
     const now = Date.now();
-    if (now - lastHelperCheck < 30000) return;
+    if (now - lastHelperCheck < 60000) return;
     lastHelperCheck = now;
     try {
       const helperModal = document.getElementById('helper-modal');
@@ -179,7 +203,10 @@ export const KERNEL_SOURCE = `
       }
       const magiaBox = Array.from(helperModal.querySelectorAll('input[type="checkbox"]'))
         .find(c => /magia/i.test(c.parentElement?.textContent || ''));
-      if (magiaBox && !magiaBox.checked) { magiaBox.click(); log("Ativou checkbox Magia no Helper"); }
+      if (magiaBox) {
+        if (!magiaBox.checked) { magiaBox.click(); log("Ativou checkbox Magia no Helper"); }
+        window.__baiak_helper_configured = true;
+      }
       const closeBtn = document.getElementById('helper-modal-close') || helperModal.querySelector('.close-btn');
       if (closeBtn) closeBtn.click();
       else helperModal.classList.add('hidden');
@@ -269,6 +296,7 @@ export const KERNEL_SOURCE = `
     lastFrame: 0,
     lastType: null,
     state: null,
+    stateDefense: null,
     party: [],
     raw: null,
     errors: 0,
@@ -282,6 +310,7 @@ export const KERNEL_SOURCE = `
         hunt: engine.state.hunt ?? engine.state.wave ?? engine.state.stage ?? engine.state.currentHunt ?? null,
         gold: asNum(engine.state.gold ?? engine.state.player?.gold),
         stamina: engine.state.stamina ?? engine.state.player?.stamina ?? null,
+        defense: engine.stateDefense ?? engine.state.player?.defense,
       },
       party: engine.party,
       errors: engine.errors,
@@ -392,6 +421,12 @@ export const KERNEL_SOURCE = `
         engine.state = payload;
         engine.party = partyFrom(payload);
         engine.raw = { nodes: engineNodes };
+        // Extrai defesa/armor do player se disponível no payload
+        const def = payload.defense !== undefined ? payload.defense :
+                    payload.armor !== undefined ? payload.armor :
+                    payload.playerDefense !== undefined ? payload.playerDefense :
+                    null;
+        if (def !== null) engine.stateDefense = def;
       }
     } catch (_) { engine.errors++; }
   }
@@ -424,8 +459,8 @@ export const KERNEL_SOURCE = `
     Object.defineProperty(window, "__baiak_telemetry", { value: state, configurable: true, writable: false });
   } catch (_) { window.__baiak_telemetry = state; }
 
-  setInterval(() => { dismissModals(); updateTelemetry(); instantAutoHeal(); }, 100);
-  setInterval(() => { ensurePartyReady(); }, 5000);
+  setInterval(() => { dismissModals(); updateTelemetry(); instantAutoHeal(); }, 1000);
+  setInterval(() => { ensurePartyReady(); }, 15000);
 })();
 
 // ============================================================================

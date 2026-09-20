@@ -36,6 +36,16 @@ describe('Controlled hunt exploration', () => {
     expect(sim?.observed_damage_s).toBe(1200);
   });
 
+  it('não transforma uma hunt deficitária em lucro usando loot bruto', () => {
+    const sim = simulateHunt('wyrm-cave', 306, { power: 2, aoe: 2, heal: 1 }, 1, {
+      xpPerHour: 1234567,
+      lootGoldPerHour: 400000,
+      supplyGoldPerHour: 500000,
+      netGoldPerHour: -100000,
+    });
+    expect(sim?.gold_h).toBe(-100000);
+  });
+
   it('applies enemy elemental resistance to effective DPS', () => {
     expect(effectiveDamage({ fire: 100, ice: 100 }, { fire: 0.5, ice: -0.2 })).toBe(170);
   });

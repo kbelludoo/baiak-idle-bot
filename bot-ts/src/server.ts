@@ -8,6 +8,7 @@ export interface ServerContext {
   getPage: () => Page | null;
   getCdp: () => CDPSession | null;
   getLatestFrame: () => Buffer | null;
+  onSetHunt?: (huntId: string, auto: boolean) => Promise<{ ok: boolean; message?: string; error?: string }>;
   dataDir?: string;
 }
 
@@ -132,6 +133,30 @@ export function startServer(port: number, host: string, ctx: ServerContext) {
           await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: btn, clickCount: 1 });
 
           return Response.json({ ok: true, x, y, button: btn }, { headers: corsHeaders });
+        } catch (err: any) {
+          return Response.json({ ok: false, error: err?.message || String(err) }, { status: 500, headers: corsHeaders });
+        }
+      }
+
+      // API: Hunt (Permite trocar a hunt ativa ou alternar para auto via API / Web Dashboard)
+      if (path === '/api/hunt' || path === '/api/hunt/') {
+        if (req.method !== 'POST') {
+          return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
+        }
+        if (!isAuthorizedControl()) {
+          return Response.json({ ok: false, error: 'Forbidden: /api/hunt requires authorization' }, { status: 403, headers: corsHeaders });
+        }
+        try {
+          const body = await req.json() as { hunt_id?: string; auto?: boolean };
+          const huntId = String(body?.hunt_id || '').trim();
+          const auto = Boolean(body?.auto || huntId === 'auto');
+
+          if (!ctx.onSetHunt) {
+            return Response.json({ ok: false, error: 'onSetHunt handler not registered' }, { status: 501, headers: corsHeaders });
+          }
+
+          const res = await ctx.onSetHunt(huntId, auto);
+          return Response.json(res, { status: res.ok ? 200 : 400, headers: corsHeaders });
         } catch (err: any) {
           return Response.json({ ok: false, error: err?.message || String(err) }, { status: 500, headers: corsHeaders });
         }

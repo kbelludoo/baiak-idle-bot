@@ -1,6 +1,19 @@
 async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const vis = (el) => !!(el && el.offsetParent !== null);
+  // offsetParent é nulo para controles position:fixed (justamente o dock
+  // usado na viewport móvel/headless). Use a geometria/estilo real para não
+  // descartar o botão de rotação como se estivesse invisível.
+  const vis = (el) => {
+    if (!el) return false;
+    if (el.offsetParent !== null || el.offsetWidth > 0 || el.offsetHeight > 0) return true;
+    try {
+      const cs = getComputedStyle(el);
+      if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
+      return cs.position === "fixed";
+    } catch (_) {
+      return false;
+    }
+  };
   const txt = (el) => (el?.textContent || "").toLowerCase();
   const events = [];
   const wantSlot = Number.isFinite(Number(slot)) ? Number(slot) : null;
@@ -10,6 +23,70 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
   const picker = document.getElementById("picker-modal");
   const pickerOpen = !!(picker && !picker.classList.contains("hidden"));
   const title = (picker?.querySelector(".im-title")?.textContent || "").toLowerCase();
+
+  const readRotation = () => Array.from(document.querySelectorAll('[id^="rot-"]')).map((el) => ({
+    slot: parseInt((el.id.match(/^rot-(\d+)-/) || ["", "0"])[1], 10) || 0,
+    u: parseInt((el.id.match(/^rot-\d+-(\d+)/) || ["", "0"])[1], 10) || 0,
+    empty: !!el.querySelector("small") || /escolher magia|choose spell|slot \d+ \+/i.test(el.getAttribute("title") || ""),
+    name: String(el.getAttribute("title") || el.getAttribute("aria-label") || el.textContent || "").trim(),
+  }));
+
+  // A rotação só monta os elementos rot-* enquanto a janela está aberta.
+  // Abre-a sob demanda para que o HUD possa ler as magias já equipadas antes
+  // de escolher qualquer slot.
+  if (job === "open" || job === "scan") {
+    // Algumas builds mantêm os slots rot-* montados no HUD mesmo com o
+    // picker fechado. Nesse caso não abra modal nem procure um botão de
+    // rotação: os títulos dos próprios slots já são a fonte autoritativa.
+    const existing = readRotation();
+    if (existing.some((row) => !row.empty && row.name)) {
+      return { ok: true, opened: false, method: "rotation-dom", spells: existing, events };
+    }
+    if (pickerOpen) return { ok: true, opened: true, method: "already-open", spells: readRotation(), events };
+    const closeOptionSheets = () => {
+      for (const close of Array.from(document.querySelectorAll(".m-sheet-x, .m-sheet-close"))) {
+        if (vis(close)) close.click();
+      }
+    };
+    const directRot = document.querySelector(".act.rot, [class*='rotation' i], [class*='spell-rotation' i], #btn-rotation, [data-action='rotation']");
+    if (directRot && vis(directRot)) {
+      directRot.click();
+      await sleep(250);
+      const opened = document.getElementById("picker-modal");
+      if (opened && !opened.classList.contains("hidden")) {
+        events.push("ABRIU_ROTACAO_SLOT");
+        closeOptionSheets();
+        return { ok: true, opened: true, method: "rotation-slot", spells: readRotation(), events };
+      }
+    }
+    const collectCandidates = () => {
+      const actArea = document.querySelector("#actions, .hud-actions, #hud-bar, #bar-actions, #dock-actions");
+      if (actArea) {
+        const btns = Array.from(actArea.querySelectorAll("button, [role='button'], .btn, [title], [aria-label]"));
+        if (btns.length > 0) return btns;
+      }
+      return Array.from(document.querySelectorAll("button.act, .act.rot, [data-action='rotation'], #spell-rotation, [class*='rotation' i]"));
+    };
+    const findTrigger = (all) => all.find((b) => {
+      if (!vis(b) || b.disabled) return false;
+      const blob = `${b.id || ""} ${b.className || ""} ${b.getAttribute("title") || ""} ${b.getAttribute("aria-label") || ""} ${(b.textContent || "")}`.toLowerCase();
+      return /rotacao|rotação|spell.?rotation|magias?|spells?|combate|attack|skill/.test(blob) && !/helper|cura automatica|cura automática/.test(blob);
+    });
+    let candidates = collectCandidates();
+    let trigger = findTrigger(candidates);
+    if (trigger) {
+      trigger.click();
+      await sleep(250);
+      const opened = document.getElementById("picker-modal");
+      if (opened && !opened.classList.contains("hidden")) {
+        events.push("ABRIU_ROTACAO_MAGIAS");
+        closeOptionSheets();
+        return { ok: true, opened: true, method: "rotation-trigger", spells: readRotation(), events };
+      }
+    }
+    closeOptionSheets();
+    return { ok: false, reason: "rotation-trigger-not-found", candidates: [], events };
+  }
 
   const closeHelper = () => {
     const hm = document.getElementById("helper-modal");

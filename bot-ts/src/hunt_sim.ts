@@ -6,6 +6,20 @@ export const STONE_ID = 'refiner-cave';
 export const STONE_PRIOR = 2.2;
 export const PROFIT_MARGIN = 1.15;
 
+/**
+ * Score that keeps XP and net gold in the same decision instead of letting
+ * their different units make the picker always choose one of them.  The
+ * optional maxima are supplied by the ranking pool; outside a pool the
+ * geometric mean is still useful as a deterministic fallback.
+ */
+export function balanceScore(expH: number, goldH: number, maxExpH = 1, maxGoldH = 1): number {
+  const exp = Math.max(0, Number(expH) || 0);
+  const gold = Math.max(0, Number(goldH) || 0);
+  const expNorm = maxExpH > 0 ? Math.min(1, exp / maxExpH) : 0;
+  const goldNorm = maxGoldH > 0 ? Math.min(1, gold / maxGoldH) : 0;
+  return Math.round((0.55 * expNorm + 0.45 * goldNorm) * 10000) / 10000;
+}
+
 export interface ObservedHuntScore {
   xpPerHour?: number;
   lootGoldPerHour?: number;
@@ -16,6 +30,8 @@ export interface ObservedHuntScore {
   kills?: number;
   wipeMs?: number;
   resistances?: ResistanceMap;
+  /** Indica que a taxa veio de uma janela/relatório utilizável. */
+  sampleReady?: boolean;
 }
 
 export type Element = 'physical' | 'fire' | 'ice' | 'energy' | 'earth' | 'death' | 'holy';
@@ -32,7 +48,8 @@ export interface DamageProfile {
 }
 
 function clampResistance(value: number): number {
-  return Math.max(-1, Math.min(0.95, value));
+  const normalized = Math.abs(value) > 1 ? value / 100 : value;
+  return Math.max(-1, Math.min(0.95, normalized));
 }
 
 export function effectiveDamage(profile: DamageProfile, resistances: ResistanceMap = {}): number {
@@ -160,11 +177,20 @@ export function simulateHunt(hid: string, level: number, magic?: Record<string, 
   } else {
     canTank = incoming < sustain * 5 || hp <= Math.max(1, level) * 40;
   }
-  const observedGoldH = Number(observed?.netGoldPerHour || observed?.lootGoldPerHour || 0);
+  // Não use `||` aqui: netGold pode ser zero/negativo quando o custo de
+  // suprimentos supera o loot. Cair silenciosamente para lootGold faria uma
+  // hunt deficitária parecer lucrativa e quebraria o equilíbrio XP/ouro.
+  const netRaw = observed?.netGoldPerHour;
+  const lootRaw = observed?.lootGoldPerHour;
+  const supplyRaw = observed?.supplyGoldPerHour;
+  const hasObservedGold = !!observed && [netRaw, lootRaw, supplyRaw].some((v) => Number.isFinite(Number(v)) && Number(v) !== 0);
+  const observedGoldH = Number.isFinite(Number(netRaw)) && (hasObservedGold || Number(netRaw) !== 0)
+    ? Number(netRaw)
+    : Number(lootRaw || 0);
   const observedExpH = Number(observed?.xpPerHour || 0);
   const observedDamage = Number(observed?.damagePerSecond || 0);
   const observedWipeMs = Number(observed?.wipeMs || 0);
-  const goldH = observedGoldH > 0 ? observedGoldH : simulatedGoldH;
+  const goldH = hasObservedGold ? observedGoldH : simulatedGoldH;
   const expH = observedExpH > 0 ? observedExpH : simulatedExpH;
   if (observedDamage > 0) canTank = observedWipeMs <= 0 || observedWipeMs > 30000;
   return {
@@ -189,6 +215,7 @@ export function simulateHunt(hid: string, level: number, magic?: Record<string, 
     resistances,
     resistance_source: resistanceSource(facts),
     raw_dps: rawDps,
+    balance_score: 0,
   };
 }
 
@@ -197,11 +224,41 @@ export function observedScoreFromMapper(map: any, hid: string): ObservedHuntScor
   if (score && typeof score === 'object') return score;
   const hunt = map?.hunts?.[hid];
   if (!hunt || typeof hunt !== 'object') return null;
+  const facts = huntFacts(hid);
+  const resistanceSums: Record<string, number> = {};
+  const resistanceCounts: Record<string, number> = {};
+  const rows = map?.resistances && typeof map.resistances === 'object' ? map.resistances : {};
+  for (const monster of facts?.monsters || []) {
+    const exact = rows[monster] || rows[String(monster).toLowerCase()];
+    const row = exact || Object.entries(rows).find(([name]) => String(name).toLowerCase() === String(monster).toLowerCase())?.[1];
+    if (!row || typeof row !== 'object') continue;
+    for (const [element, value] of Object.entries(row as Record<string, any>)) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) continue;
+      resistanceSums[element.toLowerCase()] = (resistanceSums[element.toLowerCase()] || 0) + n;
+      resistanceCounts[element.toLowerCase()] = (resistanceCounts[element.toLowerCase()] || 0) + 1;
+    }
+  }
+  const resistances: ResistanceMap = {};
+  for (const [element, sum] of Object.entries(resistanceSums)) {
+    resistances[element as Element] = sum / Math.max(1, resistanceCounts[element]);
+  }
   return {
     damagePerSecond: Number(hunt.damage || 0) / Math.max(1, Number(hunt.frames || 1)),
     healingPerSecond: Number(hunt.healing || 0) / Math.max(1, Number(hunt.frames || 1)),
     kills: Number(hunt.kills || 0),
+    ...(Object.keys(resistances).length > 0 ? { resistances } : {}),
   };
+}
+
+/** Elemento de menor resistência conhecido; retorna null quando a fonte é
+ * apenas observação de dano e não há resistência explícita do servidor. */
+export function bestElementForResistances(resistances?: ResistanceMap | null): Element | null {
+  if (!resistances || Object.keys(resistances).length === 0) return null;
+  const entries = Object.entries(resistances)
+    .filter(([element, value]) => ['physical', 'fire', 'ice', 'energy', 'earth', 'death', 'holy'].includes(element) && Number.isFinite(Number(value)))
+    .sort((a, b) => Number(a[1]) - Number(b[1]));
+  return entries.length > 0 ? entries[0][0] as Element : null;
 }
 
 export function calibrateScale(hid: string, observedGoldH: number, level: number, magic?: Record<string, any> | null): number | null {
@@ -216,8 +273,12 @@ export function rankHunts(ids: string[], level: number, magic?: Record<string, a
     const sim = simulateHunt(hid, level, magic, scale);
     if (sim) out.push(sim);
   }
+  const maxExp = Math.max(1, ...out.map((s) => Number(s.exp_h) || 0));
+  const maxGold = Math.max(1, ...out.map((s) => Number(s.gold_h) || 0));
+  for (const sim of out) sim.balance_score = balanceScore(sim.exp_h, sim.gold_h, maxExp, maxGold);
   out.sort((a, b) => {
     if (!!b.can_tank !== !!a.can_tank) return (b.can_tank ? 1 : 0) - (a.can_tank ? 1 : 0);
+    if (b.balance_score !== a.balance_score) return b.balance_score - a.balance_score;
     if (b.exp_h !== a.exp_h) return b.exp_h - a.exp_h;
     return b.gold_h - a.gold_h;
   });
@@ -236,8 +297,12 @@ export function rankHuntsObserved(
     const sim = simulateHunt(hid, level, magic, scale, observedScoreFromMapper(mapper, hid));
     if (sim) out.push(sim);
   }
+  const maxExp = Math.max(1, ...out.map((s) => Number(s.exp_h) || 0));
+  const maxGold = Math.max(1, ...out.map((s) => Number(s.gold_h) || 0));
+  for (const sim of out) sim.balance_score = balanceScore(sim.exp_h, sim.gold_h, maxExp, maxGold);
   out.sort((a, b) => {
     if (!!b.can_tank !== !!a.can_tank) return (b.can_tank ? 1 : 0) - (a.can_tank ? 1 : 0);
+    if (b.balance_score !== a.balance_score) return b.balance_score - a.balance_score;
     if (b.exp_h !== a.exp_h) return b.exp_h - a.exp_h;
     return b.gold_h - a.gold_h;
   });
@@ -260,16 +325,23 @@ export function recommendSwitch(
   const live = ranked.find((s) => s.id === liveId) || null;
   const liveExp = live ? parseFloat(String(live.exp_h)) || 0 : 0;
   const bestExp = parseFloat(String(best.exp_h)) || 0;
+  const liveGold = live ? parseFloat(String(live.gold_h)) || 0 : 0;
+  const bestGold = parseFloat(String(best.gold_h)) || 0;
+  const liveBalance = live ? Number(live.balance_score) || 0 : 0;
+  const bestBalance = Number(best.balance_score) || 0;
   let clearly = liveId == null || liveId !== best.id;
   if (live && liveId !== best.id && live.can_tank) {
-    clearly = bestExp >= liveExp * 1.08 && !!best.can_tank;
+    clearly = bestBalance >= liveBalance * 1.08 && !!best.can_tank;
   }
   return {
     id: best.id,
     name: best.name,
-    gold_h: parseFloat(String(best.gold_h)) || 0,
     exp_h: bestExp,
+    gold_h: bestGold,
     live_exp_h: liveExp,
+    live_gold_h: liveGold,
+    balance_score: bestBalance,
+    live_balance_score: liveBalance,
     clearly_better: !!(clearly && best.can_tank),
     can_tank: !!best.can_tank,
     sim: best,

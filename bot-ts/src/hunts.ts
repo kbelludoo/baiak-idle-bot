@@ -21,8 +21,10 @@ const _HUNTS: Array<[string, string, number]> = [
   ['hydra-cave', 'Hydra', 100],
   ['behemoth-cave', 'Behemoth', 100],
   ['orclops-cave', 'Orclops', 100],
+  ['crumbling-cave', 'Crumbling Caverns', 130],
   ['grimreaper-cave', 'Grim Reaper', 130],
   ['wyrm-cave', 'Wyrm', 130],
+  ['candia-cave', 'Candia', 140],
   ['werehyaena-cave', 'Werehyaena', 140],
   ['asura-lair', 'Asuras', 150],
   ['darktorturer-cave', 'Dark Torturer', 150],
@@ -49,9 +51,13 @@ const _HUNTS: Array<[string, string, number]> = [
   ['naga-lair', 'Naga Lair', 300],
   ['trueazura-cave', 'True Azura', 300],
   ['freakishlostsoul-cave', 'Freakish Lost Soul', 300],
+  ['weretiger-cave', 'Weretiger', 330],
+  ['werecrocodile-cave', 'Feral Werecrocodile', 340],
   ['bulltaur-cave', 'Bulltaur', 350],
   ['gazer-lair', 'Gazer', 350],
+  ['skeletin-cave', 'Skeleton Elite Warrior', 350],
   ['bashmu-cave', 'Bashmu', 350],
+  ['darkcarnisylvan-cave', 'Dark Carnisylvan', 430],
   ['inferniarch-lair', 'Inferniarch', 450],
   ['girtablilu-cave', 'girtablilu warrior', 460],
   ['livrariaice-cave', 'Livraria ICE', 500],
@@ -72,6 +78,10 @@ const _HUNTS: Array<[string, string, number]> = [
   ['infernalmdemon-cave', 'Infernal Demon', 800],
   ['bonyseadevil-cave', 'Bony Sea Devil', 800],
   ['darkthais-cave', 'Dark Thais', 800],
+  ['bloatedmanmaggot-cave', 'bloated man-maggot', 1500],
+  ['maggot-cave', 'Rotten man-maggot', 1500],
+  ['draklightsource-cave', 'Darklight Source', 1500],
+  ['wanderingpillar-cave', 'Wandering Pillar', 1500],
 ];
 
 export const HUNTS_TABLE = _HUNTS.map(([id, name, min]) => ({ id, name, min }));
@@ -218,6 +228,7 @@ export function classifyMagic(spells?: Array<Record<string, any>> | null, helper
   else if (strike || filled.length > 0) power = 1;
   else power = 0;
   const bySlot: Record<number, string[]> = {};
+  const emptyBySlot: Record<number, number> = {};
   const present = new Set<number>();
   for (const s of list) {
     if (s.slot === undefined || s.slot === null) continue;
@@ -226,6 +237,8 @@ export function classifyMagic(spells?: Array<Record<string, any>> | null, helper
     if (!s.empty) {
       if (!bySlot[sid]) bySlot[sid] = [];
       bySlot[sid].push(String(s.name || s.title || '').toLowerCase());
+    } else {
+      emptyBySlot[sid] = (emptyBySlot[sid] || 0) + 1;
     }
   }
   for (const sid of Object.keys(helpBy).map(Number)) present.add(sid);
@@ -233,7 +246,8 @@ export function classifyMagic(spells?: Array<Record<string, any>> | null, helper
   for (const sid of [...present].sort((a, b) => a - b)) {
     const blob = (bySlot[sid] || []).join(' ');
     const kit = slotKit(blob, helpBy[sid]);
-    slots[String(sid)] = kit;
+    const empty = emptyBySlot[sid] || 0;
+    slots[String(sid)] = { ...kit, empty, ready: kit.ready && empty === 0 };
     heal = Math.max(heal, kit.heal);
     mana = Math.max(mana, kit.mana);
   }
@@ -805,6 +819,7 @@ export class HuntMatrix {
       rec = {
         id: huntId, name: huntName, min_level: minLvl, samples: 0, deaths: 0,
         avg_gold_h: 0.0, max_gold_h: 0.0, avg_kills_h: 0.0, avg_waves_h: 0.0,
+        avg_xp_h: 0.0, avg_loot_h: 0.0, balance_score: 0,
         xp_h_display: '—', loot_h_display: '—', safety_rating: 'SEGURO',
         category: 'EQUILIBRADO', efficiency_score: 50, last_seen_ts: Date.now() / 1000,
       };
@@ -814,30 +829,78 @@ export class HuntMatrix {
     rec.deaths = Math.max(rec.deaths || 0, deaths);
     rec.last_seen_ts = Date.now() / 1000;
     if (goldPerHour > 0) {
-      rec.avg_gold_h = Math.round(((rec.avg_gold_h || 0) * 0.7 + goldPerHour * 0.3) * 10) / 10;
+      rec.avg_gold_h = rec.samples === 1
+        ? Math.round(goldPerHour * 10) / 10
+        : Math.round(((rec.avg_gold_h || 0) * 0.7 + goldPerHour * 0.3) * 10) / 10;
       rec.max_gold_h = Math.max(rec.max_gold_h || 0, Math.round(goldPerHour * 10) / 10);
     }
-    if (killsPerHour > 0) rec.avg_kills_h = Math.round(((rec.avg_kills_h || 0) * 0.7 + killsPerHour * 0.3) * 10) / 10;
-    if (wavesPerHour > 0) rec.avg_waves_h = Math.round(((rec.avg_waves_h || 0) * 0.7 + wavesPerHour * 0.3) * 10) / 10;
-    if (xpPerHour && String(xpPerHour) !== '—') rec.xp_h_display = String(xpPerHour);
-    if (lootPerHour && String(lootPerHour) !== '—') rec.loot_h_display = String(lootPerHour);
+    if (killsPerHour > 0) rec.avg_kills_h = rec.samples === 1
+      ? Math.round(killsPerHour * 10) / 10
+      : Math.round(((rec.avg_kills_h || 0) * 0.7 + killsPerHour * 0.3) * 10) / 10;
+    if (wavesPerHour > 0) rec.avg_waves_h = rec.samples === 1
+      ? Math.round(wavesPerHour * 10) / 10
+      : Math.round(((rec.avg_waves_h || 0) * 0.7 + wavesPerHour * 0.3) * 10) / 10;
+    // O analisador do jogo usa pt-BR (ex.: "3.242.959"), enquanto alguns
+    // frames usam decimal ("3.242,9") ou sufixo k/kk. Não use Number() direto:
+    // ele transforma a taxa em zero e deixa a matriz sem XP/h.
+    const parseRate = (value: number | string | null | undefined): number => {
+      if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+      const raw = String(value ?? '').trim().replace(/\s+/g, ' ');
+      if (!raw) return 0;
+      const m = raw.match(/([\d.,]+)\s*(kk|milh(?:ões|oes|ao)?|mi\b|m\b|mil\b|k\b)?/i);
+      if (!m) return 0;
+      const numberText = m[1];
+      const unit = (m[2] || '').toLowerCase();
+      const dots = (numberText.match(/\./g) || []).length;
+      const commas = (numberText.match(/,/g) || []).length;
+      let n = 0;
+      if (dots > 1 && commas === 0) n = Number(numberText.replace(/\./g, ''));
+      else if (commas > 1 && dots === 0) n = Number(numberText.replace(/,/g, ''));
+      else if (dots === 1 && commas === 1) n = Number(numberText.replace(/\./g, '').replace(',', '.'));
+      else if (commas === 1) n = unit ? Number(numberText.replace(',', '.')) : Number(numberText.replace(',', '.'));
+      else if (dots === 1) n = unit ? Number(numberText) : Number(numberText.replace('.', ''));
+      else n = Number(numberText);
+      if (!Number.isFinite(n)) return 0;
+      if (unit === 'kk' || unit === 'm' || unit === 'mi' || unit.startsWith('milh')) n *= 1_000_000;
+      else if (unit === 'k' || unit === 'mil') n *= 1_000;
+      return n;
+    };
+    const xpNum = parseRate(xpPerHour);
+    const lootNum = parseRate(lootPerHour);
+    if (xpNum > 0) {
+      rec.avg_xp_h = rec.samples === 1
+        ? Math.round(xpNum * 10) / 10
+        : Math.round(((rec.avg_xp_h || 0) * 0.7 + xpNum * 0.3) * 10) / 10;
+      rec.xp_h_display = String(xpPerHour);
+    }
+    if (lootNum > 0) {
+      rec.avg_loot_h = rec.samples === 1
+        ? Math.round(lootNum * 10) / 10
+        : Math.round(((rec.avg_loot_h || 0) * 0.7 + lootNum * 0.3) * 10) / 10;
+      rec.loot_h_display = String(lootPerHour);
+    }
     if (rec.deaths === 0) rec.safety_rating = 'SEGURO';
     else if (rec.deaths <= 2) rec.safety_rating = 'MODERADO';
     else rec.safety_rating = 'PERIGOSO';
+    const xpRef = Math.max(1, ...Object.values(this.matrix).map((x: any) => Number(x.avg_xp_h || 0)));
+    const goldRef = Math.max(1, ...Object.values(this.matrix).map((x: any) => Number(x.avg_gold_h || x.avg_loot_h || 0)));
+    rec.balance_score = Math.round((0.55 * (Number(rec.avg_xp_h || 0) / xpRef) + 0.45 * (Number(rec.avg_gold_h || rec.avg_loot_h || 0) / goldRef)) * 10000) / 100;
     if (rec.deaths > 2) { rec.category = 'EVITAR (ALTA MORTALIDADE)'; rec.efficiency_score = 20; }
+    else if (rec.balance_score >= 80) { rec.category = 'TOP_EQUILIBRADO'; rec.efficiency_score = Math.min(99, Math.round(rec.balance_score)); }
     else if (rec.avg_gold_h >= 100000) { rec.category = 'TOP_LUCRO (OURO ALTO)'; rec.efficiency_score = 95; }
-    else if (rec.avg_kills_h >= 1000) { rec.category = 'TOP_XP (FAST CLEAR)'; rec.efficiency_score = 90; }
+    else if (rec.avg_xp_h >= 1000000 || rec.avg_kills_h >= 1000) { rec.category = 'TOP_XP (FAST CLEAR)'; rec.efficiency_score = 90; }
     else if (rec.avg_gold_h >= 10000) { rec.category = 'FARM ESTÁVEL'; rec.efficiency_score = 80; }
     else { rec.category = 'EQUILIBRADO'; rec.efficiency_score = 65; }
     this.save();
     return rec;
   }
 
-  getRankings(): { by_profit: any[]; by_kills: any[]; all: any[] } {
+  getRankings(): { by_profit: any[]; by_kills: any[]; by_balance: any[]; all: any[] } {
     const valid = Object.values(this.matrix);
     return {
       by_profit: [...valid].sort((a, b) => (b.avg_gold_h || 0) - (a.avg_gold_h || 0)).slice(0, 5),
       by_kills: [...valid].sort((a, b) => (b.avg_kills_h || 0) - (a.avg_kills_h || 0)).slice(0, 5),
+      by_balance: [...valid].sort((a, b) => (b.balance_score || 0) - (a.balance_score || 0)).slice(0, 5),
       all: valid,
     };
   }

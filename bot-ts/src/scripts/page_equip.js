@@ -1,4 +1,5 @@
-async () => {
+async (args) => {
+  const { preferredElement = "", preferredProtection = "" } = args || {};
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const vis = (el) => !!(el && el.offsetParent !== null);
   const events = [];
@@ -85,7 +86,10 @@ async () => {
       const rarity = Number.isFinite(Number(o.tier)) ? Math.max(0, Math.min(5, Number(o.tier))) : null;
       const ftier = Number.isFinite(Number(o.ftier)) ? Math.max(0, Math.min(10, Number(o.ftier))) : 0;
       const up = Number.isFinite(Number(o.upLevel)) ? Math.max(0, Number(o.upLevel)) : 0;
-      return { rarity, ftier, up, name: o.name || null, hash: o.hash || null };
+      return {
+        rarity, ftier, up, name: o.name || null, hash: o.hash || null,
+        attrs: o.attrs || o.attributes || o.stats || o.bonuses || null,
+      };
     } catch (_) { return null; }
   };
 
@@ -168,7 +172,22 @@ async () => {
     return { name, rarity, ftier, up, slot, tip, cmp };
   };
 
-  const scoreOf = (d) => (d.rarity ?? -1) * 1000 + (d.ftier || 0) * 10 + (d.up || 0);
+  const profileElement = norm(preferredElement);
+  const profileProtection = norm(preferredProtection || preferredElement);
+  const buildBonus = (d) => {
+    const blob = norm([
+      d?.name || "", d?.tip?.typeText || "", d?.cmp?.attrs || "",
+      d?.cmp?.name || "", d?.cmp?.stats || "",
+    ].join(" "));
+    let bonus = 0;
+    // Usa o elemento observado apenas como preferência de desempate: não
+    // inventa uma resistência que o servidor não forneceu.
+    if (profileElement && blob.includes(profileElement)) bonus += 60;
+    if (profileProtection && blob.includes(profileProtection)) bonus += 30;
+    if (/resist|resistencia|defense|defesa|armor|armadura|health|hp/.test(blob)) bonus += 12;
+    return bonus;
+  };
+  const scoreOf = (d) => (d.rarity ?? -1) * 1000 + (d.ftier || 0) * 10 + (d.up || 0) + buildBonus(d);
   const fmtItem = (d) => {
     const r = d.rarity != null ? `${RARITY_NAME[d.rarity] ?? "R" + d.rarity}` : "?";
     return `${(d.name || "item").slice(0, 40)} [${r} R${d.rarity ?? "?"} T${d.ftier ?? 0}+${d.up ?? 0} ${d.slot || "?"}]`;
@@ -283,7 +302,10 @@ async () => {
       const nm = titleM[2].replace(/\s*\(.*?\)\s*/g, "").trim();
       if (nm && nm.length >= 3 && nm.length <= 60) mName = nm;
     }
-    const mScore = (mRarity ?? -1) * 1000 + (mFtier || 0) * 10 + (mUp || 0);
+    const mScore = scoreOf({
+      name: mName, rarity: mRarity, ftier: mFtier, up: mUp,
+      cmp: mCmp, tip: mtip,
+    });
     const curNow = equippedBySlot[mSlot];
     if (cannotUseRe.test(body)) {
       events.push(`skip sem req: ${(mName || d.name).slice(0, 40)}`);

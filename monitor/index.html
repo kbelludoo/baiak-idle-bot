@@ -303,6 +303,57 @@ body {
   gap: 8px;
   align-items: center;
 }
+.hunt-picker {
+  margin-top: 10px;
+}
+.hunt-category-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.hunt-category-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.hunt-tabs {
+  display: flex;
+  gap: 6px;
+}
+.hunt-tab {
+  background: #0c1118;
+  border: 1px solid var(--line-light);
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 6px 10px;
+  transition: all .15s;
+}
+.hunt-tab:hover {
+  color: var(--text);
+  border-color: var(--bot);
+}
+.hunt-tab.active.loot {
+  background: #3a2d12;
+  border-color: var(--gold);
+  color: var(--gold);
+}
+.hunt-tab.active.xp {
+  background: #102633;
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.hunt-picker-note {
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 6px;
+}
 .hunt-select {
   flex: 1;
   background: #090d13;
@@ -538,6 +589,7 @@ body { overflow-x: hidden; }
   .fleet-summary { grid-template-columns: repeat(2, 1fr); }
   .summary.primary { grid-column: span 2; }
   .hero-stats { grid-template-columns: 1fr; }
+  .hunt-category-row { align-items: flex-start; flex-direction: column; }
   .hunt-control-row { flex-direction: column; align-items: stretch; }
   .hunt-readonly { align-items: flex-start; flex-direction: column; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
@@ -620,6 +672,7 @@ const API_ENDPOINTS = [OVERVIEW_PATH, LIVE_API + OVERVIEW_PATH];
 try { localStorage.setItem('baiak-live-api', LIVE_API); } catch (_) {}
 const levelHistory = {};
 const pendingHuntSelections = {};
+const huntCategorySelections = {};
 let historyWindowHours = 1;
 let benchmarkFilter = '';
 let benchmarkSort = 'gold';
@@ -798,12 +851,102 @@ function party(s) {
   `).join('');
 }
 
-function renderHuntOptions(currentHuntId, isForced, botId) {
+function parseHuntMetric(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return 0;
+  const numberMatch = raw.match(/-?[\d.,]+/);
+  if (!numberMatch) return 0;
+  const token = numberMatch[0];
+  const pieces = token.split(/[.,]/);
+  let normalized = token;
+  if (token.includes('.') && token.includes(',')) {
+    normalized = token.replace(/\./g, '').replace(',', '.');
+  } else if (token.includes(',')) {
+    normalized = pieces.length > 1 && pieces.at(-1).length === 3
+      ? token.replace(/,/g, '')
+      : token.replace(',', '.');
+  } else if (token.includes('.')) {
+    normalized = pieces.length > 2 || pieces.at(-1).length === 3
+      ? token.replace(/\./g, '')
+      : token;
+  }
+  const suffix = raw.match(/(kk|bn|b|m|k)\s*$/)?.[1] || '';
+  const multiplier = suffix === 'kk' || suffix === 'm' ? 1_000_000
+    : suffix === 'bn' || suffix === 'b' ? 1_000_000_000
+      : suffix === 'k' ? 1_000 : 1;
+  return (Number(normalized) || 0) * multiplier;
+}
+
+function huntMetricValue(status, huntId, category) {
+  const records = [
+    status?.hunt_metrics?.[huntId],
+    status?.hunt_matrix?.[huntId],
+    status?.benchmarks?.[huntId],
+  ].filter(Boolean);
+  const keys = category === 'xp'
+    ? ['xpPerHour', 'xp_per_hour', 'avg_xp_h', 'xp_h', 'xp_h_display']
+    : ['lootGoldPerHour', 'loot_per_hour', 'avg_loot_h', 'avg_gold_h', 'gold_per_hour', 'netGoldPerHour'];
+  for (const record of records) {
+    for (const key of keys) {
+      const value = parseHuntMetric(record[key]);
+      if (value > 0) return value;
+    }
+  }
+  return 0;
+}
+
+function huntMetricLabel(value, category) {
+  if (!(value > 0)) return 'sem dados';
+  return category === 'xp' ? `${formatXp(value)}/h` : `${formatGold(value)}/h`;
+}
+
+function renderHuntOptions(currentHuntId, isForced, botId, status, category) {
   const selected = pendingHuntSelections[botId] ?? (isForced ? currentHuntId : 'auto');
-  return HUNTS_CATALOG.map(h => {
+  const ranked = HUNTS_CATALOG.map((h, index) => ({
+    h,
+    index,
+    metric: h.id === 'auto' ? 0 : huntMetricValue(status, h.id, category),
+  })).sort((a, b) => {
+    if (a.h.id === 'auto') return -1;
+    if (b.h.id === 'auto') return 1;
+    if (a.metric !== b.metric) return b.metric - a.metric;
+    return a.index - b.index;
+  });
+  return ranked.map(({ h, metric }) => {
     const isSel = (selected === h.id || (!isForced && selected === 'auto' && h.id === 'auto')) ? 'selected' : '';
-    return `<option value="${h.id}" ${isSel}>${esc(h.name)}</option>`;
+    const suffix = h.id === 'auto' ? '' : ` · ${huntMetricLabel(metric, category)}`;
+    return `<option value="${h.id}" ${isSel}>${esc(h.name + suffix)}</option>`;
   }).join('');
+}
+
+function renderHuntPicker(botId, status, isForced) {
+  const category = huntCategorySelections[botId] || 'loot';
+  const categoryLabel = category === 'xp' ? 'XP por hora' : 'Loot por hora';
+  return `<div class="hunt-picker" id="hunt-picker-${botId}">
+    <div class="hunt-category-row">
+      <span class="hunt-category-label">Mostrar hunts por</span>
+      <div class="hunt-tabs" role="tablist" aria-label="Critério de hunts">
+        <button type="button" class="hunt-tab loot ${category === 'loot' ? 'active' : ''}" aria-pressed="${category === 'loot'}" onclick="setHuntCategory('${botId}', 'loot')">💰 LOOT</button>
+        <button type="button" class="hunt-tab xp ${category === 'xp' ? 'active' : ''}" aria-pressed="${category === 'xp'}" onclick="setHuntCategory('${botId}', 'xp')">⚡ XP</button>
+      </div>
+    </div>
+    <div class="hunt-control-row">
+      <select id="hunt-select-${botId}" class="hunt-select" aria-label="Escolher hunt por ${categoryLabel}" onchange="pendingHuntSelections['${botId}'] = this.value">${renderHuntOptions(status.last_hunt_id || status.force_hunt_id, isForced, botId, status, category)}</select>
+      <button class="btn-hunt" id="btn-hunt-${botId}" onclick="changeHunt('${botId}')">Mudar Hunt</button>
+    </div>
+    <div class="hunt-picker-note">Lista ordenada por ${categoryLabel}; hunts sem telemetria ficam no final.</div>
+  </div>`;
+}
+
+function setHuntCategory(botId, category) {
+  if (category !== 'loot' && category !== 'xp') return;
+  huntCategorySelections[botId] = category;
+  const bot = window.latestFleetData?.bots?.[botId];
+  const picker = document.getElementById(`hunt-picker-${botId}`);
+  if (!bot || !picker) return;
+  const status = bot.status || {};
+  picker.outerHTML = renderHuntPicker(botId, status, Boolean(status.force_hunt && status.force_hunt_id));
 }
 
 function huntSection(id, s, decision, isForced) {
@@ -820,10 +963,7 @@ function huntSection(id, s, decision, isForced) {
       <div class="hunt-curr-info"><span style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;">HUNT ATIVA:</span><span class="hunt-curr-name">${huntName}</span></div>
       <span class="mode-pill ${isForced ? 'forced' : 'auto'}">${mode}</span>
     </div>
-    <div class="hunt-control-row">
-      <select id="hunt-select-${id}" class="hunt-select" onchange="pendingHuntSelections['${id}'] = this.value">${renderHuntOptions(s.last_hunt_id || s.force_hunt_id, isForced, id)}</select>
-      <button class="btn-hunt" id="btn-hunt-${id}" onclick="changeHunt('${id}')">Mudar Hunt</button>
-    </div>
+    ${renderHuntPicker(id, s, isForced)}
     <span class="hunt-msg" id="hunt-msg-${id}"></span>
     <div style="color:var(--muted);font-size:10px;margin-top:2px;">${esc(decision.reason || 'IA operando normalmente')}</div>
   </div>`;
@@ -975,7 +1115,10 @@ function card(id, b) {
           <summary>Ver Telemetria Técnica JSON</summary>
           <pre>${esc(JSON.stringify({
             last_update: s.last_update,
+            last_update_ts: s.last_update_ts,
             uptime_seconds: s.online_uptime_seconds,
+            elapsed_seconds: s.elapsed_seconds,
+            elapsed_minutes: s.elapsed_minutes,
             session_xp: s.session_xp,
             force_hunt: s.force_hunt,
             force_hunt_id: s.force_hunt_id,
@@ -1127,16 +1270,7 @@ async function changeHunt(botId) {
   const msg = document.getElementById('hunt-msg-' + botId);
   if (!sel || !btn) return;
 
-  let operatorToken = sessionStorage.getItem('baiak-operator-token');
-  if (!operatorToken) {
-    operatorToken = window.prompt('Informe o token do painel operacional:') || '';
-    if (!operatorToken) {
-      msg.textContent = 'Token de operador necessário para enviar comandos.';
-      msg.className = 'hunt-msg err';
-      return;
-    }
-    sessionStorage.setItem('baiak-operator-token', operatorToken);
-  }
+  let operatorToken = sessionStorage.getItem('baiak-operator-token') || '';
 
   const huntId = sel.value;
   btn.disabled = true;

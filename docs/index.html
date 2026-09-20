@@ -303,6 +303,57 @@ body {
   gap: 8px;
   align-items: center;
 }
+.hunt-picker {
+  margin-top: 10px;
+}
+.hunt-category-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.hunt-category-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.hunt-tabs {
+  display: flex;
+  gap: 6px;
+}
+.hunt-tab {
+  background: #0c1118;
+  border: 1px solid var(--line-light);
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 6px 10px;
+  transition: all .15s;
+}
+.hunt-tab:hover {
+  color: var(--text);
+  border-color: var(--bot);
+}
+.hunt-tab.active.loot {
+  background: #3a2d12;
+  border-color: var(--gold);
+  color: var(--gold);
+}
+.hunt-tab.active.xp {
+  background: #102633;
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.hunt-picker-note {
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 6px;
+}
 .hunt-select {
   flex: 1;
   background: #090d13;
@@ -538,6 +589,7 @@ body { overflow-x: hidden; }
   .fleet-summary { grid-template-columns: repeat(2, 1fr); }
   .summary.primary { grid-column: span 2; }
   .hero-stats { grid-template-columns: 1fr; }
+  .hunt-category-row { align-items: flex-start; flex-direction: column; }
   .hunt-control-row { flex-direction: column; align-items: stretch; }
   .hunt-readonly { align-items: flex-start; flex-direction: column; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
@@ -562,7 +614,7 @@ body { overflow-x: hidden; }
       <div>
         <div class="eyebrow">Operations / Live Fleet</div>
         <div class="title">Baiak Fleet Control</div>
-        <div class="subtitle">Painel público de leitura da frota. Dados ao vivo, sem comandos remotos.</div>
+        <div class="subtitle">Painel de controle ao vivo da frota. Selecione e troque a hunt ativa de cada VPS em tempo real.</div>
       </div>
     </div>
     <div class="clock">
@@ -612,7 +664,8 @@ body { overflow-x: hidden; }
 <script>
 const PARAM_API = new URLSearchParams(location.search).get('api');
 const LIVE_API = (PARAM_API || localStorage.getItem('baiak-live-api') || 'https://disfigure-tribune-silo.ngrok-free.dev').replace(/\/$/, '');
-const PUBLIC_MODE = true;
+const API = LIVE_API;
+const PUBLIC_MODE = false;
 const OVERVIEW_PATH = '/api/public/overview';
 // Ordem de tentativa: AO VIVO primeiro, snapshot mesma-origem como fallback
 // (o snapshot é publicado a cada 5 min pela Action pages-snapshot).
@@ -620,6 +673,7 @@ const API_ENDPOINTS = [LIVE_API + OVERVIEW_PATH, './fleet-snapshot.json'];
 try { localStorage.setItem('baiak-live-api', LIVE_API); } catch (_) {}
 const levelHistory = {};
 const pendingHuntSelections = {};
+const huntCategorySelections = {};
 let historyWindowHours = 1;
 let benchmarkFilter = '';
 let benchmarkSort = 'gold';
@@ -723,6 +777,43 @@ function formatXp(v) {
   return `+${num(n)} XP`;
 }
 
+function formatUptimeSec(totalSeconds) {
+  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  if (s <= 0) return '0s';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function formatElapsed(totalSeconds, elapsedMin) {
+  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  if (s > 0 && s < 60) return `${s}s`;
+  const m = Math.floor(Number(elapsedMin) || 0);
+  if (m > 0) return `${m} min`;
+  if (s >= 60) return `${Math.floor(s / 60)} min`;
+  return '0s';
+}
+
+function tickUptimes() {
+  const now = Date.now();
+  document.querySelectorAll('[data-tick-base]').forEach(el => {
+    const base = Number(el.getAttribute('data-tick-base')) || 0;
+    const at = Number(el.getAttribute('data-tick-at')) || now;
+    const cur = base + Math.max(0, Math.floor((now - at) / 1000));
+    const kind = el.getAttribute('data-tick-kind');
+    if (kind === 'elapsed') {
+      const m = Math.floor(cur / 60);
+      el.textContent = formatElapsed(cur, m);
+    } else {
+      el.textContent = formatUptimeSec(cur);
+    }
+  });
+}
+setInterval(tickUptimes, 1000);
+
 function healthState(bot) {
   const state = bot?.health?.state;
   if (state) return state;
@@ -761,12 +852,102 @@ function party(s) {
   `).join('');
 }
 
-function renderHuntOptions(currentHuntId, isForced, botId) {
+function parseHuntMetric(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return 0;
+  const numberMatch = raw.match(/-?[\d.,]+/);
+  if (!numberMatch) return 0;
+  const token = numberMatch[0];
+  const pieces = token.split(/[.,]/);
+  let normalized = token;
+  if (token.includes('.') && token.includes(',')) {
+    normalized = token.replace(/\./g, '').replace(',', '.');
+  } else if (token.includes(',')) {
+    normalized = pieces.length > 1 && pieces.at(-1).length === 3
+      ? token.replace(/,/g, '')
+      : token.replace(',', '.');
+  } else if (token.includes('.')) {
+    normalized = pieces.length > 2 || pieces.at(-1).length === 3
+      ? token.replace(/\./g, '')
+      : token;
+  }
+  const suffix = raw.match(/(kk|bn|b|m|k)\s*$/)?.[1] || '';
+  const multiplier = suffix === 'kk' || suffix === 'm' ? 1_000_000
+    : suffix === 'bn' || suffix === 'b' ? 1_000_000_000
+      : suffix === 'k' ? 1_000 : 1;
+  return (Number(normalized) || 0) * multiplier;
+}
+
+function huntMetricValue(status, huntId, category) {
+  const records = [
+    status?.hunt_metrics?.[huntId],
+    status?.hunt_matrix?.[huntId],
+    status?.benchmarks?.[huntId],
+  ].filter(Boolean);
+  const keys = category === 'xp'
+    ? ['xpPerHour', 'xp_per_hour', 'avg_xp_h', 'xp_h', 'xp_h_display']
+    : ['lootGoldPerHour', 'loot_per_hour', 'avg_loot_h', 'avg_gold_h', 'gold_per_hour', 'netGoldPerHour'];
+  for (const record of records) {
+    for (const key of keys) {
+      const value = parseHuntMetric(record[key]);
+      if (value > 0) return value;
+    }
+  }
+  return 0;
+}
+
+function huntMetricLabel(value, category) {
+  if (!(value > 0)) return 'sem dados';
+  return category === 'xp' ? `${formatXp(value)}/h` : `${formatGold(value)}/h`;
+}
+
+function renderHuntOptions(currentHuntId, isForced, botId, status, category) {
   const selected = pendingHuntSelections[botId] ?? (isForced ? currentHuntId : 'auto');
-  return HUNTS_CATALOG.map(h => {
+  const ranked = HUNTS_CATALOG.map((h, index) => ({
+    h,
+    index,
+    metric: h.id === 'auto' ? 0 : huntMetricValue(status, h.id, category),
+  })).sort((a, b) => {
+    if (a.h.id === 'auto') return -1;
+    if (b.h.id === 'auto') return 1;
+    if (a.metric !== b.metric) return b.metric - a.metric;
+    return a.index - b.index;
+  });
+  return ranked.map(({ h, metric }) => {
     const isSel = (selected === h.id || (!isForced && selected === 'auto' && h.id === 'auto')) ? 'selected' : '';
-    return `<option value="${h.id}" ${isSel}>${esc(h.name)}</option>`;
+    const suffix = h.id === 'auto' ? '' : ` · ${huntMetricLabel(metric, category)}`;
+    return `<option value="${h.id}" ${isSel}>${esc(h.name + suffix)}</option>`;
   }).join('');
+}
+
+function renderHuntPicker(botId, status, isForced) {
+  const category = huntCategorySelections[botId] || 'loot';
+  const categoryLabel = category === 'xp' ? 'XP por hora' : 'Loot por hora';
+  return `<div class="hunt-picker" id="hunt-picker-${botId}">
+    <div class="hunt-category-row">
+      <span class="hunt-category-label">Mostrar hunts por</span>
+      <div class="hunt-tabs" role="tablist" aria-label="Critério de hunts">
+        <button type="button" class="hunt-tab loot ${category === 'loot' ? 'active' : ''}" aria-pressed="${category === 'loot'}" onclick="setHuntCategory('${botId}', 'loot')">💰 LOOT</button>
+        <button type="button" class="hunt-tab xp ${category === 'xp' ? 'active' : ''}" aria-pressed="${category === 'xp'}" onclick="setHuntCategory('${botId}', 'xp')">⚡ XP</button>
+      </div>
+    </div>
+    <div class="hunt-control-row">
+      <select id="hunt-select-${botId}" class="hunt-select" aria-label="Escolher hunt por ${categoryLabel}" onchange="pendingHuntSelections['${botId}'] = this.value">${renderHuntOptions(status.last_hunt_id || status.force_hunt_id, isForced, botId, status, category)}</select>
+      <button class="btn-hunt" id="btn-hunt-${botId}" onclick="changeHunt('${botId}')">Mudar Hunt</button>
+    </div>
+    <div class="hunt-picker-note">Lista ordenada por ${categoryLabel}; hunts sem telemetria ficam no final.</div>
+  </div>`;
+}
+
+function setHuntCategory(botId, category) {
+  if (category !== 'loot' && category !== 'xp') return;
+  huntCategorySelections[botId] = category;
+  const bot = window.latestFleetData?.bots?.[botId];
+  const picker = document.getElementById(`hunt-picker-${botId}`);
+  if (!bot || !picker) return;
+  const status = bot.status || {};
+  picker.outerHTML = renderHuntPicker(botId, status, Boolean(status.force_hunt && status.force_hunt_id));
 }
 
 function huntSection(id, s, decision, isForced) {
@@ -783,10 +964,7 @@ function huntSection(id, s, decision, isForced) {
       <div class="hunt-curr-info"><span style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;">HUNT ATIVA:</span><span class="hunt-curr-name">${huntName}</span></div>
       <span class="mode-pill ${isForced ? 'forced' : 'auto'}">${mode}</span>
     </div>
-    <div class="hunt-control-row">
-      <select id="hunt-select-${id}" class="hunt-select" onchange="pendingHuntSelections['${id}'] = this.value">${renderHuntOptions(s.last_hunt_id || s.force_hunt_id, isForced, id)}</select>
-      <button class="btn-hunt" id="btn-hunt-${id}" onclick="changeHunt('${id}')">Mudar Hunt</button>
-    </div>
+    ${renderHuntPicker(id, s, isForced)}
     <span class="hunt-msg" id="hunt-msg-${id}"></span>
     <div style="color:var(--muted);font-size:10px;margin-top:2px;">${esc(decision.reason || 'IA operando normalmente')}</div>
   </div>`;
@@ -804,8 +982,16 @@ function card(id, b) {
   const taken = an.taken || {};
 
   const isForced = Boolean(s.force_hunt && s.force_hunt_id);
-  const uptimeStr = s.online_uptime_str || (s.online ? `${num(s.elapsed_minutes)}m` : 'Reconectando...');
+  const uptimeSec = Number(s.online_uptime_seconds ?? 0) || 0;
+  const elapsedSecForUptime = Number(s.elapsed_seconds ?? 0) || 0;
+  const uptimeBase = uptimeSec > 0 ? uptimeSec : (s.online ? elapsedSecForUptime : 0);
+  const uptimeStr = s.online
+    ? formatUptimeSec(s.online_uptime_seconds ?? uptimeBase)
+    : 'Reconectando...';
   const sessionXpStr = s.session_xp_str || formatXp(s.session_xp || an.session_xp || an.raw_xp || 0);
+  const elapsedSec = elapsedSecForUptime || uptimeSec || (Number(s.elapsed_minutes) || 0) * 60;
+  const elapsedStr = formatElapsed(elapsedSec, s.elapsed_minutes);
+  const tickAt = Date.now();
 
   return `
     <article class="bot ${id}">
@@ -827,7 +1013,7 @@ function card(id, b) {
               <span>ONLINE CONTÍNUO (SEM QUEDA)</span>
               <span style="font-size:12px;">⏱️</span>
             </div>
-            <strong class="hero-val">${esc(uptimeStr)}</strong>
+            <strong class="hero-val" ${s.online ? `data-tick-base="${uptimeBase}" data-tick-at="${tickAt}" data-tick-kind="uptime"` : ''}>${esc(uptimeStr)}</strong>
             <small>${s.online ? 'Conexão WebSocket estável' : 'Aguardando sincronização'}</small>
           </div>
 
@@ -871,7 +1057,7 @@ function card(id, b) {
           </div>
           <div class="metric">
             <span>Tempo Total</span>
-            <b>${num(s.elapsed_minutes)} min</b>
+            <b data-tick-base="${elapsedSec}" data-tick-at="${tickAt}" data-tick-kind="elapsed">${esc(elapsedStr)}</b>
           </div>
           <div class="metric">
             <span>Loop Mode</span>
@@ -930,7 +1116,10 @@ function card(id, b) {
           <summary>Ver Telemetria Técnica JSON</summary>
           <pre>${esc(JSON.stringify({
             last_update: s.last_update,
+            last_update_ts: s.last_update_ts,
             uptime_seconds: s.online_uptime_seconds,
+            elapsed_seconds: s.elapsed_seconds,
+            elapsed_minutes: s.elapsed_minutes,
             session_xp: s.session_xp,
             force_hunt: s.force_hunt,
             force_hunt_id: s.force_hunt_id,
@@ -1082,16 +1271,7 @@ async function changeHunt(botId) {
   const msg = document.getElementById('hunt-msg-' + botId);
   if (!sel || !btn) return;
 
-  let operatorToken = sessionStorage.getItem('baiak-operator-token');
-  if (!operatorToken) {
-    operatorToken = window.prompt('Informe o token do painel operacional:') || '';
-    if (!operatorToken) {
-      msg.textContent = 'Token de operador necessário para enviar comandos.';
-      msg.className = 'hunt-msg err';
-      return;
-    }
-    sessionStorage.setItem('baiak-operator-token', operatorToken);
-  }
+  let operatorToken = sessionStorage.getItem('baiak-operator-token') || '';
 
   const huntId = sel.value;
   btn.disabled = true;

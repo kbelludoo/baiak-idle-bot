@@ -107,10 +107,10 @@ export function parseConfig(): BotConfig {
   const autoBags = has('--no-bags') ? false : envFlag('AUTO_BAGS', true);
   const autoPrey = has('--no-prey') ? false : envFlag('AUTO_PREY', true);
   const autoExtras = has('--no-extras') ? false : envFlag('AUTO_EXTRAS', true);
-  const forceHunt = has('--force-hunt') || envFlag('FORCE_HUNT', false);
+  const forceHunt = has('--force-hunt') || envFlag('FORCE_HUNT', false) || (env.HUNT_MODE || '').toLowerCase() === 'force';
   const huntId = getVal('--hunt-id', env.HUNT_ID || '');
   const huntModeRaw = getVal('--hunt-mode', env.HUNT_MODE || (forceHunt ? 'force' : 'last')).toLowerCase();
-  const huntMode = (['last', 'force', 'engine', 'hybrid'].includes(huntModeRaw) ? huntModeRaw : 'last') as BotConfig['huntMode'];
+  const huntMode = forceHunt ? 'force' : ((['last', 'force', 'engine', 'hybrid'].includes(huntModeRaw) ? huntModeRaw : 'last') as BotConfig['huntMode']);
 
   const sellThresholdPct = clamp(parseInt(getVal('--sell-pct', String(envInt('SELL_THRESHOLD_PCT', 70))), 10) || 70, 10, 100);
   const healBelowPct = clamp(parseInt(getVal('--heal-pct', String(envInt('HEAL_BELOW_PCT', 75))), 10) || 75, 10, 95);

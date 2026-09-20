@@ -1,6 +1,15 @@
 async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const vis = (el) => !!(el && el.offsetParent !== null);
+  // O HUD usa botões position:fixed. Neles offsetParent é null mesmo quando
+  // estão visíveis; tratar isso como invisível fazia o auto-boss nunca achar
+  // "Iniciar Auto Boss"/boss-fight.
+  const vis = (el) => {
+    if (!el) return false;
+    const cs = getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 || r.height > 0 || cs.position === "fixed";
+  };
   const events = [];
 
   const abo = document.getElementById("autoboss-overlay");

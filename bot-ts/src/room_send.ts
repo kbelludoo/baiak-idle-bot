@@ -97,6 +97,12 @@ export const sendSellReward = (page: Page | null) => roomSend(page, 'sellreward'
 export const sendSellAll = (page: Page | null, prot: any) => roomSend(page, 'sellall', { protected: prot });
 export const sendBoss = (page: Page | null, bossId: string, fromCity: boolean) =>
   roomSend(page, 'boss', { bossId, fromCity });
+/** Inicia/interrompe a playlist Auto Boss oficial do jogo. */
+export const sendAutoBoss = (page: Page | null, action: 'start' | 'stop' | 'sync') =>
+  roomSendDetail(page, 'autoboss', { action });
+/** Atualiza a playlist/preset do Auto Boss oficial. */
+export const sendAutoBossList = (page: Page | null, ids: string[], preset = 0) =>
+  roomSendDetail(page, 'autobosslist', { ids, preset });
 export const sendArenaQueue = (page: Page | null) => roomSend(page, 'arenaQueue', {});
 export const sendToCity = (page: Page | null) => roomSend(page, 'tocity', {});
 export const sendReady = (page: Page | null) => roomSend(page, 'ready', {});

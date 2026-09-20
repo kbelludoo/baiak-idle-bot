@@ -63,7 +63,7 @@ export async function launchBrowser(
     '--password-store=basic',
     '--use-mock-keychain',
     '--renderer-process-limit=1',
-    '--js-flags=--max-old-space-size=512',
+    '--js-flags=--max-old-space-size=256',
     '--remote-debugging-port=9222',
     '--remote-debugging-address=0.0.0.0',
     '--lang=pt-BR',
@@ -131,19 +131,6 @@ export async function launchBrowser(
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
   );
 
-  // A sessão atual do jogo autentica tRPC/Colyseus pelo Bearer token. Os
-  // cookies continuam sendo mantidos para compatibilidade, mas não bastam
-  // para a primeira chamada auth.me em uma página nova; sem este cabeçalho o
-  // jogo fica na tela pública e nunca cria o WebSocket da sala.
-  if (config.token) {
-    try {
-      await page.setExtraHTTPHeaders({ Authorization: `Bearer ${config.token}` });
-      console.log('[*] [AUTH] Cabeçalho Bearer configurado para a sessão do jogo.');
-    } catch (err: any) {
-      console.warn(`[AUTH AVISO] Cabeçalho Bearer não configurado: ${err?.message || err}`);
-    }
-  }
-
   // Injeta autenticação se fornecido token
   if (config.token) {
     try {
@@ -175,6 +162,75 @@ export async function launchBrowser(
       // O motor do jogo só precisa do WebGL; esconder WebGPU evita que o
       // renderer aguarde indefinidamente um adapter inexistente na VPS.
       Object.defineProperty(navigator, 'gpu', { get: () => undefined, configurable: true });
+    } catch (e) {}
+    try {
+      // A economia de bateria é uma tela idle da própria UI, não apenas um
+      // filtro visual: em algumas contas ela congela a wave em 1/10. O TS já
+      // reduz áudio/efeitos separadamente, então começa com esse modo
+      // desligado e deixa o combate autoritativo continuar.
+      localStorage.setItem('bs-enabled', '0');
+      const __baiakSettings = JSON.parse(localStorage.getItem('baiakidle.settings') || '{}');
+      __baiakSettings.batterySave = false;
+      localStorage.setItem('baiakidle.settings', JSON.stringify(__baiakSettings));
+    } catch (e) {}
+
+    ${config.token ? `
+      try {
+        // Add Bearer only to game-domain fetch/XHR calls. A page-wide extra
+        // header also reaches Cloudflare's optional beacon and causes a CORS
+        // preflight, delaying domcontentloaded on the VPS.
+        const __baiakToken = ${JSON.stringify(config.token)};
+        const __isBaiakUrl = (value) => {
+          try {
+            const host = new URL(String(value), location.href).hostname.toLowerCase();
+            return host === 'baiakidle.com' || host.endsWith('.baiakidle.com');
+          }
+          catch (_) { return false; }
+        };
+        const __nativeFetch = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          const rawUrl = typeof input === 'string' ? input : input?.url;
+          if (!__isBaiakUrl(rawUrl)) return __nativeFetch(input, init);
+          const headers = new Headers(init?.headers || (typeof input !== 'string' ? input?.headers : undefined));
+          headers.set('Authorization', 'Bearer ' + __baiakToken);
+          return __nativeFetch(input, { ...(init || {}), headers });
+        };
+        const __nativeOpen = XMLHttpRequest.prototype.open;
+        const __nativeSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+          this.__baiakUrl = String(url);
+          return __nativeOpen.call(this, method, url, ...rest);
+        };
+        XMLHttpRequest.prototype.send = function(body) {
+          if (__isBaiakUrl(this.__baiakUrl)) {
+            try { this.setRequestHeader('Authorization', 'Bearer ' + __baiakToken); } catch (_) {}
+          }
+          return __nativeSend.call(this, body);
+        };
+      } catch (e) {}
+    ` : ''}
+    try {
+      // PixiJS selects WebGPU on desktop before falling back to WebGL. The
+      // game's own mobile branch explicitly requests WebGL, so advertise the
+      // coarse-pointer capability only for that feature query. This keeps the
+      // viewport/UA unchanged while making the renderer deterministic on a
+      // headless VPS with SwiftShader.
+      const nativeMatchMedia = window.matchMedia.bind(window);
+      window.matchMedia = (query) => {
+        if (query === '(pointer: coarse) and (hover: none)') {
+          return {
+            matches: true,
+            media: query,
+            onchange: null,
+            addListener() {},
+            removeListener() {},
+            addEventListener() {},
+            removeEventListener() {},
+            dispatchEvent() { return false; },
+          };
+        }
+        return nativeMatchMedia(query);
+      };
     } catch (e) {}
 
     // Modo leve experimental: o servidor continua recebendo WebSocket e o DOM
@@ -221,9 +277,12 @@ export async function launchBrowser(
 
     ${config.reduceVfx ? `
       try {
-        localStorage.setItem('bs-enabled', '1');
+        // Reduzir efeitos não pode ativar a tela idle de economia: nessa
+        // build ela congela a sala em 1/10 quando o navegador fica sem
+        // interação. O script de VFX trata a redução visual separadamente.
+        localStorage.setItem('bs-enabled', '0');
         localStorage.setItem('baiakidle.settings', JSON.stringify({
-          fxOpacity: 0, music: 0, soundMaster: 0, batterySave: true
+          fxOpacity: 0, music: 0, soundMaster: 0, batterySave: false
         }));
       } catch (e) {}
     ` : ''}
@@ -249,6 +308,7 @@ export async function launchBrowser(
   // quando NENHUM socket de jogo resta aberto. O payload também carrega
   // requestId/url/opcode para o handler separar queue/hunt/chat.
   const gameSockets = new Map<string, { url: string; room: string }>();
+  let wsCloseTimer: any = null;
   const guessRoom = (url: string): string => {
     const u = (url || '').toLowerCase();
     if (u.includes('partyhunt')) return 'partyhunt';
@@ -277,6 +337,10 @@ export async function launchBrowser(
       const wasEmpty = gameSockets.size === 0;
       gameSockets.set(requestId, { url, room: guessRoom(url) });
       console.log(`[*] [WS-TS] Socket do jogo criado: [${guessRoom(url)}] ${url.slice(0, 120)} (total=${gameSockets.size})`);
+      if (wsCloseTimer) {
+        clearTimeout(wsCloseTimer);
+        wsCloseTimer = null;
+      }
       if (wasEmpty) onWsOpen();
     }
   });
@@ -312,9 +376,19 @@ export async function launchBrowser(
     if (!sock) return;
     gameSockets.delete(requestId);
     console.log(`[*] [WS-TS] Socket fechado: [${sock.room}] restam=${gameSockets.size}`);
-    // Só derruba online quando o ÚLTIMO socket de jogo fecha. Fechar só o
-    // chat/queue com a hunt aberta não é queda.
-    if (!anyGameSocketOpen()) onWsClose();
+    // Só derruba online quando o ÚLTIMO socket de jogo fecha.
+    // Usamos debounce de 4s para absorver reconexões rápidas do Colyseus sem
+    // resetar uptime nem acionar o watchdog precocemente.
+    if (!anyGameSocketOpen()) {
+      if (wsCloseTimer) clearTimeout(wsCloseTimer);
+      wsCloseTimer = setTimeout(() => {
+        if (!anyGameSocketOpen()) {
+          console.warn('[*] [WS-TS] Nenhum socket de jogo aberto após 4s de tolerância. Disparando onWsClose.');
+          onWsClose();
+        }
+        wsCloseTimer = null;
+      }, 4000);
+    }
   });
 
   // Captura de Screencast contínua em sessão CDP isolada (para não afogar chamadas de evaluate)
@@ -359,16 +433,7 @@ export async function launchBrowser(
       } else if (['document', 'xhr', 'fetch'].includes(type) && /baiakidle\.com/i.test(url)) {
         console.log(`[*] [NET-REQUEST] ${type} ${url.slice(0, 180)}`);
       }
-      // O Bearer é necessário apenas no domínio do jogo. Removê-lo de
-      // Cloudflare/terceiros evita preflight CORS e não vaza a sessão.
-      const headers = { ...(req.headers?.() || {}) };
-      if (!/^https:\/\/([^/]*\.)?baiakidle\.com\//i.test(url)) {
-        delete headers.authorization;
-      }
-      req.continue({ headers }).catch(() => {});
-    } catch (_) {
-      req.continue().catch(() => {});
-    }
+    } catch (_) {}
   });
   page.on('framenavigated', (frame: any) => {
     try {
@@ -378,13 +443,18 @@ export async function launchBrowser(
   page.on('response', (res: any) => {
     try {
       const url = res.url();
-      if (/baiakidle\.com\/api\//i.test(url)) {
+      // Asset loading can produce hundreds of successful image responses.
+      // Logging every sprite blocks the Bun stdout pipe on a small VPS and
+      // delays the renderer/WebSocket boot. Keep only API checkpoints and
+      // failures; the request/WS hooks still provide full diagnostics.
+      const important = /baiakidle\.com\/api\/trpc\/(auth\.me|characters\.|account\.)/i.test(url)
+        || /baiakidle\.com\/api\/things\/manifest\.json/i.test(url)
+        || res.status() >= 400;
+      if (important) {
         console.log(`[*] [NET-RESPONSE] ${res.status()} ${url.slice(0, 180)}`);
       }
     } catch (_) {}
   });
-  try { await page.setRequestInterception(true); } catch (_) {}
-
   // Tratamento de diálogos do navegador (auto-aceitar)
   page.on('dialog', async (d) => {
     try {

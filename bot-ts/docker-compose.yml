@@ -14,20 +14,28 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.80"
-          memory: 768M
+          cpus: "1.50"
+          memory: 512M
     environment:
       - PORT=${PORT:-8080}
       - HOST=0.0.0.0
       - HEADLESS=true
       - STREAM=false
       - SCREENSHOT_INTERVAL=0
+      # Permite configurar HUNT_MODE e FORCE_HUNT via .env ou padrão engine
+      - HUNT_MODE=${HUNT_MODE:-engine}
+      - FORCE_HUNT=${FORCE_HUNT:-false}
+      - HUNT_ID=${HUNT_ID:-}
       # O canvas/PixiJS do jogo precisa de WebGL. SwiftShader usa CPU, mas
       # mantém o mapa e o handshake do jogo funcionais em VPS sem GPU.
       - CHROME_GL=${CHROME_GL:-swiftshader}
-      - ENABLE_KERNEL=false
-      - GRAPHICS_THROTTLE=${GRAPHICS_THROTTLE:-false}
-      - GRAPHICS_THROTTLE_MS=${GRAPHICS_THROTTLE_MS:-2000}
+      # O hook do motor captura frames Blob/ROOM_STATE e mantém o heartbeat;
+      # sem ele o engine perde métricas e a sessão pode expirar.
+      - ENABLE_KERNEL=true
+      # O jogo usa SwiftShader na VPS; limitar o ticker visual evita que o
+      # renderer monopolize CPU e deixe Runtime.evaluate/WS em timeout.
+      - GRAPHICS_THROTTLE=true
+      - GRAPHICS_THROTTLE_MS=1000
       - USER_DATA_DIR=/app/data/chrome_profile_ts
     ports:
       - "${PORT:-8080}:${PORT:-8080}"

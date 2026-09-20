@@ -16,7 +16,7 @@ import { bestElementForResistances, rankHuntsObserved } from "./hunt_sim";
 import { helperTrigger } from "./helper_triggers";
 import { ActionQueue, evaluateStaminaTransition } from "./state_machine";
 import { createTrpcClient, normalizeChars } from "./trpc";
-import { roomSend, roomDrainEvents, sendStage } from "./room_send";
+import { roomSend, roomSendDetail, roomDrainEvents, sendStage, sendAutosellFull, sendAutosellPct, sendAutoBoss } from "./room_send";
 import type { TelemetryState, SubsystemInfo } from "./types";
 
 // ===================================================================
@@ -81,11 +81,23 @@ const FAST_STATE_JS = `() => {
   // Detecta se o jogo está no modo economia de bateria
   const bsOverlay = document.getElementById("battery-save-overlay");
   const inBatterySaver = !!(bsOverlay && !bsOverlay.classList.contains("hidden"));
+  // A conta pode retomar em Treino Online após uma sessão anterior. O
+  // overlay de treino é a fonte autoritativa; o seletor bs-hunt da camada oculta
+  // de economia pode conservar a última hunt e não deve mascarar esse estado.
+  const trainingOverlay = document.getElementById("training-overlay");
+  const inTraining = !!(trainingOverlay && !trainingOverlay.classList.contains("hidden"));
+  const visible = (el) => {
+    if (!el || el.classList?.contains("hidden")) return false;
+    try {
+      const cs = getComputedStyle(el);
+      return cs.display !== "none" && cs.visibility !== "hidden" && cs.opacity !== "0";
+    } catch (_) { return true; }
+  };
 
   // Hunt / Wave
-  let wave = text(document.querySelector(".bs-hunt")) ||
-             text(document.getElementById("wave-title")) ||
-             text(document.querySelector(".stage-name, .stage-name-line"));
+  let wave = inTraining ? "Treino Online" :
+             text(Array.from(document.querySelectorAll(".bs-hunt")).find(visible)) ||
+             text(Array.from(document.querySelectorAll("#wave-title, .stage-name, .stage-name-line")).find(visible));
   if (!wave || wave === "—" || wave === "-") {
     const tm = (document.title || "").match(/·\\s*(.*?)\\s*—/);
     if (tm && tm[1]) wave = tm[1].trim();
@@ -293,6 +305,7 @@ const FAST_STATE_JS = `() => {
     invText,
     connExpired,
     inBatterySaver,
+    inTraining,
     events,
     spells,
     helpers,
@@ -338,6 +351,20 @@ async function main() {
   profiler.clearDeathPenalties();
   const huntMatrix = new HuntMatrix(dataDir);
   let magicState: Record<string, any> = classifyMagic([]);
+  // Leituras DOM da rotação são frequentes e `classifyMagic` devolve apenas
+  // os slots. Preserve as observações de combate/resistência anexadas pelo
+  // engine; sem este merge elas desapareciam do status a cada tick do HUD.
+  const classifyMagicPreservingFacts = (spells: any[], helpers: any[]): Record<string, any> => {
+    const previous = magicState || {};
+    const next = classifyMagic(spells, helpers);
+    return {
+      ...next,
+      ...(previous.damageProfile ? { damageProfile: previous.damageProfile } : {}),
+      ...(previous.observed_element ? { observed_element: previous.observed_element } : {}),
+      ...(previous.element_source ? { element_source: previous.element_source } : {}),
+      ...(previous.recommended_element ? { recommended_element: previous.recommended_element } : {}),
+    };
+  };
   let helperBySlot: Record<number, any> = {};
   let latestAnalyzers: Record<string, any> = {};
   let lastGearSlot: number | null = null;
@@ -349,6 +376,9 @@ async function main() {
   // entrou no socket e pode ser seguido por um `joined` antigo.
   let authoritativeHuntId: string | null = null;
   const ACCOUNT_SYNC_MS = 60_000;
+  let forcePendingId: string | null = null;
+  let forcePendingUntil = 0;
+  let lastAutoSellConfig = 0;
 
   const syncAccountChars = async (): Promise<Record<string, any>> => {
     const now = Date.now();
@@ -415,12 +445,6 @@ async function main() {
 
   const telemetry = new TelemetryStore();
   const protocolMapper = new ProtocolMapper(dataDir);
-  const explorationPolicy = {
-    sampleSec: config.exploreSampleSec,
-    maxDeaths: config.exploreMaxDeaths,
-    maxDamageTakenPct: config.exploreMaxDamageTakenPct,
-    cooldownSec: config.exploreCooldownSec,
-  };
   const actionQueue = new ActionQueue();
   (telemetry as any).partyMembersRaw = [];
 
@@ -436,6 +460,17 @@ async function main() {
             const c = picker.querySelector("#picker-modal-close, .im-close, .close-btn, .modal-close, [data-close]");
             if (c) (c as HTMLElement).click();
             else picker.classList.add("hidden");
+          }
+          // A configuração de cura/poção abre o Helper. Se o renderer ou
+          // uma ação de seleção expirar, a janela fica sobre a arena e a
+          // sala continua conectada, mas nenhuma wave avança. Fechar aqui é
+          // seguro: a próxima rodada reabre o Helper apenas se ainda faltar
+          // algum slot para configurar.
+          const helper = document.getElementById("helper-modal");
+          if (helper && !helper.classList.contains("hidden")) {
+            const c = helper.querySelector("#helper-modal-close, .im-close, .close-btn, .modal-close, [data-close]");
+            if (c) (c as HTMLElement).click();
+            else helper.classList.add("hidden");
           }
           const confirm = document.getElementById("confirm-modal");
           if (confirm && !confirm.classList.contains("hidden") && !/comprar|buy|lance|bid|leil|loja|store|pix|vip|premium|donate/i.test(confirm.textContent || "")) {
@@ -456,25 +491,75 @@ async function main() {
 
   // Entrada em hunt: DIRETO primeiro (1 pacote `stage`), DOM só como fallback.
   // `lMe=N=>l.send("stage",{huntId:N})` é o que o botão `.stage-go` chama.
+  let directStageMissTarget = '';
+  let directStageMisses = 0;
   const enterHuntDirectOrDom = async (target: { id?: string; name?: string; resumeLast?: boolean }): Promise<any> => {
+    const targetId = String(target?.id || '').toLowerCase();
+    const normalizeHuntId = (value: string): string => String(value || '')
+      .toLowerCase()
+      .replace(/-lair|-cave|-dungeon|-camp|-ground/g, '');
+    const isTargetVisible = (): boolean => {
+      if (!targetId) return false;
+      const normTarget = normalizeHuntId(targetId);
+      const normAuth = normalizeHuntId(authoritativeHuntId || '');
+      if (authoritativeHuntId === targetId || (normAuth && normTarget && normAuth === normTarget)) return true;
+      const live = matchHunt(telemetry.hunt)?.id || telemetry.hunt || '';
+      const normLive = normalizeHuntId(live);
+      return matchHunt(telemetry.hunt)?.id === targetId || Boolean(normLive && normTarget && normLive === normTarget);
+    };
+    const waitForTarget = async (timeoutMs: number): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (isTargetVisible()) return true;
+        await new Promise(r => setTimeout(r, 250));
+      }
+      return isTargetVisible();
+    };
     if (target?.id) {
       try {
         const ok = await sendStage(pageRef, target.id);
         if (ok) {
           console.log(`[${new Date().toLocaleTimeString()}] 🏹 [STAGE-DIRECT] send("stage",{huntId:${target.id}}) aceito (1 pacote)`);
-          const deadline = Date.now() + 5000;
-          while (Date.now() < deadline) {
-            if (authoritativeHuntId === target.id) {
-              return { success: true, hunt: target.id, method: "room-send" };
-            }
-            await new Promise(r => setTimeout(r, 250));
+          // Um segundo clique enquanto a reserva ainda está pendente causa
+          // `seat reservation expired`/1006. Aguarde a confirmação do socket
+          // ou do HUD e, se ela não vier, deixe a próxima tentativa repetir o
+          // pacote direto sem abrir um segundo seletor sobre a mesma reserva.
+          if (await waitForTarget(8000)) {
+            directStageMissTarget = '';
+            directStageMisses = 0;
+            return { success: true, hunt: target.id, method: "room-send" };
           }
-          console.warn(`[${new Date().toLocaleTimeString()}] [STAGE-DIRECT] sem confirmação joined para ${target.id}; usando fallback DOM`);
+          if (directStageMissTarget !== targetId) {
+            directStageMissTarget = targetId;
+            directStageMisses = 0;
+          }
+          directStageMisses += 1;
+          // A primeira ausência de confirmação é comum quando a sala está
+          // trocando o socket. Só na segunda tentativa, já após o cooldown da
+          // fila, usamos o fluxo visual oficial; isso evita duas reservas
+          // simultâneas sem bloquear a rotação para sempre.
+          if (directStageMisses < 2) {
+            console.warn(`[${new Date().toLocaleTimeString()}] [STAGE-DIRECT] sem confirmação de ${target.id}; aguardando próxima tentativa antes do DOM`);
+            return { success: false, reason: "stage-unconfirmed", method: "room-send", hunt: target.id };
+          }
+          console.warn(`[${new Date().toLocaleTimeString()}] [STAGE-DIRECT] segunda falha para ${target.id}; usando fallback DOM após cooldown`);
         }
       } catch (_) {}
     }
     try {
-      return await safeEval<any>(pageRef, "hunt", target, 12000);
+      const result = await safeEval<any>(pageRef, "hunt", target, 12000);
+      if (result?.success || result?.alreadyThere) {
+        // O script DOM pode clicar no botão e expirar antes de o servidor
+        // publicar o novo estado. Não reporte sucesso nem atualize o painel
+        // como se estivesse na hunt errada; confirme o alvo por alguns ticks.
+        if (await waitForTarget(6000)) {
+          directStageMissTarget = '';
+          directStageMisses = 0;
+          return result;
+        }
+        return { ...result, success: false, alreadyThere: false, reason: "dom-unconfirmed", requested: target.id };
+      }
+      return result;
     } finally {
       await closeStuckModals();
     }
@@ -584,6 +669,23 @@ async function main() {
       const mapSnapshot = protocolMapper.snapshot();
       const activeHuntId = matchHunt(activeHunt)?.id || activeHunt;
       const liveScore = (mapSnapshot.scores as any)?.[activeHuntId] || null;
+      const bossState = (telemetry as any).autoBossState;
+      if (config.autoBoss && bossState && typeof bossState === 'object') {
+        const until = Number(bossState.until || 0);
+        const playlist = Array.isArray(bossState.list) ? bossState.list : [];
+        const running = bossState.running === true;
+        if (until <= Date.now() || playlist.length === 0) {
+          subsystems.auto_boss = {
+            status: "AGUARDANDO_REQUISITO",
+            detail: "Auto Boss sem playlist/liberação no servidor; nenhuma rotação executada",
+          };
+        } else {
+          subsystems.auto_boss = {
+            status: "FUNCIONAL",
+            detail: running ? `Rotação Auto Boss em andamento (${playlist.length} chefes)` : `Playlist Auto Boss pronta (${playlist.length} chefes)`,
+          };
+        }
+      }
       // O analisador visual não existe em todos os modos headless. Quando o
       // servidor já enviou a prévia/relatório da hunt, ela é uma fonte melhor
       // que publicar um objeto vazio no painel.
@@ -595,11 +697,18 @@ async function main() {
       }
       // Sessão: XP total vem dos analyzers do HUD (#an-raw/.bs-stats); sem eles,
       // publica 0 com formato válido em vez de omitir o campo (contrato quebrado).
-      const sessionXpNum = Number(
+      const hudSessionXp = Number(
         (latestAnalyzers as any)?.session_xp ??
         (latestAnalyzers as any)?.raw_xp ??
         (latestAnalyzers as any)?.sessionXp ?? 0,
       ) || 0;
+      // O HUD pode publicar 0/placeholder em battery-save. O mapper soma XP
+      // explícito dos frames recebidos nesta execução; use o maior valor para
+      // manter o total visível sem ressuscitar XP histórico do disco.
+      const mappedSessionXp = typeof (protocolMapper as any).sessionXp === 'function'
+        ? Number((protocolMapper as any).sessionXp()) || 0
+        : 0;
+      const sessionXpNum = Math.max(hudSessionXp, mappedSessionXp);
       const fmtXp = (n: number): string => {
         if (n <= 0) return '0 XP';
         if (n >= 1_000_000_000) return `+${(n / 1_000_000_000).toFixed(2)}B XP`;
@@ -639,6 +748,9 @@ async function main() {
         protocol_map: mapSnapshot,
         hunt_metrics: mapSnapshot.scores,
         unlocked_hunts: mapSnapshot.unlockedHunts,
+        // Lista usada pelo engine depois de combinar offlineInfo, servidor e
+        // seletor DOM (a lista acima é apenas o mapa protocolar histórico).
+        engine_unlocked_hunts: (profiler as any).unlockedIds || [],
       };
       writeFileSync(join(dataDir, "status.json"), JSON.stringify(statusData, null, 2), "utf-8");
     } catch (_) {}
@@ -734,6 +846,12 @@ async function main() {
       } else if (typ === "takeover" || typ === "serverdrop") {
         console.log(`[${new Date().toLocaleTimeString()}] ⚠️ [${typ.toUpperCase()}] ${JSON.stringify(pay)?.slice(0, 200)}`);
         (telemetry as any)[typ] = pay;
+      } else if (typ === "autobossstate") {
+        // Estado autoritativo da feature: `until=0`/playlist vazia significa
+        // que a conta ainda não tem o Auto Boss liberado, não que a rotação
+        // foi executada com sucesso.
+        (telemetry as any).autoBossState = pay;
+        writeStatusFile();
       } else if (typ === "deaths") {
         (telemetry as any).lastDeaths = (pay && (pay.rows || pay)) || [];
         console.log(`[${new Date().toLocaleTimeString()}] 💀 [DEATHS] ${(Array.isArray((telemetry as any).lastDeaths) ? (telemetry as any).lastDeaths.length : '?')} registros`);
@@ -750,6 +868,8 @@ async function main() {
   let cdpRef: any = null;
   let getFrameRef: (() => Buffer | null) = () => null;
 
+  let needsHuntEntry = false;
+
   // Inicia Servidor Web Bun — getState usa o mesmo contrato do status.json
   // (fallback quando o disco ainda não tem status.json no boot).
   startServer(config.port, config.host, {
@@ -757,7 +877,10 @@ async function main() {
       subsystems,
       analyzers: latestAnalyzers || {},
       hunt_decision: (profiler as any).lastDecision || {},
-      session_xp: Number((latestAnalyzers as any)?.session_xp ?? (latestAnalyzers as any)?.raw_xp ?? 0) || 0,
+      session_xp: Math.max(
+        Number((latestAnalyzers as any)?.session_xp ?? (latestAnalyzers as any)?.raw_xp ?? 0) || 0,
+        typeof (protocolMapper as any).sessionXp === 'function' ? Number((protocolMapper as any).sessionXp()) || 0 : 0,
+      ),
       elapsed_minutes: telemetry.elapsedMinutes(),
       elapsed_seconds: telemetry.elapsedSeconds(),
       force_hunt: !!config.forceHunt,
@@ -766,6 +889,39 @@ async function main() {
     getPage: () => pageRef,
     getCdp: () => cdpRef,
     getLatestFrame: () => getFrameRef(),
+    onSetHunt: async (huntId: string, auto: boolean) => {
+      if (auto || !huntId || huntId === 'auto') {
+        config.forceHunt = false;
+        config.huntId = '';
+        config.huntMode = 'engine';
+        needsHuntEntry = true;
+        console.log(`[${new Date().toLocaleTimeString()}] 🎮 [API /api/hunt] Modo alterado para AUTOMÁTICO (IA)`);
+        writeStatusFile();
+        return { ok: true, message: 'Modo automático ativado com sucesso.' };
+      }
+
+      const matched = matchHunt(huntId);
+      const targetId = matched?.id || huntId;
+      const targetName = matched?.name || huntId;
+
+      config.forceHunt = true;
+      config.huntId = targetId;
+      config.huntMode = 'force';
+      needsHuntEntry = true;
+      console.log(`[${new Date().toLocaleTimeString()}] 🎮 [API /api/hunt] Hunt fixada manualmente para: ${targetName} (${targetId})`);
+
+      // Se o browser estiver pronto, tenta teleporte direto imediatamente
+      try {
+        if (pageRef && watchdog.isConnected()) {
+          void enterHuntDirectOrDom({ id: targetId, name: targetName });
+        }
+      } catch (err) {
+        console.warn(`[${new Date().toLocaleTimeString()}] [API /api/hunt] Teleporte imediato falhou (entrará no próximo tick do loop): ${err}`);
+      }
+
+      writeStatusFile();
+      return { ok: true, message: `Hunt alterada para ${targetName} (${targetId})` };
+    },
     dataDir,
   });
 
@@ -807,10 +963,13 @@ async function main() {
   let lastPotionCheck = 0;
   let lastTreinoCheck = 0;
   let lastStatusWrite = 0;
+  let fastStateBusy = false;
   let lastTreinoTime = 0;
+  let lastBossNativeAttempt = 0;
   let lastSpellGear = 0;
   let spellProbeBusy = false;
   let lastSpellProbe = 0;
+  let spellProbeFailures = 0;
   const spellSlotCooldown = new Map<number, number>();
   const spellSlotState = new Map<number, string>();
   let lastPickerOpen = false;
@@ -823,6 +982,11 @@ async function main() {
   // "última hunt" persistida para que a fila realmente execute a rotação.
   let engineTargetId: string | null = null;
   let lastHudCheck = 0;
+  // O perfil de dano vem do combatlog acumulado e pode mudar quando a
+  // rotação/equipamento troca. Não o congele no primeiro frame: atualize em
+  // uma cadência moderada para que a recomendação de magia acompanhe a hunt
+  // sem transformar cada tick em uma nova mutação de estado.
+  let lastDamageProfileRefresh = 0;
   let cachedHud: any = {};
   let previousHelperLevel = 0;
   let previousPartySignature = '';
@@ -830,7 +994,6 @@ async function main() {
   let lastHelperTrigger = 0;
   let needPotionCheck = true;
   let cityStreak = 0;
-  let needsHuntEntry = false;
   // Heartbeat anti-stall: se a hunt não progride (kills/waves/gold parados),
   // força re-entrada em vez de ficar parado até o watchdog recarregar.
   let lastProgressKills = 0;
@@ -844,12 +1007,33 @@ async function main() {
   // Espelho de estado do kernel (ROOM_DATA + battery-save NWe indireto).
   let lastRoomStatePull = 0;
 
+  // Venda autoritativa: o cliente oficial não clica em um botão de HTML para
+  // esvaziar a Loot Pouch; ele envia `sellall` à sala com `protected=false`.
+  // O comando preserva os itens protegidos pelo servidor (raridade/classe/boss)
+  // e também inclui materiais. O DOM fica somente como fallback para builds
+  // antigas que ainda não expõem o socket no kernel.
+  const nativeSellPouch = async (reason: string): Promise<boolean> => {
+    const detail = await roomSendDetail(pageRef, 'sellall', { protected: false }).catch(() => null);
+    if (detail?.sent && detail.sent > 0) {
+      lastSellTime = Date.now();
+      console.log(`[${new Date().toLocaleTimeString()}] 💰 [AUTO-SELL] sellall aceito pelo servidor (protegidos mantidos; motivo=${reason})`);
+      // Dá tempo para o PATCH de inventário chegar antes da próxima decisão.
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      return true;
+    }
+    return false;
+  };
+
   // Leitura independente da fila de ações. O renderer pode manter uma ação
   // lenta de inventário/equipamento em voo; nesse caso o loop principal ainda
   // precisa conseguir abrir a rotação e descobrir os slots reais.
   const probeSpellSlots = async (): Promise<void> => {
     const nowProbe = Date.now();
-    if (!pageRef || spellProbeBusy || magicState.power > 0 || nowProbe - lastSpellProbe < 30000) return;
+    // O HUD pode montar os slots somente depois do `joined`; um backoff de
+    // cinco minutos deixava a conta caçando com p0 mesmo quando a rotação já
+    // estava visível. Após duas falhas, tente novamente em 60 s.
+    const probeCooldown = spellProbeFailures >= 2 ? 60000 : 30000;
+    if (!pageRef || spellProbeBusy || magicState.power > 0 || nowProbe - lastSpellProbe < probeCooldown) return;
     spellProbeBusy = true;
     lastSpellProbe = nowProbe;
     try {
@@ -864,20 +1048,27 @@ async function main() {
       };
       const preferred = String((magicState as any).recommended_element || (magicState as any).observed_element || '').toLowerCase();
       const words = elementWords[preferred] || [];
+      // Em SwiftShader a leitura dos slots pode esperar o renderer por mais
+      // de uma janela normal de HUD. A sonda é somente leitura e roda no
+      // máximo a cada 30/60s; dê tempo para ela capturar rot-* já montados,
+      // sem abrir outro modal ou repetir cliques de configuração.
       const scan = await safeEval<any>(pageRef, 'spell', {
         metaAoe: [...words, ...AOE_WORDS.filter((w) => !words.includes(w))],
         metaStrike: [...words, ...STRIKE_WORDS.filter((w) => !words.includes(w))],
         healWords: [...HEAL_WORDS], manaWords: [...MANA_WORDS], job: 'open',
-      }, 8500);
+      }, 25000);
       if (Array.isArray(scan?.spells) && scan.spells.length > 0) {
-        magicState = classifyMagic(scan.spells, Object.keys(helperBySlot).sort().map((k) => helperBySlot[Number(k)]));
+        magicState = classifyMagicPreservingFacts(scan.spells, Object.keys(helperBySlot).sort().map((k) => helperBySlot[Number(k)]));
+        spellProbeFailures = 0;
         console.log(`[${new Date().toLocaleTimeString()}] 🔮 [SPELL SCAN] ${JSON.stringify({ power: magicState.power, names: magicState.names, slots: magicState.slots })}`);
-      } else if (scan?.reason) {
-        console.log(`[${new Date().toLocaleTimeString()}] 🔮 [SPELL SCAN] ${JSON.stringify({ reason: scan.reason, candidates: scan.candidates || [] }).slice(0, 3000)}`);
+      } else {
+        spellProbeFailures++;
+        if (scan?.reason && spellProbeFailures <= 2) {
+          console.log(`[${new Date().toLocaleTimeString()}] 🔮 [SPELL SCAN] ${JSON.stringify({ reason: scan.reason, candidates: scan.candidates || [] }).slice(0, 3000)}`);
+        }
       }
     } catch (_) {
-      // A leitura é oportunista; o próximo ciclo tenta novamente sem afetar a
-      // fila de hunt, reconexão ou coleta de métricas.
+      spellProbeFailures++;
     } finally {
       await closeStuckModals();
       spellProbeBusy = false;
@@ -916,21 +1107,39 @@ async function main() {
           (!Array.isArray((profiler as any).unlockedIds) || (profiler as any).unlockedIds.length === 0) &&
           telemetry.online && telemetry.level > 0 && now - lastHuntScan >= 15000) {
         lastHuntScan = now;
-        // Candidate discovery is local and deterministic; do not wait for the
-        // DOM action queue just to build the engine pool.
-        const mapSnapshot = protocolMapper.snapshot();
-        const fromLevel = HUNTS_TABLE.filter((h) => h.min <= (telemetry.level || 1)).map((h) => h.id);
-        const fromServer = Array.isArray(mapSnapshot.unlockedHunts) ? mapSnapshot.unlockedHunts : [];
-        const unlocked = Array.from(new Set([...fromLevel, ...fromServer]));
-        (profiler as any).unlockedIds = unlocked;
-        console.log(`[${new Date().toLocaleTimeString()}] [ENGINE SCAN] nível=${telemetry.level} liberadas=${unlocked.length}`);
+        // O nível é apenas um fallback: o servidor pode bloquear uma hunt
+        // mesmo quando a faixa de nível já foi atingida. O seletor de hunts é
+        // a fonte mais fiel e também expõe IDs que ainda não aparecem em
+        // offlineInfo.
+        huntScanInFlight = true;
+        const queued = actionQueue.enqueue({
+          id: 'hunt-scan', name: 'hunt-scan', priority: 2, timeoutMs: 18000,
+          run: async () => {
+            try {
+              const scan = await safeEval<any>(pageRef, 'hunt', { scanOnly: true }, 12000);
+              const fromPicker = idsFromPickerRows(scan?.unlocked || []);
+              const mapSnapshot = protocolMapper.snapshot();
+              const fromServer = Array.isArray(mapSnapshot.unlockedHunts) ? mapSnapshot.unlockedHunts : [];
+              const known = [...new Set([...fromPicker, ...fromServer])]
+                .filter((id) => HUNTS_TABLE.some((h) => h.id === id));
+              const fromLevel = HUNTS_TABLE.filter((h) => h.min <= (telemetry.level || 1)).map((h) => h.id);
+              const unlocked = known.length > 0 ? known : fromLevel;
+              if (unlocked.length > 0) (profiler as any).unlockedIds = unlocked;
+              console.log(`[${new Date().toLocaleTimeString()}] [ENGINE SCAN] nível=${telemetry.level} seletor=${fromPicker.length} servidor=${fromServer.length} liberadas=${unlocked.length}`);
+            } finally {
+              huntScanInFlight = false;
+            }
+          },
+        });
+        if (!queued) huntScanInFlight = false;
       }
 
       // FORCE_HUNT must not depend on the expensive DOM telemetry tick. The
       // WebSocket already tells us the current hunt, so enqueue the operator's
       // target as soon as the session is online.
       if (config.forceHunt && config.huntId && telemetry.online && !telemetry.inTreino &&
-          now - lastForceAction >= 15000) {
+          now - lastForceAction >= 15000 &&
+          !(forcePendingId === config.huntId && now < forcePendingUntil)) {
         const current = String(telemetry.hunt || '').toLowerCase().replace(/[-\s]/g, '');
         const target = String(config.huntId).toLowerCase().replace(/[-\s]/g, '');
         const currentHunt = matchHunt(telemetry.hunt);
@@ -939,8 +1148,17 @@ async function main() {
           target.includes(current) ||
           currentHunt?.id === config.huntId
         );
+        if (atTarget) {
+          forcePendingId = null;
+          forcePendingUntil = 0;
+        }
         if (!atTarget) {
           lastForceAction = now;
+          // Um envio aceito pelo socket ainda não é uma entrada confirmada.
+          // Aguarde o joined/toHunt antes de reenviar, evitando uma rajada de
+          // stage que expira a reserva da sala (1006/seat reservation).
+          forcePendingId = config.huntId;
+          forcePendingUntil = now + 60_000;
           const queued = actionQueue.enqueue({
             id: 'force-hunt',
             name: 'force-hunt',
@@ -948,25 +1166,30 @@ async function main() {
             timeoutMs: 60000,
             run: async () => {
               console.log(`[${new Date().toLocaleTimeString()}] [FORCE_HUNT] ${telemetry.hunt} -> ${config.huntId}`);
-              // Direto primeiro (1 pacote), DOM como fallback com finally.
-              const direct = await sendStage(pageRef, config.huntId);
-              const result = direct
-                ? { success: true, hunt: config.huntId, method: 'room-send' }
-                : await (async () => {
-                    try {
-                      return await safeEval<any>(pageRef, 'hunt', { id: config.huntId, name: '', resumeLast: false }, 45000);
-                    } finally {
-                      await closeStuckModals();
-                    }
-                  })();
+              // Reutiliza a confirmação joined/toHunt e o fallback DOM. Não
+              // trate WebSocket.send aceito como mudança de hunt confirmada.
+              const result = await enterHuntDirectOrDom({
+                id: config.huntId,
+                name: String(HUNTS_TABLE.find((h) => h.id === config.huntId)?.name || config.huntId),
+                resumeLast: false,
+              });
               console.log(`[${new Date().toLocaleTimeString()}] [FORCE_HUNT RESULT] ${JSON.stringify(result)}`);
               if (result?.success || result?.alreadyThere) {
-                telemetry.updateHunt(result.hunt || config.huntId, direct ? 'websocket' : 'dom');
+                forcePendingId = null;
+                forcePendingUntil = 0;
+                telemetry.updateHunt(result.hunt || config.huntId, result.method === 'room-send' ? 'websocket' : 'dom');
                 needsHuntEntry = false;
+              } else {
+                // Dá uma janela curta para a sala confirmar antes de uma nova
+                // tentativa; a reserva/heartbeat continua independente.
+                forcePendingUntil = Date.now() + 30_000;
               }
             },
           });
-          if (!queued) lastForceAction = now - 12000;
+          if (!queued) {
+            lastForceAction = now - 12000;
+            forcePendingUntil = now + 10_000;
+          }
         }
       }
 
@@ -1052,6 +1275,16 @@ async function main() {
         roomSend(pageRef, 'ready', {}).catch(() => null);
       }
 
+      // O servidor oferece o mesmo auto-sell usado pelo painel do jogo. A
+      // configuração nativa continua válida mesmo quando a avaliação DOM
+      // está ocupada e evita que a pouch permaneça 32/32 após um sell-all
+      // visual que não encontrou o botão correto.
+      if (telemetry.online && now - lastAutoSellConfig >= 300_000) {
+        lastAutoSellConfig = now;
+        sendAutosellFull(pageRef, true).catch(() => null);
+        sendAutosellPct(pageRef, config.sellThresholdPct).catch(() => null);
+      }
+
       // 2. Cooldowns e flags de verificação periódica
       const sellAllowed = (now - lastSellTime) >= 125000;
       const shouldCheckDaily = (now - lastDailyCheck) >= 60000;
@@ -1059,28 +1292,43 @@ async function main() {
 
       // 3. Tick de telemetria ultra-leve (não percorre o body, responde em < 20ms)
       let domState: any = null;
-      try {
-        const cdpEval = cdpRef.send("Runtime.evaluate", {
-          expression: "(" + FAST_STATE_JS + ")()",
-          returnByValue: true,
-          awaitPromise: false,
-        });
-        const evalRes: any = await Promise.race([
-          cdpEval,
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
-        ]);
-        if (evalRes?.exceptionDetails) {
-          const detail = evalRes.exceptionDetails?.exception?.description || evalRes.exceptionDetails?.text || 'Runtime.evaluate exception';
-          console.log(`[${new Date().toLocaleTimeString()}] ⚠️ [FAST_STATE EXCEPTION]: ${String(detail).slice(0, 240)}`);
+      if (!fastStateBusy) {
+        fastStateBusy = true;
+        let pendingFastEval: Promise<any> | null = null;
+        try {
+          const cdpEval = cdpRef.send("Runtime.evaluate", {
+            expression: "(" + FAST_STATE_JS + ")()",
+            returnByValue: true,
+            awaitPromise: false,
+          });
+          pendingFastEval = cdpEval;
+          const evalRes: any = await Promise.race([
+            cdpEval,
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+          ]);
+          if (evalRes?.exceptionDetails) {
+            const detail = evalRes.exceptionDetails?.exception?.description || evalRes.exceptionDetails?.text || 'Runtime.evaluate exception';
+            console.log(`[${new Date().toLocaleTimeString()}] ⚠️ [FAST_STATE EXCEPTION]: ${String(detail).slice(0, 240)}`);
+          }
+          domState = evalRes?.result?.value || null;
+        } catch (_) {
+          domState = null;
+        } finally {
+          // Em caso de timeout do race, mantenha o lock até o comando CDP
+          // antigo terminar; caso contrário os evaluate expirados se acumulam.
+          if (pendingFastEval) pendingFastEval.finally(() => { fastStateBusy = false; }).catch(() => { fastStateBusy = false; });
+          else fastStateBusy = false;
         }
-        domState = evalRes?.result?.value || null;
-      } catch (_) {
-        domState = null;
       }
 
       if (shouldCheckDaily) lastDailyCheck = now;
       if (shouldCheckPromote) lastPromoteCheck = now;
 
+      // O renderer pode atrasar/expirar o FAST_STATE enquanto o WebSocket
+      // continua saudável. Não pare a engine nesse caso: um objeto vazio
+      // preserva os defaults DOM e deixa profiler, stamina e rotação usarem a
+      // telemetria autoritativa já ingerida do servidor.
+      if (!domState) domState = {};
       if (domState) {
         if (domState.error) {
           console.log(`[${new Date().toLocaleTimeString()}] ⚠️ [FAST_STATE ERRO]: ${domState.error}`);
@@ -1092,6 +1340,13 @@ async function main() {
         }
 
         const source = domState.inBatterySaver ? "battery-save" : "dom";
+        if (domState.inTraining === true) {
+          telemetry.inTreino = true;
+        } else if (domState.inTraining === false && telemetry.inTreino && !looksLikeTreino(domState.wave)) {
+          // Só sai do treino quando a própria UI deixou o overlay e voltou a
+          // reportar uma hunt/cidade; evita limpar o estado por um frame vazio.
+          telemetry.inTreino = false;
+        }
         if (domState.wave) telemetry.updateHunt(domState.wave, source);
         if (domState.level) telemetry.updateLevel(domState.level, source);
         if (domState.gold !== undefined && domState.gold !== null) telemetry.updateGold(domState.gold, source);
@@ -1107,7 +1362,7 @@ async function main() {
           for (const hlp of domState.helpers || []) {
             if (hlp && hlp.slot !== undefined && hlp.slot !== null) helperBySlot[Number(hlp.slot)] = hlp;
           }
-          magicState = classifyMagic(domState.spells, Object.keys(helperBySlot).sort().map((k) => helperBySlot[Number(k)]));
+          magicState = classifyMagicPreservingFacts(domState.spells, Object.keys(helperBySlot).sort().map((k) => helperBySlot[Number(k)]));
         }
         if (domState.analyzers && typeof domState.analyzers === 'object') {
           latestAnalyzers = { ...latestAnalyzers, ...domState.analyzers };
@@ -1159,7 +1414,7 @@ async function main() {
             // em alguns frames o picker/modal faz safeEval retornar `{}` ou
             // uma lista sem slots enquanto a rotação continua visível.
             if (Array.isArray(hud.spells) && hud.spells.length > 0) {
-              magicState = classifyMagic(hud.spells, Object.keys(helperBySlot).sort().map((k) => helperBySlot[Number(k)]));
+              magicState = classifyMagicPreservingFacts(hud.spells, Object.keys(helperBySlot).sort().map((k) => helperBySlot[Number(k)]));
             }
             if (Array.isArray(hud.partyMembers) && hud.partyMembers.length > 0) (telemetry as any).partyMembersRaw = hud.partyMembers;
             const partySignature = JSON.stringify((hud.partyMembers || []).map((m: any) => ({ name: m.name, voc: m.voc, level: m.level })));
@@ -1200,6 +1455,22 @@ async function main() {
         if (looksCity && !pickerOpen) cityStreak++;
         else cityStreak = 0;
         const isCity = cityStreak >= 3;
+
+        // Quando a conta possui Auto Boss liberado, use o mesmo comando nativo
+        // do painel. Só inicia a playlist em cidade/templo, nunca no meio de
+        // uma wave, para não sacrificar a reserva da sala de hunt.
+        const bossState = (telemetry as any).autoBossState;
+        if (config.autoBoss && isCity && bossState && typeof bossState === 'object' &&
+            Number(bossState.until || 0) > Date.now() && Array.isArray(bossState.list) &&
+            bossState.list.length > 0 && bossState.running !== true && now - lastBossNativeAttempt >= 90000) {
+          lastBossNativeAttempt = now;
+          const bossSend = await sendAutoBoss(pageRef, 'start').catch(() => null);
+          if (bossSend?.sent && bossSend.sent > 0) {
+            console.log(`[${new Date().toLocaleTimeString()}] 👑 [AUTO-BOSS] playlist nativa iniciada (${bossState.list.length} chefes)`);
+          } else {
+            console.log(`[${new Date().toLocaleTimeString()}] ⚠️ [AUTO-BOSS] servidor não aceitou o início da playlist`);
+          }
+        }
 
         // Reconexão detectada
         if (domState.connExpired) needsHuntEntry = true;
@@ -1245,143 +1516,88 @@ async function main() {
         if (!gameReady) shouldEnter = false;
         if (telemetry.inTreino || !config.autoHunt) shouldEnter = false;
 
-        // Engine/hybrid: rotação inteligente de candidatas e farm da campeã
+        // Engine/hybrid sem benchmark: calcula o melhor alvo uma vez e o
+        // mantém. A decisão só muda se o alvo deixar de ser liberado/viável;
+        // tempo de hunt, onda concluída e novas medições não provocam rotação.
         if ((config.huntMode === 'engine' || config.huntMode === 'hybrid') && !config.forceHunt) {
-          const fromLevel = HUNTS_TABLE.filter((h) => h.min <= (telemetry.level || 1)).map((h) => h.id);
-          const unlocked = Array.from(new Set([...fromLevel, ...((profiler as any).unlockedIds || [])]));
           const mapSnapshot = protocolMapper.snapshot();
+          const fromObserved = Array.from(new Set([
+            ...((profiler as any).unlockedIds || []),
+            ...(Array.isArray(mapSnapshot.unlockedHunts) ? mapSnapshot.unlockedHunts : []),
+          ])).filter((id: string) => HUNTS_TABLE.some((h) => h.id === id));
+          const fromLevel = HUNTS_TABLE.filter((h) => h.min <= (telemetry.level || 1)).map((h) => h.id);
+          const unlocked = fromObserved.length > 0 ? fromObserved : fromLevel;
 
           const elementRows = Object.entries(mapSnapshot.combat?.byElement || {})
             .filter(([el, row]: any) => el !== 'unknown' && Number(row?.damage || 0) > 0)
             .sort((a: any, b: any) => Number(b[1]?.damage || 0) - Number(a[1]?.damage || 0));
-          if (elementRows.length > 0 && !(magicState as any).damageProfile) {
+          if (elementRows.length > 0 && now - lastDamageProfileRefresh >= 30000) {
             const totalDamage = elementRows.reduce((n: number, [, row]: any) => n + Number(row?.damage || 0), 0) || 1;
             const damageProfile: Record<string, number> = {};
             for (const [el, row] of elementRows) damageProfile[el] = Number((Number((row as any)?.damage || 0) / totalDamage).toFixed(3));
-            magicState = { ...magicState, damageProfile, observed_element: elementRows[0][0], element_source: 'combatlog-observed' };
-          }
-          const observedRank = rankHuntsObserved(unlocked, telemetry.level, magicState, (profiler as any).simScale || 1, mapSnapshot);
-
-          // Candidatas viáveis para o patamar do personagem (que aguenta tankar)
-          const viableHunts = observedRank.filter((h: any) => h.can_tank !== false);
-          // Ordena decrescente por nível mínimo e potencial de XP/Gold para testar o patamar real do player
-          const sortedViable = [...(viableHunts.length > 0 ? viableHunts : observedRank)].sort((a: any, b: any) => {
-            const minDiff = (Number(b.min || 0)) - (Number(a.min || 0));
-            if (minDiff !== 0) return minDiff;
-            return (Number(b.exp_h || 0) + Number(b.gold_h || 0)) - (Number(a.exp_h || 0) + Number(a.gold_h || 0));
-          });
-          const candidatePool = sortedViable.slice(0, 4);
-          const candidateIds = new Set(candidatePool.map((h: any) => h.id));
-
-          const measuredIds = new Set(unlocked.filter((id: string) =>
-            typeof (protocolMapper as any).sampleReadyFor === 'function'
-              ? (protocolMapper as any).sampleReadyFor(id, config.exploreSampleSec)
-              : !!(mapSnapshot.scores || {})[id]?.sampleReady,
-          ));
-          const liveIdNow = liveId || matchHunt(telemetry.hunt)?.id || null;
-
-          // Tempo decorrido na hunt atual
-          const huntElapsedSec = (profiler as any).huntStartTime ? (Date.now() / 1000 - (profiler as any).huntStartTime) : 0;
-
-          // Detecção de fim de run: uma rodada visual pode terminar antes da
-          // janela mínima. Só consideramos a troca pronta quando a amostra
-          // contínua atingiu exploreSampleSec; caso contrário o loop pode
-          // começar outra rodada na mesma hunt sem contaminar a medição.
-          const waveMatch = String(wave || '').match(/(\d+)\s*\/\s*(\d+)/);
-          const currentWaveNum = waveMatch ? parseInt(waveMatch[1], 10) : 0;
-          const maxWaveNum = waveMatch ? parseInt(waveMatch[2], 10) : 0;
-          const currentLiveSampleReady = !!liveIdNow && typeof (protocolMapper as any).sampleReadyFor === 'function'
-            ? (protocolMapper as any).sampleReadyFor(liveIdNow, config.exploreSampleSec)
-            : huntElapsedSec >= config.exploreSampleSec;
-          const isRunFinished = huntElapsedSec >= config.exploreSampleSec
-            && (maxWaveNum <= 0 || currentWaveNum >= maxWaveNum || currentLiveSampleReady);
-
-          const isCandidate = !!liveIdNow && candidateIds.has(liveIdNow);
-          // O sample hold é VÁLIDO SOMENTE se a hunt atual for uma candidata legítima do patamar!
-          const withinSampleHold = isCandidate && !isRunFinished && huntElapsedSec < config.exploreSampleSec;
-
-          // Candidatas do pool que ainda não foram testadas nesta execução
-          const unmeasuredPool = candidatePool.filter((h: any) => !measuredIds.has(h.id));
-
-          let targetHunt: any = null;
-          let targetReason = '';
-          let isBenchmarking = false;
-
-          if (unmeasuredPool.length > 0) {
-            isBenchmarking = true;
-            const nextTest = unmeasuredPool[0];
-
-            if (withinSampleHold) {
-              const currentKnown = HUNTS_TABLE.find((h) => h.id === liveIdNow);
-              targetHunt = currentKnown || { id: liveIdNow, name: String(telemetry.hunt || liveIdNow), min: 0 };
-              targetReason = `benchmark: mantendo ${targetHunt.name} (${Math.round(huntElapsedSec)}s/${config.exploreSampleSec}s, onda ${currentWaveNum || '?'}/${maxWaveNum || 10})`;
-            } else if (!isCandidate) {
-              // Bot está numa hunt fora do patamar (ex: Troll Cave para lvl 132/310): troca IMEDIATAMENTE!
-              targetHunt = nextTest;
-              targetReason = `benchmark: saindo de hunt baixa (${liveIdNow || 'indefinida'}) para candidata do patamar (${nextTest.name})`;
-            } else if (isRunFinished) {
-              // Run concluída ou 2 minutos atingidos: registra a atual e passa para a próxima!
-              measuredIds.add(liveIdNow);
-              const remaining = unmeasuredPool.filter((h: any) => h.id !== liveIdNow);
-              if (remaining.length > 0) {
-                targetHunt = remaining[0];
-                targetReason = `benchmark: run concluída em ${liveIdNow} (${Math.round(huntElapsedSec)}s); testando próxima: ${targetHunt.name}`;
-              } else {
-                targetHunt = candidatePool[0];
-                targetReason = `benchmark concluído em ${liveIdNow}; elegendo campeã`;
-              }
-            } else {
-              targetHunt = candidatePool.find((h: any) => h.id === liveIdNow) || nextTest;
-              targetReason = `benchmark: coletando dados em ${targetHunt.name} (${Math.round(huntElapsedSec)}s/${config.exploreSampleSec}s, onda ${currentWaveNum || '?'}/${maxWaveNum || 10})`;
+            const previousProfile = JSON.stringify((magicState as any).damageProfile || {});
+            const nextProfile = JSON.stringify(damageProfile);
+            if (previousProfile !== nextProfile || !(magicState as any).damageProfile) {
+              magicState = { ...magicState, damageProfile, observed_element: elementRows[0][0], element_source: 'combatlog-observed' };
             }
+            lastDamageProfileRefresh = now;
           }
 
-          if (!targetHunt) {
-            // Todas as candidatas do patamar foram testadas: elege a campeã definitiva de XP + Gold!
-            const champion = [...candidatePool].sort((a: any, b: any) => {
-              const scoreA = (Number(mapSnapshot.scores?.[a.id]?.netGoldPerHour || a.gold_h || 0) * 0.4) + (Number(mapSnapshot.scores?.[a.id]?.xpPerHour || a.exp_h || 0) * 0.6);
-              const scoreB = (Number(mapSnapshot.scores?.[b.id]?.netGoldPerHour || b.gold_h || 0) * 0.4) + (Number(mapSnapshot.scores?.[b.id]?.xpPerHour || b.exp_h || 0) * 0.6);
-              return scoreB - scoreA;
-            })[0] || candidatePool[0];
-
-            targetHunt = champion;
-            targetReason = `farm contínuo: campeã de rendimento testada (${champion.name})`;
-          }
-
-          const best = targetHunt;
-          const resistanceElement = best?.resistance_source === 'known'
-            ? bestElementForResistances(best.resistances)
+          const ranked = rankHuntsObserved(unlocked, telemetry.level, magicState, (profiler as any).simScale || 1, mapSnapshot);
+          const viable = ranked.filter((h: any) => h.can_tank !== false);
+          const candidates = viable.length > 0 ? viable : ranked;
+          const candidateIds = new Set(candidates.map((h: any) => h.id));
+          const hudLiveId = matchHunt(telemetry.hunt)?.id || null;
+          const joinedLiveId = authoritativeHuntId && HUNTS_TABLE.some((h) => h.id === authoritativeHuntId)
+            ? authoritativeHuntId
             : null;
-          if (resistanceElement && resistanceElement !== (magicState as any).recommended_element) {
-            magicState = {
-              ...magicState,
-              recommended_element: resistanceElement,
-              element_source: 'server-resistance',
-              observed_element: resistanceElement,
-            };
-          }
-          const decision = (profiler as any).lastDecision || {};
+          const profilerLiveId = liveId && liveId !== 'current_hunt' ? liveId : null;
+          // O joined é a fonte autoritativa; o HUD fica como fallback.
+          const liveIdNow = joinedLiveId || hudLiveId || profilerLiveId;
+
+          // Não reordene o alvo a cada tick. Se ele ainda está liberado,
+          // preserva-o mesmo que o ranking observado ou o risco oscile.
+          const lockedTarget: any = engineTargetId && unlocked.includes(engineTargetId)
+            ? ranked.find((h: any) => h.id === engineTargetId)
+            : null;
+          const best: any = lockedTarget || candidates[0] || null;
           if (best) {
+            const changedTarget = engineTargetId !== best.id;
             engineTargetId = best.id;
+            const targetReason = changedTarget
+              ? `engine estável: alvo escolhido por XP/ouro (${best.name})`
+              : `engine estável: mantendo ${best.name}`;
+            const resistanceElement = best.resistance_source === 'known'
+              ? bestElementForResistances(best.resistances)
+              : null;
+            if (resistanceElement && resistanceElement !== (magicState as any).recommended_element) {
+              magicState = {
+                ...magicState,
+                recommended_element: resistanceElement,
+                element_source: 'server-resistance',
+                observed_element: resistanceElement,
+              };
+            }
+
             (profiler as any).lastDecision = {
-              ...decision,
-              mode: isBenchmarking ? 'benchmark' : 'farm',
+              ...((profiler as any).lastDecision || {}),
+              mode: 'stable',
               reason: targetReason,
               recommended: best.id,
-              explorePolicy: explorationPolicy,
+              explorationPool: candidates.map((h: any) => h.id),
+              measuredHunts: [],
+              pendingHunts: [],
+              engineRuntime: { liveId: liveIdNow, locked: true, candidate: candidateIds.has(liveIdNow || '') },
             };
 
             const isAlreadyAtTarget = liveIdNow === best.id;
             const shouldSwitchNow = !isAlreadyAtTarget && (
-              !isCandidate || // Sai imediatamente de hunt fora do patamar!
-              isRunFinished || // Run terminou ou bateu 120s!
-              needsHuntEntry
+              !liveIdNow || !candidateIds.has(liveIdNow) || needsHuntEntry || liveIdNow !== best.id
             );
-
-            if ((config.huntMode === 'engine' || config.huntMode === 'hybrid') && shouldSwitchNow) {
+            if (shouldSwitchNow) {
               shouldEnter = true;
               reason = targetReason;
-              if (!isCandidate) huntRetryDelayMs = 2000;
+              if (!candidateIds.has(liveIdNow || '')) huntRetryDelayMs = 2000;
             }
           }
         }
@@ -1434,20 +1650,43 @@ async function main() {
           });
           if (!queuedHunt) console.log(`[${new Date().toLocaleTimeString()}] [HUNT] ação já estava na fila: ${forceId || 'resume'}`);
         } else if (stamTransition.action === "resume_hunt" && telemetry.inTreino) {
-          console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] Stamina recuperou (${telemetry.stamina}) — voltando às hunts`);
+          lastTreinoTime = now;
+          actionQueue.enqueue({
+            id: "resume-treino",
+            name: "treino",
+            priority: 10,
+            timeoutMs: 12000,
+            run: async () => {
+              try {
+                console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] Stamina recuperou (${telemetry.stamina}) — abrindo Hunts para retomar`);
+                const tr = await safeEval<any>(pageRef, "treino", { want: "resume" }, 10000);
+                if (tr?.events?.length) for (const ev of tr.events) console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] ${ev}`);
+              } finally {
+                await closeStuckModals();
+              }
+            },
+          });
           telemetry.inTreino = false;
           needsHuntEntry = true;
-          subsystems.auto_treino = { status: "FUNCIONAL", detail: "Stamina recuperou — voltando às hunts" };
+          subsystems.auto_treino = { status: "FUNCIONAL", detail: "Stamina recuperou — retomando hunts" };
         }
 
-        // Fila de Ação: Seleção / Retorno de Hunt (Prioridade 10)
-        if ((shouldEnter || needsHuntEntry || forceNeedsEntry) && !telemetry.inTreino && (now - lastHuntAttempt >= huntRetryDelayMs)) {
+        // Fila de Ação: Seleção / Retorno de Hunt (Prioridade 10). Uma ação
+        // force-hunt já pendente bloqueia a ação genérica; sem este guarda as
+        // duas podiam enviar `stage` para a mesma reserva e reiniciar a wave.
+        const huntActionPending = actionQueue.pendingByLane.hunt > 0;
+        if ((shouldEnter || needsHuntEntry || forceNeedsEntry) && !telemetry.inTreino &&
+            !huntActionPending && (now - lastHuntAttempt >= huntRetryDelayMs)) {
           lastHuntAttempt = now;
           actionQueue.enqueue({
             id: "hunt",
             name: "hunt",
             priority: 10,
-            timeoutMs: 15000,
+            // sendStage + confirmação autoritativa + fallback do seletor DOM
+            // podem atravessar 15s em renderer de VPS. Se a fila expirar
+            // antes do fallback terminar, a Promise antiga continua viva e
+            // uma nova tentativa pode disputar a mesma reserva de sala.
+            timeoutMs: 30000,
             run: async () => {
               try { (profiler as any).markSwitch(); } catch (_) {}
               const target = forceId
@@ -1555,12 +1794,21 @@ async function main() {
                 timeoutMs: 25000,
                 run: async () => {
                   try {
-                    // Garante épicos na backpack antes de qualquer venda em massa
-                    const mv = await safeEval<any>(pageRef, "extra", { job: "market" }, 8000).catch(() => null);
-                    const lf = await safeEval<any>(pageRef, "extra", { job: "lootfilter" }, 20000).catch(() => null);
-                    if (lf?.sold > 0 || (mv as any)?.action) {
-                      console.log(`[${new Date().toLocaleTimeString()}] 🗑️ [LOOTFILTER] vendeu=${lf?.sold ?? 0} manteve=${lf?.kept ?? 0} pouch=${telemetry.bagSlots} ${JSON.stringify((lf?.events || []).slice(0, 3))}`);
-                      lastSellTime = Date.now();
+                    // A movimentação por shift-clique/DOM não é a operação de
+                    // venda da build atual. Use o mesmo frame que o botão
+                    // oficial usa; o servidor decide o que é protegido.
+                    const accepted = await nativeSellPouch("pouch>=50%");
+                    if (!accepted) {
+                      // Fallback compatível com builds antigas sem hook de
+                      // socket. Ele nunca força confirmação de compra.
+                      const mv = await safeEval<any>(pageRef, "extra", { job: "market" }, 8000).catch(() => null);
+                      const lf = await safeEval<any>(pageRef, "extra", { job: "lootfilter" }, 20000).catch(() => null);
+                      if (lf?.sold > 0 || (mv as any)?.action) {
+                        console.log(`[${new Date().toLocaleTimeString()}] 🗑️ [LOOTFILTER-FALLBACK] vendeu=${lf?.sold ?? 0} manteve=${lf?.kept ?? 0} pouch=${telemetry.bagSlots} ${JSON.stringify((lf?.events || []).slice(0, 3))}`);
+                        lastSellTime = Date.now();
+                      } else {
+                        console.log(`[${new Date().toLocaleTimeString()}] ⚠️ [AUTO-SELL] socket sem confirmação; fallback não vendeu (pouch=${telemetry.bagSlots})`);
+                      }
                     }
                   } finally {
                     await closeStuckModals();
@@ -1577,15 +1825,18 @@ async function main() {
                 timeoutMs: 20000,
                 run: async () => {
                   try {
-                    await safeEval<any>(pageRef, "extra", { job: "market" }, 8000).catch(() => null);
-                    await pageRef.evaluate(() => {
-                      const sellBtn = document.getElementById("sell-all") as HTMLButtonElement | null;
-                      if (sellBtn && !sellBtn.classList.contains("cd") && !sellBtn.disabled) {
-                        sellBtn.click();
-                      }
-                    }).catch(() => null);
-                    lastSellTime = Date.now();
-                    console.log(`[${new Date().toLocaleTimeString()}] 💰 [AUTO-SELL] Disparado sell-all (Pouch: ${telemetry.bagSlots}, só épico+ protegido)`);
+                    const accepted = await nativeSellPouch(`pouch>=${config.sellThresholdPct}%`);
+                    if (!accepted) {
+                      // O botão visível é apenas o fallback de uma build sem
+                      // socket capturado; não o use como caminho principal.
+                      await safeEval<any>(pageRef, "extra", { job: "market" }, 8000).catch(() => null);
+                      await pageRef.evaluate(() => {
+                        const sellBtn = document.getElementById("sell-all") as HTMLButtonElement | null;
+                        if (sellBtn && !sellBtn.classList.contains("cd") && !sellBtn.disabled) sellBtn.click();
+                      }).catch(() => null);
+                      lastSellTime = Date.now();
+                      console.log(`[${new Date().toLocaleTimeString()}] ⚠️ [AUTO-SELL-FALLBACK] clique DOM (Pouch: ${telemetry.bagSlots})`);
+                    }
                   } finally {
                     await closeStuckModals();
                   }
@@ -1645,14 +1896,24 @@ async function main() {
               }
             }
           });
-        } else if (magicState.power > 0 && (telemetry as any).helperTriggerState?.run && now - lastSpellGear >= 30000) {
+        } else if (magicState.power > 0 &&
+          // O HUD completo pode expirar enquanto a rotação continua visível.
+          // Não deixe isso impedir a primeira configuração do Helper: party
+          // incompleto é evidência suficiente para tentar a ação, e a fila
+          // serializada evita cliques concorrentes.
+          (magicState.party_ready !== true || (telemetry as any).helperTriggerState?.run) &&
+          now - lastSpellGear >= 30000) {
           lastSpellGear = now;
           lastHelperTrigger = now;
           actionQueue.enqueue({
             id: "spell_party",
             name: "spell",
             priority: 3,
-            timeoutMs: 15000,
+            // Trocar o personagem dentro do Helper pode levar >15s no
+            // renderer SwiftShader. O envio de heartbeat/hunt é independente
+            // desta lane, então aguarde a configuração terminar em vez de
+            // abortar no meio e deixar o party incompleto.
+            timeoutMs: 30000,
             run: async () => {
               try {
                 const slots = magicState.slots || {};
@@ -1664,15 +1925,18 @@ async function main() {
                   if (now - last < 600000) continue;
                   const kit = slots[String(sid)] || {};
                   if (kit.ready) continue;
-                  spellSlotCooldown.set(sid, Date.now());
                   const jobNeed = !kit.heal ? "heal" : !kit.mana ? "mana" : "aoe";
                   const job = !kit.heal || !kit.mana ? "helper" : "fill";
-                  const spellRes = await safeEval<any>(pageRef, "spell", { ...spellArgs, need: jobNeed, job, slot: sid }, 10000);
+                  const spellRes = await safeEval<any>(pageRef, "spell", { ...spellArgs, need: jobNeed, job, slot: sid }, 25000);
                   lastGearSlot = sid;
                   applyHelperSnap(spellRes);
                   const snap = spellRes?.helper;
                   if (snap) spellSlotState.set(sid, JSON.stringify(snap));
                   if (spellRes && (spellRes.ok || spellRes.events)) {
+                    // Só esfrie o slot depois de uma resposta útil. Em caso
+                    // de renderer ocupado/timeout, ele precisa poder tentar
+                    // novamente na próxima rodada, sem esperar 10 minutos.
+                    spellSlotCooldown.set(sid, Date.now());
                     console.log(`[${new Date().toLocaleTimeString()}] 🔮 [GEAR slot${sid}] ${JSON.stringify(spellRes.events || spellRes)}`);
                     break;
                   }
@@ -1685,7 +1949,7 @@ async function main() {
         }
 
         // Fila de Ação: Auto-Potion (Prioridade 2)
-        if (config.autoHeal && domAutomationReady && !lastPickerOpen && (now - lastPotionCheck >= 60000 || needPotionCheck)) {
+        if (config.autoHeal && domAutomationReady && !telemetry.inTreino && !lastPickerOpen && (now - lastPotionCheck >= 60000 || needPotionCheck)) {
           needPotionCheck = false;
           lastPotionCheck = now;
           actionQueue.enqueue({

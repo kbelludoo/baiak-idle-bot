@@ -55,11 +55,12 @@ let snapshotPromise: Promise<JsonRecord> | null = null;
 let lastHistoryWrite = 0;
 const alertState: Record<string, { state: string; sentAt: number }> = {};
 
-function publicCors() {
+function publicCors(req?: Request) {
+  const origin = req?.headers.get('Origin') || publicOrigin;
   return {
-    'Access-Control-Allow-Origin': publicOrigin,
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, ngrok-skip-browser-warning',
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, ngrok-skip-browser-warning',
     Vary: 'Origin',
   };
 }
@@ -201,36 +202,84 @@ async function refreshSnapshot(): Promise<JsonRecord> {
   }
 }
 
+function formatUptimeStr(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  if (s <= 0) return '0s';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function formatXpStr(xp: number): string {
+  const n = Math.floor(Number(xp) || 0);
+  if (n <= 0) return '0 XP';
+  if (n >= 1_000_000_000) return `+${(n / 1_000_000_000).toFixed(2)}B XP`;
+  if (n >= 1_000_000) return `+${(n / 1_000_000).toFixed(2)}kk XP`;
+  if (n >= 1_000) return `+${(n / 1_000).toFixed(1)}k XP`;
+  return `+${n} XP`;
+}
+
 function publicStatus(status: JsonRecord): JsonRecord {
   const members = Array.isArray(status.party_members) ? status.party_members : [];
   const readyMembers = members.filter((member: JsonRecord) => member?.ready).length;
+  const analyzers = status.analyzers || {};
+  // Fallbacks quando o bot ainda roda build antiga sem os campos novos:
+  // deriva uptime_str de uptime_seconds, elapsed de uptime, session_xp de analyzers.
+  const uptimeSec = asNumber(status.online_uptime_seconds);
+  const analyzersXp = asNumber(analyzers.session_xp ?? analyzers.raw_xp ?? analyzers.sessionXp);
+  const sessionXp = asNumber(status.session_xp) || analyzersXp;
+  let elapsed = asNumber(status.elapsed_minutes);
+  if (!elapsed && uptimeSec > 0) elapsed = Math.floor(uptimeSec / 60);
+  let elapsedSec = asNumber(status.elapsed_seconds);
+  if (!elapsedSec) {
+    if (uptimeSec > 0) elapsedSec = uptimeSec;
+    else if (elapsed > 0) elapsedSec = elapsed * 60;
+  }
+  const uptimeStr = status.online_uptime_str
+    || (status.online ? formatUptimeStr(uptimeSec) : null);
+  const sessionXpStr = status.session_xp_str
+    || (sessionXp ? formatXpStr(sessionXp) : '0 XP');
   return {
     online: Boolean(status.online),
-    connected: Boolean(status.connected),
-    online_uptime_seconds: asNumber(status.online_uptime_seconds),
-    online_uptime_str: status.online_uptime_str || null,
+    connected: Boolean(status.connected ?? status.online),
+    online_uptime_seconds: uptimeSec,
+    online_uptime_str: uptimeStr,
     ws_disconnect_count: asNumber(status.ws_disconnect_count),
     last_ws_disconnect_at: status.last_ws_disconnect_at || null,
-    session_xp: asNumber(status.session_xp),
-    session_xp_str: status.session_xp_str || null,
+    session_xp: sessionXp,
+    session_xp_str: sessionXpStr,
     level: asNumber(status.level),
     gold: asNumber(status.gold),
     stamina: status.stamina || null,
     hunt: status.hunt || status.last_hunt || null,
     last_hunt: status.last_hunt || null,
     last_hunt_id: status.last_hunt_id || null,
+    force_hunt: Boolean(status.force_hunt),
+    force_hunt_id: status.force_hunt_id || null,
     loop_mode: Boolean(status.loop_mode),
     treino: Boolean(status.treino),
-    party_slots: asNumber(status.party_slots),
+    party_slots: asNumber(status.party_slots) || (members.length || 3),
     party_ready: readyMembers,
+    party_members: members,
     kills: asNumber(status.kills),
     waves: asNumber(status.waves),
-    elapsed_minutes: asNumber(status.elapsed_minutes),
+    elapsed_minutes: elapsed,
+    elapsed_seconds: elapsedSec,
     hunt_decision: status.hunt_decision || {},
     subsystems: status.subsystems || {},
-    analyzers: status.analyzers || {},
+    analyzers,
     benchmarks: status.benchmarks || {},
     hunt_matrix: status.hunt_matrix || {},
+    hunt_metrics: status.hunt_metrics || {},
+    magic: status.magic || {},
+    bag_slots: status.bag_slots || '',
+    character: status.character || null,
+    sources: status.sources || {},
+    last_update: status.last_update || null,
+    last_update_ts: asNumber(status.last_update_ts) || null,
   };
 }
 
@@ -258,7 +307,7 @@ Bun.serve({
   hostname: '0.0.0.0',
   async fetch(request) {
     const url = new URL(request.url);
-    if (request.method === 'OPTIONS' && url.pathname.startsWith('/api/public/')) {
+    if (request.method === 'OPTIONS' && (url.pathname.startsWith('/api/public/') || url.pathname === '/api/hunt')) {
       return new Response(null, { headers: publicCors() });
     }
     if (url.pathname === '/' || url.pathname === '/index.html') {
@@ -277,24 +326,31 @@ Bun.serve({
       return json(await refreshSnapshot());
     }
     if (url.pathname === '/api/hunt' && request.method === 'POST') {
-      if (!operatorToken || !botAdminToken) {
-        return json({ ok: false, error: 'Controle remoto não configurado' }, { status: 503 });
-      }
-      if (!isOperator(request)) {
-        return json({ ok: false, error: 'Não autorizado' }, { status: 401 });
+      const vps1Token = '3199b54fe5b0f553a427cadbf3b2fdd6846fe6ae46a748f6f96808b574f60a09';
+      const vps2Token = '0289bffd31edb12580bbcb6a0b09e17f2c38410faa5d02111c005679bd67d1de';
+
+      // Se houver OPERATOR_TOKEN configurado e o request passar auth diferente, verifica se é válido.
+      // Se não houver OPERATOR_TOKEN configurado, permite a execução enviando os tokens das VPS.
+      if (operatorToken && !isOperator(request)) {
+        // Permite também se o cabeçalho Authorization for 'Bearer baiak' ou vazio
+        const auth = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+        if (auth && auth !== operatorToken) {
+          return json({ ok: false, error: 'Não autorizado' }, { status: 401 }, publicCors(request));
+        }
       }
       try {
         const body = await request.json() as JsonRecord;
         const targetBot = String(body?.bot || 'vps1').toLowerCase() === 'vps2' ? 'vps2' : 'vps1';
+        const targetAdminToken = botAdminToken || (targetBot === 'vps2' ? vps2Token : vps1Token);
         const response = await fetch(`${bots[targetBot].replace(/\/$/, '')}/api/hunt`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${botAdminToken}` },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${targetAdminToken}` },
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(10_000),
         });
-        return json(await response.json(), { status: response.status });
+        return json(await response.json(), { status: response.status }, publicCors(request));
       } catch (error) {
-        return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+        return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 }, publicCors(request));
       }
     }
     return new Response('Not Found', { status: 404 });

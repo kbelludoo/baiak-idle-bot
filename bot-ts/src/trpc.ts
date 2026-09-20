@@ -109,7 +109,7 @@ export function createTrpcClient(token: string, base: string = TRPC_BASE): TrpcC
 }
 
 /** Normaliza `characters.list` (array ou mapa) para [{id,name,vocation,level}]. */
-export function normalizeChars(raw: any): Array<{ id: any; name: string; vocation: string; level: number }> {
+export function normalizeChars(raw: any): Array<{ id: any; name: string; vocation: string; level: number; gold?: number; stamina?: number }> {
   const list = Array.isArray(raw) ? raw : raw?.chars || raw?.characters || raw?.list || [];
   if (!Array.isArray(list)) return [];
   return list
@@ -118,6 +118,10 @@ export function normalizeChars(raw: any): Array<{ id: any; name: string; vocatio
       name: String(c?.name || c?.nick || ''),
       vocation: String(c?.vocation || c?.voc || '').toLowerCase(),
       level: parseInt(String(c?.level ?? c?.lvl ?? 1), 10) || 1,
+      gold: Number.isFinite(Number(c?.gold)) ? Number(c.gold) : undefined,
+      stamina: Number.isFinite(Number(c?.state?.shared?.stamina ?? c?.stamina))
+        ? Number(c?.state?.shared?.stamina ?? c?.stamina)
+        : undefined,
     }))
     .filter((c) => c.name);
 }

@@ -5,7 +5,7 @@
  * ('—', 0, 50, 'Conectando...', null, undefined).
  */
 
-export type TelemetrySource = 'websocket' | 'battery-save' | 'dom' | 'fallback';
+export type TelemetrySource = 'websocket' | 'battery-save' | 'dom' | 'trpc' | 'fallback';
 
 export interface TelemetryField<T> {
   value: T;
@@ -203,6 +203,26 @@ export function staminaStringToMinutes(st: string): number | null {
   return null;
 }
 
+export function formatUptimeStr(totalSeconds: number): string | null {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  if (s <= 0) return '0s';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+export function formatXpStr(xp: number): string | null {
+  const n = Math.floor(Number(xp) || 0);
+  if (n <= 0) return '0 XP';
+  if (n >= 1_000_000_000) return `+${(n / 1_000_000_000).toFixed(2)}B XP`;
+  if (n >= 1_000_000) return `+${(n / 1_000_000).toFixed(2)}kk XP`;
+  if (n >= 1_000) return `+${(n / 1_000).toFixed(1)}k XP`;
+  return `+${n} XP`;
+}
+
 export class TelemetryStore {
   private _hunt: TelemetryField<string> = { value: 'Conectando...', source: 'fallback', updatedAt: Date.now() };
   private _level: TelemetryField<number> = { value: 0, source: 'fallback', updatedAt: Date.now() };
@@ -210,7 +230,7 @@ export class TelemetryStore {
   private _stamina: TelemetryField<string> = { value: '—', source: 'fallback', updatedAt: Date.now() };
   private _loopMode: TelemetryField<boolean> = { value: true, source: 'fallback', updatedAt: Date.now() };
   private _bagSlots: TelemetryField<string> = { value: '', source: 'fallback', updatedAt: Date.now() };
-  private _partySlots: TelemetryField<number> = { value: 1, source: 'fallback', updatedAt: Date.now() };
+  private _partySlots: TelemetryField<number> = { value: 3, source: 'fallback', updatedAt: Date.now() };
   private _shooters: TelemetryField<ShooterInfo[]> = { value: [], source: 'fallback', updatedAt: Date.now() };
   private _magic: TelemetryField<{ power: number; aoe: number; party_ready: boolean }> = {
     value: { power: 0, aoe: 0, party_ready: false },
@@ -223,6 +243,12 @@ export class TelemetryStore {
   public inTreino: boolean = false;
   public online = false;
 
+  // Contrato monitor/: uptime contínuo sem queda + contadores de WS.
+  public bootAt: number = Date.now();
+  public onlineSince: number | null = null;
+  public wsDisconnectCount: number = 0;
+  public lastWsDisconnectAt: string | null = null;
+
   get hunt(): string { return this._hunt.value; }
   get level(): number { return this._level.value; }
   get gold(): number { return this._gold.value; }
@@ -234,7 +260,34 @@ export class TelemetryStore {
   get magic() { return this._magic.value; }
 
   setOnline(value: boolean): void {
+    if (value && !this.online) {
+      // Subiu: inicia (ou reinicia) o relógio contínuo sem queda.
+      if (this.onlineSince === null) this.onlineSince = Date.now();
+    } else if (!value && this.online) {
+      // Caiu: congela uptime, conta disconnect.
+      this.onlineSince = null;
+      this.wsDisconnectCount += 1;
+      this.lastWsDisconnectAt = new Date().toISOString();
+    }
     this.online = value;
+  }
+
+  onlineUptimeSeconds(now: number = Date.now()): number {
+    if (!this.online || this.onlineSince === null) return 0;
+    return Math.max(0, Math.floor((now - this.onlineSince) / 1000));
+  }
+
+  onlineUptimeStr(now: number = Date.now()): string | null {
+    if (!this.online) return null;
+    return formatUptimeStr(this.onlineUptimeSeconds(now));
+  }
+
+  elapsedMinutes(now: number = Date.now()): number {
+    return Math.max(0, Math.floor((now - this.bootAt) / 60000));
+  }
+
+  elapsedSeconds(now: number = Date.now()): number {
+    return Math.max(0, Math.floor((now - this.bootAt) / 1000));
   }
 
   getSources(): Record<string, TelemetrySource> {
@@ -267,10 +320,14 @@ export class TelemetryStore {
     if (val === undefined || val === null || isNaN(val)) return false;
     const num = Math.floor(val);
     if (num <= 0 || num > MAX_GAME_LEVEL) return false;
+    // characters.list (tRPC) é a fonte autoritativa do personagem. Frames
+    // genéricos de ROOM_STATE podem conter nível de requisito/monstro (ex. 770)
+    // e nunca devem substituir o nível real conhecido da conta.
+    if (this._level.source === 'trpc' && source !== 'trpc') return false;
     // Se o bot já conhece um nível alto (ex: 305), ignora sentinela de nível 50 padrão do DOM
     if (num === 50 && this._level.value > 50) return false;
     // O nível de um jogador nunca diminui
-    if (num < this._level.value) return false;
+    if (num < this._level.value && source !== 'trpc') return false;
     this._level = { value: num, source, updatedAt: Date.now() };
     return true;
   }
@@ -284,6 +341,15 @@ export class TelemetryStore {
     // Leitura em branco/malformada nunca zera saldo conhecido.
     // Gold real 0 só é aceito quando nunca houve saldo (conta nova).
     if (n === 0 && this._gold.value > 0) return false;
+    // `characters.list` é o saldo persistido da conta. O HUD pode ficar uma
+    // atualização atrás durante loot/sell e, se puder sobrescrever o tRPC
+    // imediatamente, o painel oscila entre dois saldos reais diferentes.
+    // Mantém a resposta autoritativa por uma janela de sincronização; uma
+    // nova resposta tRPC ou WebSocket ainda pode atualizar o valor antes.
+    if ((source === 'dom' || source === 'battery-save') && this._gold.source === 'trpc') {
+      const ageMs = Date.now() - this._gold.updatedAt;
+      if (ageMs < 70_000) return false;
+    }
     this._gold = { value: n, source, updatedAt: Date.now() };
     return true;
   }
@@ -359,15 +425,30 @@ export class TelemetryStore {
 
     if (typ === 'combatlog') {
       if (Array.isArray(pay)) {
-        const newKills = pay.filter((e: any) => e && e.killed).length;
+        const newKills = pay.filter((e: any) => e && (e.killed || e.dead === true)).length;
         this.kills += newKills;
-      } else if (pay.killed) {
+      } else if ((pay as any).killed || (pay as any).dead === true) {
         this.kills += 1;
       }
       // combatlog também pode carregar loot/gold — cai para a digestão genérica abaixo
-    } else if (typ === 'log' || typ === 'notify') {
+    } else if (typ === 'log' || typ === 'notify' || typ === 'wave' || typ === 'stage' || typ === 'newWave') {
       this.waves += 1;
       // log/notify também pode carregar hunt/gold — cai para a digestão genérica abaixo
+      // kills fora do combatlog (algumas builds mandam killed em notify/log)
+      if (Array.isArray(pay)) {
+        const extraKills = pay.filter((e: any) => e && (e.killed || e.dead === true)).length;
+        if (extraKills > 0) this.kills += extraKills;
+      } else if (pay && typeof pay === 'object' && ((pay as any).killed || (pay as any).dead === true)) {
+        this.kills += 1;
+      }
+    } else if (pay && typeof pay === 'object') {
+      // Builds novas podem embutir killed/dead fora do combatlog — conta aqui também.
+      if (Array.isArray(pay)) {
+        const extraKills = pay.filter((e: any) => e && (e.killed || e.dead === true)).length;
+        if (extraKills > 0) this.kills += extraKills;
+      } else if ((pay as any).killed === true || (pay as any).dead === true) {
+        this.kills += 1;
+      }
     }
     // Party autoritativa: players[] com hp/maxHp/mana/level/vocation/slot.
     // É o que calibra wipeMs/dano recebido — nunca CSS width%.
@@ -474,10 +555,33 @@ export class TelemetryStore {
 
   /**
    * Gera snapshot completo com paridade de formato para /api/status e status.json
+   * Contrato monitor/server.ts publicStatus(): online, connected,
+   * online_uptime_seconds/str, session_xp/str, elapsed_minutes, analyzers,
+   * last_update + last_update_ts, ws_disconnect_*, party_*, kills/waves.
    */
-  snapshot(extra: { character?: string; subsystems?: any; profiler?: any } = {}): any {
+  snapshot(extra: {
+    character?: string | null;
+    subsystems?: any;
+    profiler?: any;
+    analyzers?: any;
+    hunt_decision?: any;
+    session_xp?: number | null;
+    session_xp_str?: string | null;
+    elapsed_minutes?: number | null;
+    elapsed_seconds?: number | null;
+    force_hunt?: boolean | null;
+    force_hunt_id?: string | null;
+  } = {}): any {
+    const now = Date.now();
+    const uptimeSec = this.onlineUptimeSeconds(now);
+    const elapsed = extra.elapsed_minutes ?? this.elapsedMinutes(now);
+    const elapsedSec = extra.elapsed_seconds ?? this.elapsedSeconds(now);
+    const analyzers = extra.analyzers || {};
+    // session_xp: prefere override (writeStatusFile), senão analyzers do HUD.
+    const sessionXp = (extra.session_xp ?? Number(analyzers.session_xp ?? analyzers.raw_xp ?? analyzers.sessionXp ?? 0)) || 0;
     return {
       online: this.online,
+      connected: this.online,
       character: extra.character || 'default',
       level: this.level,
       gold: this.gold,
@@ -494,8 +598,22 @@ export class TelemetryStore {
       waves: this.waves,
       magic: this.magic,
       subsystems: extra.subsystems || {},
+      analyzers,
+      hunt_decision: extra.hunt_decision || {},
+      // --- contrato do painel (nunca omitir: monitor faz asNumber() -> 0) ---
+      online_uptime_seconds: uptimeSec,
+      online_uptime_str: this.online ? (formatUptimeStr(uptimeSec) || '0s') : null,
+      ws_disconnect_count: this.wsDisconnectCount,
+      last_ws_disconnect_at: this.lastWsDisconnectAt,
+      elapsed_minutes: elapsed,
+      elapsed_seconds: elapsedSec,
+      session_xp: sessionXp,
+      session_xp_str: extra.session_xp_str ?? formatXpStr(sessionXp) ?? '0 XP',
+      force_hunt: extra.force_hunt ?? false,
+      force_hunt_id: extra.force_hunt_id ?? null,
       sources: this.getSources(),
       last_update: new Date().toLocaleTimeString('pt-BR'),
+      last_update_ts: Math.floor(now / 1000),
     };
   }
 }

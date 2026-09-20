@@ -49,20 +49,34 @@ async ({ job, ...auctionCfg }) => {
 
   if (job === "vfx") {
     try {
-      localStorage.setItem("bs-enabled", "1");
+      // O modo "economia de bateria" desta build coloca a sala em um
+      // overlay idle (a wave pode ficar parada em 1/10). Reduza efeitos e
+      // áudio, mas mantenha o loop de combate ativo.
+      localStorage.setItem("bs-enabled", "0");
       const raw = JSON.parse(localStorage.getItem("baiakidle.settings") || "{}");
       raw.fxOpacity = 0;
       raw.music = 0;
-      raw.batterySave = true;
+      raw.batterySave = false;
       localStorage.setItem("baiakidle.settings", JSON.stringify(raw));
     } catch (e) {}
     const bs = document.getElementById("bs-toggle");
-    if (bs && !bs.classList.contains("on")) {
+    if (bs && bs.classList.contains("on")) {
       bs.click();
-      events.push("battery-save ON");
+      events.push("battery-save OFF (combate ativo)");
     }
-    document.documentElement.classList.add("battery-save");
-    return { ok: true, action: "reduce_vfx", events };
+    // Nesta build o overlay pode continuar aberto mesmo depois de desligar
+    // o toggle (o timer de inatividade já entrou em modo economia). O jogo
+    // só encerra esse estado quando o slider chega ao limiar de saída.
+    const bsOverlay = document.getElementById("battery-save-overlay");
+    const bsRange = document.getElementById("bs-range");
+    if (bsOverlay && !bsOverlay.classList.contains("hidden") && bsRange) {
+      bsRange.value = "100";
+      bsRange.dispatchEvent(new Event("input", { bubbles: true }));
+      bsRange.dispatchEvent(new Event("change", { bubbles: true }));
+      events.push("battery-save overlay fechado pelo slider");
+    }
+    document.documentElement.classList.remove("battery-save");
+    return { ok: true, action: "reduce_vfx_sem_idle", events };
   }
 
   if (job === "close_modals") {
