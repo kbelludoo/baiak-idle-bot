@@ -160,7 +160,7 @@ export function parseConfig(): BotConfig {
     auctionEnabled: has('--no-auction') ? false : envFlag('AUCTION_ENABLED', true),
     auctionLive: has('--auction-live') || envFlag('AUCTION_LIVE', false),
     auctionBudget: parseInt(getVal('--auction-budget', env.AUCTION_BUDGET || '100'), 10),
-    auctionMinMarginPct: parseInt(getVal('--auction-margin', env.AUCTION_MARGIN || '25'), 10),
+    auctionMinMarginPct: parseInt(getVal('--auction-margin', env.AUCTION_MARGIN || '20'), 10),
     auctionMaxItems: parseInt(getVal('--auction-max-items', env.AUCTION_MAX_ITEMS || '2'), 10),
     auctionSniperMaxMinutes: clamp(parseInt(getVal('--auction-sniper-mins', env.AUCTION_SNIPER_MAX_MINS || '5'), 10) || 5, 1, 360),
     auctionSellGoldAmount: parseInt(getVal('--auction-sell-gold', env.AUCTION_SELL_GOLD || '800000000'), 10) || 800_000_000,
@@ -185,6 +185,7 @@ export function describeFlags(c: BotConfig): string {
     `headless=${c.headless ? 'ON' : 'OFF'}`,
     `screenshot=${c.screenshot ? 'ON' : 'OFF'}`,
     `jev=${c.jevEnabled ? (c.jevApiKey ? 'ON(API)' : 'ON(local-fallback)') : 'OFF'}`,
+    `auction=${c.auctionEnabled ? (c.auctionLive ? 'LIVE' : 'DRY') : 'OFF'}(budget=${c.auctionBudget}c,sell=${(c.auctionSellGoldAmount / 1_000_000).toFixed(0)}kk)`,
     c.stream ? `stream=${c.streamWidth}x${c.streamHeight}@${c.streamFps}q${c.streamQuality}` : 'stream=OFF',
   ];
   if (c.forceHunt && c.huntId) bits.push(`force_hunt=${c.huntId}`);

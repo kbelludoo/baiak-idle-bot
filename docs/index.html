@@ -91,7 +91,7 @@ body {
 }
 .fleet-summary {
   display: grid;
-  grid-template-columns: 1.2fr repeat(4, 1fr);
+  grid-template-columns: 1.2fr repeat(5, 1fr);
   gap: 10px;
   margin-bottom: 18px;
 }
@@ -1155,9 +1155,13 @@ function card(id, b) {
             <span>Gold Total</span>
             <b title="${num(s.gold)} gold">${formatGold(s.gold)}</b>
           </div>
+          <div class="metric accent">
+            <span>Coins (Mercado)</span>
+            <b style="color:#f59e0b;">🪙 ${num(s.coins ?? 0)}${s.market_coins ? ` <small style="font-size:10px;color:var(--muted);">(+${num(s.market_coins)} mkt)</small>` : ''}</b>
+          </div>
           <div class="metric">
             <span>Stamina</span>
-            <b>${esc(s.stamina)}</b>
+            <b>${esc(s.stamina || 'desconhecida')}</b>
           </div>
           <div class="metric">
             <span>Party conectada</span>
@@ -1182,6 +1186,14 @@ function card(id, b) {
           <div class="metric">
             <span>Loop Mode</span>
             <b>${s.loop_mode ? 'ATIVO' : 'OFF'}</b>
+          </div>
+          <div class="metric" style="border-left: 3px solid #8b5cf6;">
+            <span>Magic Level (ML)</span>
+            <b style="color:#a78bfa;">🔮 ${num(s.magic_level || s.skills?.magic?.level || 0)}${s.skills?.magic?.bonus ? ` <small style="font-size:10px;color:#34d399;">(+${num(s.skills.magic.bonus)})</small>` : ''}</b>
+          </div>
+          <div class="metric">
+            <span>Skills de Combate</span>
+            <b style="font-size: 11px; font-weight: 600; color: #38bdf8;" title="${esc(s.skills_summary || '')}">${esc(s.skills_summary || Object.entries(s.skills || {}).filter(([k]) => k !== 'magic').map(([k,v]) => `${k.slice(0,4)}: ${v.level || v}`).join(' · ') || '—')}</b>
           </div>
         </div>
 
@@ -1259,6 +1271,7 @@ function summary(bots) {
   const levels = all.map(x => Number(x.level) || 0);
   const kills = all.reduce((n, x) => n + (Number(x.kills) || 0), 0);
   const gold = all.reduce((n, x) => n + (Number(x.gold) || 0), 0);
+  const coins = all.reduce((n, x) => n + (Number(x.coins) || 0), 0);
   const totalSessionXp = all.reduce((n, x) => n + (Number(x.session_xp) || 0), 0);
 
   return `
@@ -1281,6 +1294,11 @@ function summary(bots) {
       <span class="label">GOLD TOTAL DA CONTA</span>
       <strong title="${num(gold)} gold">${formatGold(gold)}</strong>
       <small>saldo lido com precisão</small>
+    </div>
+    <div class="summary">
+      <span class="label">SALDO DE COINS</span>
+      <strong style="color:#f59e0b;">🪙 ${num(coins)}</strong>
+      <small>moedas disponíveis</small>
     </div>
     <div class="summary">
       <span class="label">KILLS TOTAIS</span>

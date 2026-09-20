@@ -42,6 +42,13 @@ services:
       - JEV_API_KEY=${JEV_API_KEY:-}
       - JEV_ENABLED=${JEV_ENABLED:-true}
       - JEV_ENDPOINT=${JEV_ENDPOINT:-https://api.experientiallabs.ai/v1/systemone}
+      # Leilão / Arbitragem (JEV - VPS 2)
+      - AUCTION_ENABLED=${AUCTION_ENABLED:-true}
+      - AUCTION_LIVE=${AUCTION_LIVE:-true}
+      - AUCTION_BUDGET=${AUCTION_BUDGET:-100}
+      - AUCTION_SELL_GOLD=${AUCTION_SELL_GOLD:-800000000}
+      - AUCTION_SELL_ENABLED=${AUCTION_SELL_ENABLED:-true}
+      - AUCTION_MARGIN=${AUCTION_MARGIN:-20}
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
     volumes:

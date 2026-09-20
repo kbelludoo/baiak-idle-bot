@@ -347,7 +347,19 @@ async ({ job, ...auctionCfg }) => {
 
   if (job === "auction") {
     // Gold is the only auction target: compare packages by gold received per coin.
-    const cfg = { enabled: true, live: false, budget: 100, minMarginPct: 25, maxItems: 2, ...auctionCfg };
+    const cfg = {
+      enabled: true,
+      live: false,
+      budget: 100,
+      minMarginPct: 20,
+      maxItems: 2,
+      sellEnabled: true,
+      sellGoldAmount: 800000000,
+      currentGold: 0,
+      coinsAvailable: 100,
+      useJev: true,
+      ...auctionCfg
+    };
     if (!cfg.enabled) return { ok: true, skip: "leilao desativado", events };
     const tab = revealTab("tab-auction") || revealTab("tab-leilao");
     if (tab) { tab.click(); await sleep(450); }
@@ -364,8 +376,8 @@ async ({ job, ...auctionCfg }) => {
     };
     const textOf = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
     const isGold = (row, text) => {
-      const type = String(row.dataset.type || row.dataset.auctionType || "").toLowerCase();
-      return type === "gold" || /\bgold\b|ouro|kk\b/i.test(text);
+      const type = String(row?.dataset?.type || row?.dataset?.auctionType || row?.type || "").toLowerCase();
+      return type === "gold" || /\bgold\b|ouro|kk\b/i.test(text || "");
     };
     const goldAmountOf = (row, text) => {
       const value = row.dataset.goldAmount || row.dataset.gold ||
@@ -443,8 +455,75 @@ async ({ job, ...auctionCfg }) => {
 
     const rates = listings.map((item) => item.goldAmount / item.price).concat(historyRates).sort((a, b) => a - b);
     const reference = rates.length ? rates[Math.floor(rates.length / 2)] : 5500000;
-    
-    // Sniping: Prioriza lotes com maior gold por coin que estão estritamente terminando (<= maxMinutesRemaining, default 5m)
+
+    // 2. Verificação de Anúncios Próprios Ativos (auction.mine)
+    let hasOwnActiveGold = false;
+    try {
+      const mineRes = await fetch("/api/trpc/auction.mine?batch=1&input=%7B%220%22%3A%7B%7D%7D")
+        .then((r) => r.json())
+        .catch(() => null);
+      const mineRows = mineRes?.[0]?.result?.data?.rows || mineRes?.[0]?.result?.data?.json?.rows || mineRes?.[0]?.result?.data || [];
+      if (Array.isArray(mineRows)) {
+        hasOwnActiveGold = mineRows.some((r) => (r.type === "gold" || isGold(r, r.name || "")) && (!r.status || r.status === "active" || (r.endsAt && r.endsAt > Date.now())));
+      }
+    } catch (_) {}
+
+    // 3. Venda de Gold no Leilão (Arbitragem: Vender até 800kk por Coins no Maior Preço Possível)
+    if (cfg.sellEnabled && !hasOwnActiveGold) {
+      let currentGold = cfg.currentGold || 0;
+      if (!currentGold) {
+        const goldEl = document.getElementById("hud-gold") || document.querySelector(".hud-money, .mk-goldamt, .ac-wallet-val, .wallet-gold, #gold-count, [data-gold]");
+        if (goldEl) {
+          const raw = goldEl.getAttribute("data-gold") || goldEl.getAttribute("data-value") || goldEl.textContent || "";
+          currentGold = number(raw) || 0;
+        }
+      }
+      const maxToSell = cfg.sellGoldAmount || 800000000;
+      const goldToSell = Math.min(maxToSell, currentGold);
+      // Mínimo viável para criar anúncio de gold (10kk ou mais)
+      if (goldToSell >= 10000000) {
+        // Modelo JEV: premium rate (vende gold mais caro = 15% menos gold por coin = mais coins ganhas)
+        const premiumRate = Math.max(1000000, reference * 0.85);
+        const targetPriceCoins = Math.max(1, Math.round(goldToSell / premiumRate));
+        const sellMsg = `${(goldToSell / 1000000).toFixed(0)}kk por ${targetPriceCoins} coins (taxa: ${(goldToSell / targetPriceCoins / 1000000).toFixed(2)}kk/c vs mediana: ${(reference / 1000000).toFixed(2)}kk/c)`;
+
+        if (!cfg.live) {
+          events.push("DRY-RUN VENDA: " + sellMsg);
+        } else {
+          try {
+            const createRes = await fetch("/api/trpc/auction.createGold?batch=1", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                "0": {
+                  goldAmount: goldToSell,
+                  startPrice: targetPriceCoins,
+                  durationHours: 12,
+                  password: "",
+                  twofaCode: "",
+                  smsCode: "",
+                  pushProof: "",
+                  confirmText: "CONFIRMAR",
+                  captchaToken: ""
+                }
+              })
+            }).then((r) => r.json());
+            if (createRes?.[0]?.result?.data) {
+              events.push("ANÚNCIO DE VENDA CRIADO: " + sellMsg);
+            } else {
+              const err = createRes?.[0]?.error?.message || "falha";
+              events.push(`VENDA RECUSADA (${err}): ` + sellMsg);
+            }
+          } catch (e) {
+            events.push(`ERRO VENDA (${String(e)}): ` + sellMsg);
+          }
+        }
+      }
+    } else if (hasOwnActiveGold) {
+      events.push("anúncio próprio de gold ativo no leilão (aguardando encerramento/lances)");
+    }
+
+    // 4. Sniping de Compra de Gold (Arbitragem: Comprar barato com Coins até o orçamento)
     const maxMins = cfg.maxMinutesRemaining ?? 5;
     const opportunities = listings.map((item) => {
       const nextPrice = item.bids > 0 ? item.price + 1 : item.price;
@@ -455,6 +534,7 @@ async ({ job, ...auctionCfg }) => {
       return { ...item, nextPrice, reference, goldPerCoin, marginPct, isEnding, mins };
     }).filter((x) => x.isEnding && x.nextPrice <= cfg.budget && x.marginPct >= cfg.minMarginPct)
       .sort((a, b) => b.goldPerCoin - a.goldPerCoin);
+
     if (!opportunities.length) {
       events.push(`sem pacote de gold vantajoso terminando em <=${maxMins}m (gold=${listings.length}, mediana=${reference.toFixed(2)} gold/coin)`);
       return { ok: true, action: "scan", events };

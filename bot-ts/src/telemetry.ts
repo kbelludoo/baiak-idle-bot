@@ -250,6 +250,11 @@ export class TelemetryStore {
   private _gold: TelemetryField<number> = { value: 0, source: 'fallback', updatedAt: Date.now() };
   private _coins: TelemetryField<number> = { value: 0, source: 'fallback', updatedAt: Date.now() };
   private _marketCoins: TelemetryField<number> = { value: 0, source: 'fallback', updatedAt: Date.now() };
+  private _skills: TelemetryField<Record<string, { level: number; pct?: number; bonus?: number }>> = {
+    value: {},
+    source: 'fallback',
+    updatedAt: Date.now(),
+  };
   private _stamina: TelemetryField<string> = { value: '—', source: 'fallback', updatedAt: Date.now() };
   private _loopMode: TelemetryField<boolean> = { value: true, source: 'fallback', updatedAt: Date.now() };
   private _bagSlots: TelemetryField<string> = { value: '', source: 'fallback', updatedAt: Date.now() };
@@ -280,6 +285,19 @@ export class TelemetryStore {
   get gold(): number { return this._gold.value; }
   get coins(): number { return this._coins.value; }
   get marketCoins(): number { return this._marketCoins.value; }
+  get skills(): Record<string, { level: number; pct?: number; bonus?: number }> { return this._skills.value; }
+  get magicLevel(): number { return this._skills.value?.magic?.level ?? 0; }
+  get skillsSummary(): string {
+    const s = this._skills.value;
+    if (!s || Object.keys(s).length === 0) return '';
+    const parts: string[] = [];
+    if (s.magic?.level) parts.push(`ML: ${s.magic.level}${s.magic.bonus ? `(+${s.magic.bonus})` : ''}`);
+    if (s.melee?.level) parts.push(`Melee: ${s.melee.level}${s.melee.bonus ? `(+${s.melee.bonus})` : ''}`);
+    if (s.distance?.level) parts.push(`Dist: ${s.distance.level}${s.distance.bonus ? `(+${s.distance.bonus})` : ''}`);
+    if (s.shielding?.level) parts.push(`Shield: ${s.shielding.level}${s.shielding.bonus ? `(+${s.shielding.bonus})` : ''}`);
+    if (s.fist?.level) parts.push(`Fist: ${s.fist.level}${s.fist.bonus ? `(+${s.fist.bonus})` : ''}`);
+    return parts.join(' | ');
+  }
   get stamina(): string { return this._stamina.value; }
   get loopMode(): boolean { return this._loopMode.value; }
   get bagSlots(): string { return this._bagSlots.value; }
@@ -425,6 +443,38 @@ export class TelemetryStore {
     const c = typeof val === 'number' ? (Number.isFinite(val) ? Math.floor(val) : NaN) : parseInt(String(val).replace(/\D/g, ''), 10);
     if (!Number.isFinite(c) || c < 0) return false;
     this._marketCoins = { value: c, source, updatedAt: Date.now() };
+    return true;
+  }
+
+  updateSkills(raw: any, source: TelemetrySource = 'websocket'): boolean {
+    if (!raw) return false;
+    let parsed: any = raw;
+    if (typeof raw === 'string') {
+      try { parsed = JSON.parse(raw); } catch (_) { return false; }
+    }
+    if (typeof parsed !== 'object' || parsed === null) return false;
+
+    const out: Record<string, { level: number; pct?: number; bonus?: number }> = {};
+    for (const [key, v] of Object.entries(parsed)) {
+      const k = String(key).toLowerCase();
+      if (Array.isArray(v)) {
+        out[k] = {
+          level: Number(v[0]) || 0,
+          pct: Number(v[1]) || 0,
+          bonus: Number(v[2]) || 0,
+        };
+      } else if (typeof v === 'number') {
+        out[k] = { level: v, pct: 0, bonus: 0 };
+      } else if (typeof v === 'object' && v !== null && (v as any).level !== undefined) {
+        out[k] = {
+          level: Number((v as any).level) || 0,
+          pct: Number((v as any).pct) || 0,
+          bonus: Number((v as any).bonus) || 0,
+        };
+      }
+    }
+    if (Object.keys(out).length === 0) return false;
+    this._skills = { value: { ...this._skills.value, ...out }, source, updatedAt: Date.now() };
     return true;
   }
 
@@ -618,6 +668,13 @@ export class TelemetryStore {
     }).filter(Boolean) as TelemetryStore['roomPlayers'];
     if (out.length > 0) {
       this.roomPlayers = out;
+      // Ingestão de skills do jogador principal se presente
+      for (const p of list) {
+        if (p && p.skills) {
+          this.updateSkills(p.skills, 'websocket');
+          break;
+        }
+      }
       // Nível: usa o maior válido (nunca placeholder).
       const lvls = out.map((p) => p.level || 0).filter((n) => n > 0);
       if (lvls.length > 0) this.updateLevel(Math.max(...lvls), 'websocket');
@@ -674,6 +731,9 @@ export class TelemetryStore {
       gold: this.gold,
       coins: this.coins,
       market_coins: this.marketCoins,
+      skills: this.skills,
+      magic_level: this.magicLevel,
+      skills_summary: this.skillsSummary,
       stamina: this.stamina,
       hunt: this.hunt,
       hunt_stage: this.huntStage,

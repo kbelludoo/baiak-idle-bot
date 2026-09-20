@@ -4,6 +4,7 @@
     gold: null,
     coins: null,
     market_coins: null,
+    skills: {},
     stamina: null,
     vocs: [],
     spells: [],
@@ -142,6 +143,48 @@
       const parsed = nums(raw);
       if (parsed != null && parsed >= 0) { res.coins = parsed; break; }
     }
+  }
+
+  // --- EXTRAÇÃO ROBUSTA DE SKILLS E ML (Magic Level) ---
+  res.skills = {};
+  try {
+    const pList = window.__baiak_state?.players || window.__baiak_telemetry?.players || window.m?.lastPlayers || [];
+    const p0 = Array.isArray(pList) ? (pList.find(p => p.slot === (window.m?.skillsSlot ?? 0)) || pList[0]) : null;
+    if (p0 && p0.skills) {
+      let rawSkills = p0.skills;
+      if (typeof rawSkills === "string") {
+        try { rawSkills = JSON.parse(rawSkills); } catch (_) {}
+      }
+      if (typeof rawSkills === "object" && rawSkills !== null) {
+        for (const [key, val] of Object.entries(rawSkills)) {
+          if (Array.isArray(val)) {
+            res.skills[key] = { level: Number(val[0]) || 0, pct: Number(val[1]) || 0, bonus: Number(val[2]) || 0 };
+          } else if (typeof val === "number") {
+            res.skills[key] = { level: val, pct: 0, bonus: 0 };
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  // Fallback DOM (#skills-panel-body ou .sk-skill)
+  if (!Object.keys(res.skills).length) {
+    try {
+      const rows = document.querySelectorAll("#skills-panel-body .sk-skill, #panel-skills .sk-skill, .skills-panel .sk-skill");
+      for (const row of rows) {
+        const spans = row.querySelectorAll(".sk-row span, span");
+        if (spans.length >= 2) {
+          const name = (spans[0].textContent || "").trim().toLowerCase();
+          const valText = (spans[1].textContent || "").trim();
+          const mVal = valText.match(/^(\d+)(?:\s*\+\s*(\d+))?/);
+          if (mVal) {
+            const base = parseInt(mVal[1], 10);
+            const bonus = mVal[2] ? parseInt(mVal[2], 10) : 0;
+            res.skills[name] = { level: base, bonus };
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   // --- EXTRAÇÃO ROBUSTA DE STAMINA ---

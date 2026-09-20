@@ -56,7 +56,7 @@ describe('Extras Scheduler & All Subsystems', () => {
     };
 
     // Executa tick com mock page null (não deve quebrar e deve retornar array)
-    const logs = await scheduler.tick(null as any, dummyConfig, Date.now(), false);
+    const logs = await scheduler.tick(null as any, dummyConfig, Date.now(), false, null, 800_000_000, 100);
     expect(Array.isArray(logs)).toBe(true);
   });
 

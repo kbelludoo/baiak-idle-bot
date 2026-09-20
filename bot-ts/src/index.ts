@@ -944,6 +944,11 @@ async function main() {
         // Lista usada pelo engine depois de combinar offlineInfo, servidor e
         // seletor DOM (a lista acima é apenas o mapa protocolar histórico).
         engine_unlocked_hunts: (profiler as any).unlockedIds || [],
+        skills: telemetry.skills,
+        magic_level: telemetry.magicLevel,
+        skills_summary: telemetry.skillsSummary,
+        coins: telemetry.coins,
+        market_coins: telemetry.marketCoins,
         jev_recommendation: jevRecommendation,
       };
       writeFileSync(join(dataDir, "status.json"), JSON.stringify(statusData, null, 2), "utf-8");
@@ -1080,6 +1085,7 @@ async function main() {
     requestedAt: string;
   };
   let pendingHuntChange: PendingHuntChange | null = null;
+  let lastLoggedSkillsSig = "";
 
   const huntFinishedForSwitch = (): boolean => {
     const current = String(telemetry.hunt || '').toLowerCase();
@@ -1264,6 +1270,7 @@ async function main() {
   let lastSpellProbe = 0;
   let spellProbeFailures = 0;
   let lastPickerOpen = false;
+  let trainingFalseStreak = 0;
   let lastWatchdogCheck = 0;
   let lastForceDebug = 0;
   let lastHudCheck = 0;
@@ -1536,11 +1543,17 @@ async function main() {
 
         const source = domState.inBatterySaver ? "battery-save" : "dom";
         if (domState.inTraining === true) {
+          trainingFalseStreak = 0;
           telemetry.inTreino = true;
+          subsystems.auto_treino = { status: "TREINANDO", detail: "Treino Online confirmado pela UI" };
         } else if (domState.inTraining === false && telemetry.inTreino && !looksLikeTreino(domState.wave)) {
-          // Só sai do treino quando a própria UI deixou o overlay e voltou a
-          // reportar uma hunt/cidade; evita limpar o estado por um frame vazio.
-          telemetry.inTreino = false;
+          // O overlay pode sumir por um frame durante a troca de sala. Exija
+          // três leituras consecutivas fora do treino antes de liberar a hunt.
+          trainingFalseStreak += 1;
+          if (trainingFalseStreak >= 3) {
+            telemetry.inTreino = false;
+            trainingFalseStreak = 0;
+          }
         }
         if (domState.wave) telemetry.updateHunt(domState.wave, source);
         if (domState.level) telemetry.updateLevel(domState.level, source);
@@ -1596,6 +1609,12 @@ async function main() {
             if (hud.gold !== undefined && hud.gold !== null) telemetry.updateGold(hud.gold, "dom");
             if (hud.coins !== undefined && hud.coins !== null) telemetry.updateCoins(hud.coins, "dom");
             if (hud.market_coins !== undefined && hud.market_coins !== null) telemetry.updateMarketCoins(hud.market_coins, "dom");
+            if (hud.skills && Object.keys(hud.skills).length > 0) telemetry.updateSkills(hud.skills, "dom");
+            const curSkillsSig = `${telemetry.magicLevel}_${JSON.stringify(telemetry.skills)}_${telemetry.coins}_${telemetry.marketCoins}`;
+            if (curSkillsSig !== lastLoggedSkillsSig && (telemetry.magicLevel > 0 || Object.keys(telemetry.skills).length > 0 || telemetry.coins > 0)) {
+              lastLoggedSkillsSig = curSkillsSig;
+              console.log(`[${new Date().toLocaleTimeString()}] 🧙 [STATUS PERSONAGEM] Nível: ${telemetry.level} | ML: ${telemetry.magicLevel || '—'} | Skills: ${telemetry.skillsSummary || '—'} | Coins: ${telemetry.coins || 0}${telemetry.marketCoins ? ` (+${telemetry.marketCoins} mkt)` : ''} | Gold: ${Number(telemetry.gold || 0).toLocaleString()}`);
+            }
             if (hud.stamina) telemetry.updateStamina(hud.stamina, "dom");
             if (hud.analyzers) {
               latestAnalyzers = hud.analyzers;
@@ -1798,7 +1817,8 @@ async function main() {
                 if (tr?.events?.length) {
                   for (const ev of tr.events) console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] ${ev}`);
                 }
-                if (tr?.inTreino || tr?.action) {
+                const trainingConfirmed = tr?.inTreino === true || tr?.action === "ja_treino_tp";
+                if (trainingConfirmed) {
                   telemetry.inTreino = true;
                   telemetry.updateHunt("Treino Online", "dom");
                   subsystems.auto_treino = { status: "TREINANDO", detail: "Stamina <= 15% — Treino online ativo" };
@@ -2255,7 +2275,15 @@ async function main() {
             timeoutMs: 12000,
             run: async () => {
               try {
-                const extraLogs = await extrasScheduler.tick(pageRef, config, Date.now(), telemetry.inTreino);
+                const extraLogs = await extrasScheduler.tick(
+                  pageRef,
+                  config,
+                  Date.now(),
+                  telemetry.inTreino,
+                  jev,
+                  telemetry.gold,
+                  telemetry.marketCoins
+                );
                 for (const log of extraLogs) console.log(`[${new Date().toLocaleTimeString()}] ⚡ ${log}`);
               } finally {
                 await closeStuckModals();
@@ -2282,11 +2310,15 @@ async function main() {
         const s0 = (magicState.slots || {})["0"] || {};
         const s1 = (magicState.slots || {})["1"] || {};
         const dec = (profiler as any).lastDecision || {};
+        const skillStr = telemetry.skillsSummary ? ` | Skills: ${telemetry.skillsSummary}` : (telemetry.magicLevel ? ` | ML: ${telemetry.magicLevel}` : "");
+        const coinStr = ` | Coins: ${telemetry.coins || 0}` + (telemetry.marketCoins ? ` (+${telemetry.marketCoins} mkt)` : "");
         console.log(
           `[${new Date().toLocaleTimeString()}] 📊 [METRICAS REAIS] Waves: ${telemetry.waves} (${wavesH}/h) | Kills: ${telemetry.kills} (${killsH}/h)` +
           (curGoldH ? ` | Gold/h: ${curGoldH.toLocaleString()}` : "") +
           (telemetry.level ? ` | Lvl: ${telemetry.level}` : "") +
           (telemetry.gold ? ` | Gold: ${Number(telemetry.gold).toLocaleString()}` : "") +
+          coinStr +
+          skillStr +
           (telemetry.hunt ? ` | Hunt: ${telemetry.hunt}` : "") +
           (telemetry.inTreino ? " | Treino: ON" : "") +
           ` | Champions: ${telemetry.partySlots} | Loop: ${telemetry.loopMode ? "ON" : "OFF"}` +

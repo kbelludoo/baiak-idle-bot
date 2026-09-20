@@ -193,7 +193,7 @@ function tagLog(key: string, res: any): string[] {
 }
 
 export interface ExtrasScheduler {
-  tick(page: Page, config: BotConfig, now: number, inTreino: boolean): Promise<string[]>;
+  tick(page: Page, config: BotConfig, now: number, inTreino: boolean, jev?: any, telemetryGold?: number, coinsAvailable?: number): Promise<string[]>;
 }
 
 export class DefaultExtrasScheduler implements ExtrasScheduler {
@@ -221,7 +221,15 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
     return { ran: true, logs: tagLog(key, res) };
   }
 
-  public async tick(page: Page, config: BotConfig, now: number, inTreino: boolean): Promise<string[]> {
+  public async tick(
+    page: Page,
+    config: BotConfig,
+    now: number,
+    inTreino: boolean,
+    jev?: any,
+    telemetryGold?: number,
+    coinsAvailable?: number
+  ): Promise<string[]> {
     const logs: string[] = [];
     let busy = false;
 
@@ -300,6 +308,8 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
         maxMinutesRemaining: config.auctionSniperMaxMinutes,
         sellGoldAmount: config.auctionSellGoldAmount,
         sellEnabled: config.auctionSellEnabled,
+        currentGold: telemetryGold ?? 0,
+        coinsAvailable: coinsAvailable ?? config.auctionBudget,
         useJev: config.jevEnabled,
       }],
       ['supply', 300, { job: 'supply' }],

@@ -178,4 +178,28 @@ describe('TelemetryStore (Proteção contra Regressão e Rastreamento de Origem)
     expect(snap.sources.hunt).toBe('dom');
     expect(snap.sources.level).toBe('websocket');
   });
+
+  it('gerencia skills, magic level e coins com precisão no snapshot', () => {
+    const store = new TelemetryStore();
+    store.updateCoins(150, 'dom');
+    store.updateMarketCoins(25, 'dom');
+    store.updateSkills({
+      magic: [115, 45, 4],
+      melee: [120, 10, 2],
+      shielding: [110, 0, 0],
+    }, 'websocket');
+
+    expect(store.coins).toBe(150);
+    expect(store.marketCoins).toBe(25);
+    expect(store.magicLevel).toBe(115);
+    expect(store.skills.melee.level).toBe(120);
+    expect(store.skillsSummary).toContain('ML: 115(+4)');
+    expect(store.skillsSummary).toContain('Melee: 120(+2)');
+
+    const snap = store.snapshot();
+    expect(snap.coins).toBe(150);
+    expect(snap.market_coins).toBe(25);
+    expect(snap.magic_level).toBe(115);
+    expect(snap.skills.magic.level).toBe(115);
+  });
 });
