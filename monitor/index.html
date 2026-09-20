@@ -1031,11 +1031,7 @@ function card(id, b) {
   const m = s.hunt_matrix?.[s.last_hunt_id] || s.hunt_matrix?.[Object.keys(s.hunt_matrix || {})[0]] || {};
   const partyLevels = (s.party_members || []).map(m => Number(m.level) || 0).filter(lvl => lvl > 0);
   const rawStatusLevel = Number(s.level) || 0;
-  const bestCandidateLevel = Math.max(rawStatusLevel, ...partyLevels, 0);
-  if (bestCandidateLevel > (maxObservedLevels[id] || 0)) {
-    maxObservedLevels[id] = bestCandidateLevel;
-  }
-  const level = maxObservedLevels[id] || bestCandidateLevel || 0;
+  const level = Math.max(rawStatusLevel, ...partyLevels, 0);
   const rate = Number.isFinite(Number(s.level_per_hour)) ? Number(s.level_per_hour)
     : (typeof s._levelRate === 'number' ? s._levelRate : null);
   const damage = an.damage || {};

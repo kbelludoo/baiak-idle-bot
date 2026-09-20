@@ -1,4 +1,4 @@
-import { writeFileSync, existsSync, mkdirSync } from "fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { parseConfig, describeFlags } from "./config";
 import { launchBrowser } from "./browser";
@@ -9,10 +9,9 @@ import { startServer } from "./server";
 import { decodeFrame } from "./protocol";
 import { safeEval } from "./scripts";
 import { DefaultExtrasScheduler, looksLikeTreino } from "./extras";
-import { TelemetryStore } from "./telemetry";
+import { TelemetryStore, parseHuntStage } from "./telemetry";
 import { ProtocolMapper } from "./protocol_mapper";
 import { chooseExplorationTarget } from "./exploration";
-import { bestElementForResistances, rankHuntsObserved } from "./hunt_sim";
 import { helperTrigger } from "./helper_triggers";
 import { ActionQueue, evaluateStaminaTransition } from "./state_machine";
 import { createTrpcClient, normalizeChars } from "./trpc";
@@ -345,16 +344,25 @@ async function main() {
 
   const dataDir = dirname(config.userDataDir);
   try { if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true }); } catch (_) {}
+  // A escolha feita pelo painel sobrevive ao restart e tem precedência sobre
+  // um FORCE_HUNT antigo deixado no ambiente da VPS.
+  let persistedManualHuntId: string | null = null;
+  try {
+    const saved = JSON.parse(readFileSync(join(dataDir, 'manual_hunt.json'), 'utf-8'));
+    if (saved?.hunt_id && matchHunt(String(saved.hunt_id))) persistedManualHuntId = String(saved.hunt_id);
+  } catch (_) {}
 
   const watchdog = new Watchdog();
   const profiler = new Profiler(dataDir);
   profiler.clearDeathPenalties();
   const huntMatrix = new HuntMatrix(dataDir);
   let magicState: Record<string, any> = classifyMagic([]);
+  let lastSpellList: any[] = [];
   // Leituras DOM da rotação são frequentes e `classifyMagic` devolve apenas
   // os slots. Preserve as observações de combate/resistência anexadas pelo
   // engine; sem este merge elas desapareciam do status a cada tick do HUD.
   const classifyMagicPreservingFacts = (spells: any[], helpers: any[]): Record<string, any> => {
+    if (Array.isArray(spells) && spells.length > 0) lastSpellList = spells;
     const previous = magicState || {};
     const next = classifyMagic(spells, helpers);
     return {
@@ -369,6 +377,8 @@ async function main() {
   let latestAnalyzers: Record<string, any> = {};
   let lastGearSlot: number | null = null;
   let cachedAccountChars: Record<string, any> = {};
+  let cachedAccountCharsList: any[] = [];
+  let cachedPartyConfig: any = null;
   let lastAccountCharsSync = 0;
   let lastAccountCharsAttempt = 0;
   // Última hunt confirmada pelo servidor (joined/toHunt/resume). Não use o
@@ -376,8 +386,6 @@ async function main() {
   // entrou no socket e pode ser seguido por um `joined` antigo.
   let authoritativeHuntId: string | null = null;
   const ACCOUNT_SYNC_MS = 60_000;
-  let forcePendingId: string | null = null;
-  let forcePendingUntil = 0;
   let lastAutoSellConfig = 0;
 
   const syncAccountChars = async (): Promise<Record<string, any>> => {
@@ -394,10 +402,11 @@ async function main() {
       const raw: any = await trpc.query('characters.list').catch(() => null);
       const chars = normalizeChars(raw);
       if (chars.length > 0) {
+        cachedAccountCharsList = chars;
         const mapping: Record<string, any> = {};
         for (const c of chars) {
           const v = String(c?.vocation || "").toLowerCase();
-          if (v) mapping[v] = {
+          const info = {
             id: c?.id,
             name: c?.name,
             vocation: v,
@@ -405,6 +414,9 @@ async function main() {
             gold: c?.gold,
             stamina: c?.stamina,
           };
+          if (v) mapping[v] = info;
+          if (c?.name) mapping[String(c.name).toLowerCase()] = info;
+          if (c?.id) mapping[String(c.id)] = info;
         }
         cachedAccountChars = mapping;
         lastAccountCharsSync = now;
@@ -414,6 +426,8 @@ async function main() {
       }
       // Party real quando disponível (slots/HP/MP autoritativos no status).
       try {
+        const partyCfg: any = await trpc.query('characters.partyConfig').catch(() => null);
+        if (partyCfg) cachedPartyConfig = partyCfg;
         const party: any = await trpc.query('characters.myParty').catch(() => null);
         if (party) (telemetry as any).trpcParty = party;
       } catch (_) {}
@@ -446,7 +460,130 @@ async function main() {
   const telemetry = new TelemetryStore();
   const protocolMapper = new ProtocolMapper(dataDir);
   const actionQueue = new ActionQueue();
+  // Alvo manual autoritativo. O valor do ambiente vale apenas como alvo
+  // inicial; uma escolha do painel invalida ações antigas da fila.
+  let manualHuntId: string | null = persistedManualHuntId
+    || (config.forceHunt && config.huntId ? config.huntId : null);
+  if (manualHuntId) {
+    config.forceHunt = true;
+    config.huntId = manualHuntId;
+  }
+  let huntSelectionRevision = 0;
   (telemetry as any).partyMembersRaw = [];
+
+  // Métricas da execução atual. O analyzer visual do jogo pode reiniciar a
+  // própria janela ao trocar de hunt; por isso o total de XP do bot é
+  // acumulado aqui, desde o primeiro frame desta execução, e não copiado
+  // diretamente do valor atual do HUD.
+  let hudXpLast: number | null = null;
+  let hudXpAccumulated = 0;
+  let sessionStartLevel: number | null = null;
+
+  const parseMetricValue = (value: any): number => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    const raw = String(value ?? '').trim().replace(/\s+/g, ' ');
+    if (!raw) return 0;
+    const match = raw.match(/(-?[\d.,]+)\s*(kk|milh(?:ões|oes|ao)?|mi\b|m\b|mil\b|k\b)?/i);
+    if (!match) return 0;
+    const numberText = match[1];
+    const unit = String(match[2] || '').toLowerCase();
+    const dots = (numberText.match(/\./g) || []).length;
+    const commas = (numberText.match(/,/g) || []).length;
+    let n = 0;
+    if (dots > 1 && commas === 0) n = Number(numberText.replace(/\./g, ''));
+    else if (dots === 1 && commas === 1) n = Number(numberText.replace(/\./g, '').replace(',', '.'));
+    else if (commas === 1) n = Number(numberText.replace(',', '.'));
+    else if (dots === 1) n = unit ? Number(numberText) : Number(numberText.replace('.', ''));
+    else n = Number(numberText);
+    if (!Number.isFinite(n)) return 0;
+    if (unit === 'kk' || unit === 'm' || unit === 'mi' || unit.startsWith('milh')) n *= 1_000_000;
+    else if (unit === 'k' || unit === 'mil') n *= 1_000;
+    return n;
+  };
+
+  const observeHudSessionXp = (value: any): void => {
+    const current = parseMetricValue(value);
+    if (current <= 0) return;
+    if (hudXpLast === null) {
+      hudXpLast = current;
+      return;
+    }
+    if (current >= hudXpLast) hudXpAccumulated += current - hudXpLast;
+    else hudXpAccumulated += current; // o Hunt Analyzer reiniciou a janela
+    hudXpLast = current;
+  };
+
+  const runtimeMetrics = () => {
+    const elapsedSeconds = Math.max(1, telemetry.elapsedSeconds());
+    if (sessionStartLevel === null && telemetry.level > 0) sessionStartLevel = telemetry.level;
+
+    const activeText = telemetry.hunt && telemetry.hunt !== 'Conectando...' && telemetry.hunt !== '—'
+      ? telemetry.hunt : '';
+    const activeMatch = matchHunt(activeText);
+    const selectedHuntId = activeMatch?.id
+      || manualHuntId
+      || authoritativeHuntId
+      || (profiler as any).activeHuntId
+      || null;
+    const selectedHunt = selectedHuntId
+      ? HUNTS_TABLE.find((h: any) => h.id === selectedHuntId) || null
+      : activeMatch;
+    const mapSnapshot = protocolMapper.snapshot();
+    const selectedScore: any = selectedHuntId ? (mapSnapshot.scores as any)?.[selectedHuntId] || {} : {};
+    const selectedMatrix: any = selectedHuntId ? ((huntMatrix as any).matrix?.[selectedHuntId] || {}) : {};
+    const analyzerBelongsToSelected = !!selectedHuntId && activeMatch?.id === selectedHuntId;
+    const analyzer = analyzerBelongsToSelected ? latestAnalyzers : {};
+    const firstPositive = (...values: any[]): number => {
+      for (const value of values) {
+        const n = parseMetricValue(value);
+        if (n > 0) return n;
+      }
+      return 0;
+    };
+    const xpPerHour = firstPositive(
+      analyzer.xp_per_hour,
+      selectedScore.xpPerHour,
+      selectedMatrix.xp_h_display,
+      selectedMatrix.avg_xp_h,
+    );
+    const lootPerHour = firstPositive(
+      analyzer.loot_per_hour,
+      selectedScore.lootGoldPerHour,
+      selectedMatrix.loot_h_display,
+      selectedMatrix.avg_loot_h,
+    );
+    const goldPerHour = firstPositive(
+      analyzer.net_gold_per_hour,
+      selectedScore.netGoldPerHour,
+      selectedMatrix.avg_gold_h,
+      lootPerHour,
+    );
+    const sessionKillsPerHour = Math.round((telemetry.kills / elapsedSeconds) * 3600 * 10) / 10;
+    const sessionWavesPerHour = Math.round((telemetry.waves / elapsedSeconds) * 3600 * 10) / 10;
+    const levelPerHour = sessionStartLevel !== null
+      ? Math.max(0, Math.round(((telemetry.level - sessionStartLevel) / elapsedSeconds) * 3600 * 10) / 10)
+      : 0;
+    const mappedSessionXp = typeof (protocolMapper as any).sessionXp === 'function'
+      ? Number((protocolMapper as any).sessionXp()) || 0 : 0;
+    const sessionXp = Math.floor(Math.max(mappedSessionXp, hudXpAccumulated));
+    return {
+      elapsedSeconds,
+      selectedHuntId,
+      selectedHuntName: selectedHunt?.name || activeText || selectedHuntId || null,
+      selectedHuntMetrics: {
+        xp_per_hour: xpPerHour,
+        loot_per_hour: lootPerHour,
+        gold_per_hour: goldPerHour,
+        source: analyzerBelongsToSelected && parseMetricValue(analyzer.xp_per_hour) > 0
+          ? 'hunt-analyzer' : (selectedScore.xpPerHour > 0 ? 'selected-hunt-live' : 'selected-hunt-history'),
+        window_seconds: Number(selectedScore.sampleSeconds || 0) || 0,
+      },
+      sessionKillsPerHour,
+      sessionWavesPerHour,
+      levelPerHour,
+      sessionXp,
+    };
+  };
 
   // Fecha picker/modal preso. Toda ação DOM roda dentro de try/finally com
   // este fechamento: sem ele um timeout de 12-15s deixa o picker aberto e a
@@ -572,10 +709,14 @@ async function main() {
     try {
       if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
       const accChars = cachedAccountChars;
-      // characters.list is authoritative for account values even before the
-      // room sends its first state patch. Use the main knight (or first
-      // character) to avoid publishing zero/"—" placeholders on the panel.
-      const primaryChar: any = (accChars as any).knight || Object.values(accChars)[0];
+      const accList: any[] = cachedAccountCharsList.length > 0 ? cachedAccountCharsList : Object.values(accChars);
+      const partyLeaderId = cachedPartyConfig?.leader || (telemetry as any).partyLeaderId;
+      // Seleciona o personagem principal: líder configurado ou char ativo de maior nível
+      const primaryChar: any = (partyLeaderId ? accList.find((c: any) => c.id === partyLeaderId) : null)
+        || [...accList].sort((a: any, b: any) => (Number(b.level) || 0) - (Number(a.level) || 0))[0]
+        || (accChars as any).knight
+        || Object.values(accChars)[0];
+
       if (primaryChar) {
         if (Number(primaryChar.level) > 0) telemetry.updateLevel(Number(primaryChar.level), 'trpc');
         // Só aplica gold/stamina por alguns segundos após uma resposta nova;
@@ -584,8 +725,9 @@ async function main() {
         if (trpcFresh && primaryChar.gold !== undefined) telemetry.updateGold(primaryChar.gold, 'trpc');
         if (trpcFresh && primaryChar.stamina !== undefined) telemetry.updateStamina(primaryChar.stamina, 'trpc');
       }
-      // Une as 3 fontes de party: hud (partyMembersRaw) -> shooters DOM/WS ->
-      // roomPlayers autoritativos. Sem isso, hud falhando = party 0/1 fantasma.
+      // Prioriza players autoritativos da sala; depois usa HUD/shooters como
+      // fallback. `observed` representa presença real; `ready` representa
+      // configuração de combate e não deve ser usado como conexão.
       const parseVocFromText = (t: string): string | null => {
         const low = String(t || '').toLowerCase();
         if (/knight|\bek\b/.test(low)) return 'Knight (EK)';
@@ -602,7 +744,8 @@ async function main() {
         return n >= 10 && n <= 800 ? n : null;
       };
       const hudMembers: any[] = Array.isArray((telemetry as any).partyMembersRaw) ? (telemetry as any).partyMembersRaw : [];
-      let rawMembers: any[] = hudMembers;
+      let rawMembers: any[] = Array.isArray(telemetry.roomPlayers) && telemetry.roomPlayers.length > 0
+        ? telemetry.roomPlayers : hudMembers;
       if (rawMembers.length === 0 && Array.isArray(telemetry.shooters) && telemetry.shooters.length > 0) {
         rawMembers = (telemetry.shooters as any[]).map((s: any) => ({
           slot: s.slot,
@@ -612,20 +755,21 @@ async function main() {
           text: s.text || '',
         }));
       }
-      if (rawMembers.length === 0 && Array.isArray(telemetry.roomPlayers) && telemetry.roomPlayers.length > 0) {
-        rawMembers = telemetry.roomPlayers.map((p: any) => ({
-          slot: p.slot, name: p.name || null, voc: p.vocation || null, level: p.level || null,
-        }));
-      }
+
+      // Personagens ativos da conta ordenados (líder primeiro se houver)
+      const disabledIds = Array.isArray(cachedPartyConfig?.disabled) ? cachedPartyConfig.disabled : [];
+      const activeAccountChars = accList.filter((c: any) => !disabledIds.includes(c?.id));
+
       const slotsMap: Record<string, any> = (magicState?.slots || {}) as any;
       const hasMagic = Object.keys(slotsMap).length > 0;
-      const totalSlots = Math.max(rawMembers.length || 3, telemetry.partySlots || 3);
+      const totalSlots = Math.max(rawMembers.length || 0, activeAccountChars.length || 0, telemetry.partySlots || 3);
       const memberLevels: number[] = [];
       const partyMembersOut: any[] = [];
       for (let sid = 0; sid < totalSlots; sid++) {
-        const found = rawMembers.find((m: any) => m?.slot === sid);
+        const found = rawMembers.find((m: any) => Number(m?.slot) === sid) || rawMembers[sid];
         const vocFromText = found?.text ? parseVocFromText(found.text) : null;
-        const voc = (found?.voc) || vocFromText || (sid === 0 ? "Knight (EK)" : (sid === 1 ? "Druid (ED)" : "Sorcerer (MS)"));
+        const fallbackChar = activeAccountChars[sid];
+        const voc = (found?.voc) || vocFromText || (fallbackChar ? `${fallbackChar.vocation.toUpperCase()}` : (sid === 0 ? "Knight (EK)" : (sid === 1 ? "Druid (ED)" : "Sorcerer (MS)")));
         let charInfo: any = null;
         const vocLow = String(voc).toLowerCase();
         for (const [vk, vi] of Object.entries(accChars)) {
@@ -641,7 +785,9 @@ async function main() {
             break;
           }
         }
-        const extractedName = found?.name && !String(found.name).startsWith("Slot") && !["Secondpally", "sencodtank", "Sofisico"].includes(found.name) ? found.name : null;
+        if (!charInfo && fallbackChar) charInfo = fallbackChar;
+
+        const extractedName = found?.name && !String(found.name).startsWith("Slot") ? found.name : null;
         const lvlFromText = found?.text ? parseLvlFromText(found.text) : null;
         const extractedLvl = (found?.level && Number(found.level) >= 10) ? Number(found.level) : (lvlFromText || null);
         const defaultName = `Slot ${sid + 1}`;
@@ -655,20 +801,22 @@ async function main() {
         // pronta — evita 0/3 eterno quando o hud de spells ainda não rodou.
         const ready = hasMagic
           ? !!(sInfo.ready || (sInfo.heal && sInfo.mana))
-          : !!found;
+          : Boolean(found || fallbackChar);
         partyMembersOut.push({
           slot: sid, name: charNameVal, voc, level: lvl,
           heal: hInfo.heal || (sInfo.heal ? "Configurada (<75%)" : "Nenhuma"),
           mana: hInfo.manaPotion || "mana potion",
           attack: !!sInfo.attack !== false ? (sInfo.attack ?? true) : true,
           ready,
+          observed: Boolean(found || fallbackChar),
         });
       }
       const topLevel = memberLevels.length > 0 ? Math.max(...memberLevels) : Number(telemetry.level) || 0;
+      const partyConnected = rawMembers.length;
+      const partyConfigReady = partyMembersOut.filter((member: any) => member.ready).length;
       const activeHunt = telemetry.hunt && telemetry.hunt !== "Conectando..." && telemetry.hunt !== "—" ? telemetry.hunt : "—";
       const mapSnapshot = protocolMapper.snapshot();
-      const activeHuntId = matchHunt(activeHunt)?.id || activeHunt;
-      const liveScore = (mapSnapshot.scores as any)?.[activeHuntId] || null;
+      const metrics = runtimeMetrics();
       const bossState = (telemetry as any).autoBossState;
       if (config.autoBoss && bossState && typeof bossState === 'object') {
         const until = Number(bossState.until || 0);
@@ -686,29 +834,19 @@ async function main() {
           };
         }
       }
-      // O analisador visual não existe em todos os modos headless. Quando o
-      // servidor já enviou a prévia/relatório da hunt, ela é uma fonte melhor
-      // que publicar um objeto vazio no painel.
+      // O analyzer visual pode faltar em headless, mas as taxas abaixo sempre
+      // são resolvidas pela hunt atualmente selecionada (live ou histórico da
+      // própria hunt), nunca por uma hunt anterior.
       const analyzerOut: any = { ...(latestAnalyzers || {}) };
-      if (liveScore) {
-        if (analyzerOut.xp_per_hour == null || analyzerOut.xp_per_hour === '') analyzerOut.xp_per_hour = liveScore.xpPerHour || 0;
-        if (analyzerOut.loot_per_hour == null || analyzerOut.loot_per_hour === '') analyzerOut.loot_per_hour = liveScore.lootGoldPerHour || 0;
-        if (analyzerOut.net_gold_per_hour == null || analyzerOut.net_gold_per_hour === '') analyzerOut.net_gold_per_hour = liveScore.netGoldPerHour || 0;
-      }
-      // Sessão: XP total vem dos analyzers do HUD (#an-raw/.bs-stats); sem eles,
-      // publica 0 com formato válido em vez de omitir o campo (contrato quebrado).
-      const hudSessionXp = Number(
-        (latestAnalyzers as any)?.session_xp ??
-        (latestAnalyzers as any)?.raw_xp ??
-        (latestAnalyzers as any)?.sessionXp ?? 0,
-      ) || 0;
-      // O HUD pode publicar 0/placeholder em battery-save. O mapper soma XP
-      // explícito dos frames recebidos nesta execução; use o maior valor para
-      // manter o total visível sem ressuscitar XP histórico do disco.
-      const mappedSessionXp = typeof (protocolMapper as any).sessionXp === 'function'
-        ? Number((protocolMapper as any).sessionXp()) || 0
-        : 0;
-      const sessionXpNum = Math.max(hudSessionXp, mappedSessionXp);
+      analyzerOut.xp_per_hour = metrics.selectedHuntMetrics.xp_per_hour;
+      analyzerOut.loot_per_hour = metrics.selectedHuntMetrics.loot_per_hour;
+      analyzerOut.net_gold_per_hour = metrics.selectedHuntMetrics.gold_per_hour;
+      analyzerOut.goldPerHour = metrics.selectedHuntMetrics.gold_per_hour;
+      analyzerOut.killsPerHour = metrics.sessionKillsPerHour;
+      analyzerOut.wavesPerHour = metrics.sessionWavesPerHour;
+      const sessionXpNum = metrics.sessionXp;
+      analyzerOut.session_xp = sessionXpNum;
+      analyzerOut.raw_xp = sessionXpNum;
       const fmtXp = (n: number): string => {
         if (n <= 0) return '0 XP';
         if (n >= 1_000_000_000) return `+${(n / 1_000_000_000).toFixed(2)}B XP`;
@@ -725,8 +863,9 @@ async function main() {
         session_xp_str: fmtXp(sessionXpNum),
         elapsed_minutes: telemetry.elapsedMinutes(),
         elapsed_seconds: telemetry.elapsedSeconds(),
-        force_hunt: !!config.forceHunt,
-        force_hunt_id: config.huntId || null,
+        force_hunt: Boolean(manualHuntId),
+        force_hunt_id: manualHuntId || null,
+        hunt_control: 'manual',
       });
       const statusData = {
         ...snap,
@@ -735,11 +874,28 @@ async function main() {
         hunt: activeHunt,
         level: Math.max(snap.level, topLevel),
         party_slots: totalSlots,
+        party_connected: partyConnected,
+        party_config_ready: partyConfigReady,
+        // Compatibilidade: o campo antigo agora representa presença, não
+        // configuração de magia. A configuração fica em party_config_ready.
+        party_ready: partyConnected,
         party_members: partyMembersOut,
-        last_hunt: (profiler as any).lastPlayedName || activeHunt,
-        last_hunt_id: (profiler as any).lastPlayedId || null,
-        force_hunt: !!config.forceHunt,
-        force_hunt_id: config.huntId || null,
+        selected_hunt_id: metrics.selectedHuntId,
+        selected_hunt_name: metrics.selectedHuntName,
+        selected_hunt_metrics: metrics.selectedHuntMetrics,
+        session_metrics: {
+          kills_per_hour: metrics.sessionKillsPerHour,
+          waves_per_hour: metrics.sessionWavesPerHour,
+        },
+        level_per_hour: metrics.levelPerHour,
+        last_hunt: metrics.selectedHuntName || (profiler as any).lastPlayedName || activeHunt,
+        last_hunt_id: metrics.selectedHuntId || (profiler as any).lastPlayedId || null,
+        force_hunt: Boolean(manualHuntId),
+        force_hunt_id: manualHuntId || null,
+        hunt_control: 'manual',
+        pending_hunt_id: pendingHuntChange?.id || null,
+        pending_hunt_name: pendingHuntChange?.name || null,
+        pending_hunt_requested_at: pendingHuntChange?.requestedAt || null,
         benchmarks: (profiler as any).benchmarks,
         hunt_decision: (profiler as any).lastDecision || {},
         magic: magicState,
@@ -869,58 +1025,120 @@ async function main() {
   let getFrameRef: (() => Buffer | null) = () => null;
 
   let needsHuntEntry = false;
+  type PendingHuntChange = {
+    id: string;
+    name: string;
+    requestedAt: string;
+  };
+  let pendingHuntChange: PendingHuntChange | null = null;
+
+  const huntFinishedForSwitch = (): boolean => {
+    const current = String(telemetry.hunt || '').toLowerCase();
+    if (!telemetry.online || telemetry.inTreino) return true;
+    if (/cidade|city|templo|temple/.test(current)) return true;
+    const stage = parseHuntStage(telemetry.hunt);
+    if (stage.current !== null && stage.total !== null) {
+      return stage.current >= stage.total;
+    }
+    const activeId = authoritativeHuntId || matchHunt(telemetry.hunt)?.id || (profiler as any).activeHuntId;
+    return !activeId && !current.includes('conectando');
+  };
+
+  const activateManualHunt = (target: PendingHuntChange): void => {
+    pendingHuntChange = null;
+    manualHuntId = target.id;
+    config.forceHunt = true;
+    config.huntId = target.id;
+    config.huntMode = 'force';
+    try {
+      writeFileSync(join(dataDir, 'manual_hunt.json'), JSON.stringify({ hunt_id: target.id, hunt_name: target.name, updated_at: new Date().toISOString() }, null, 2), 'utf-8');
+    } catch (_) {}
+    needsHuntEntry = true;
+    console.log(`[${new Date().toLocaleTimeString()}] 🎮 [HUNT MANUAL] ${target.name} (${target.id}) liberada após finalizar a etapa atual`);
+  };
 
   // Inicia Servidor Web Bun — getState usa o mesmo contrato do status.json
   // (fallback quando o disco ainda não tem status.json no boot).
   startServer(config.port, config.host, {
-    getState: () => telemetry.snapshot({
-      subsystems,
-      analyzers: latestAnalyzers || {},
-      hunt_decision: (profiler as any).lastDecision || {},
-      session_xp: Math.max(
-        Number((latestAnalyzers as any)?.session_xp ?? (latestAnalyzers as any)?.raw_xp ?? 0) || 0,
-        typeof (protocolMapper as any).sessionXp === 'function' ? Number((protocolMapper as any).sessionXp()) || 0 : 0,
-      ),
-      elapsed_minutes: telemetry.elapsedMinutes(),
-      elapsed_seconds: telemetry.elapsedSeconds(),
-      force_hunt: !!config.forceHunt,
-      force_hunt_id: config.huntId || null,
-    }),
+    getState: () => {
+      const metrics = runtimeMetrics();
+      const analyzerOut: any = { ...(latestAnalyzers || {}) };
+      analyzerOut.xp_per_hour = metrics.selectedHuntMetrics.xp_per_hour;
+      analyzerOut.loot_per_hour = metrics.selectedHuntMetrics.loot_per_hour;
+      analyzerOut.net_gold_per_hour = metrics.selectedHuntMetrics.gold_per_hour;
+      analyzerOut.goldPerHour = metrics.selectedHuntMetrics.gold_per_hour;
+      analyzerOut.killsPerHour = metrics.sessionKillsPerHour;
+      analyzerOut.wavesPerHour = metrics.sessionWavesPerHour;
+      analyzerOut.session_xp = metrics.sessionXp;
+      analyzerOut.raw_xp = metrics.sessionXp;
+      return {
+        ...telemetry.snapshot({
+          subsystems,
+          analyzers: analyzerOut,
+          hunt_decision: (profiler as any).lastDecision || {},
+          session_xp: metrics.sessionXp,
+          elapsed_minutes: telemetry.elapsedMinutes(),
+          elapsed_seconds: telemetry.elapsedSeconds(),
+          force_hunt: Boolean(manualHuntId),
+          force_hunt_id: manualHuntId || null,
+          hunt_control: 'manual',
+          pending_hunt_id: pendingHuntChange?.id || null,
+          pending_hunt_name: pendingHuntChange?.name || null,
+          pending_hunt_requested_at: pendingHuntChange?.requestedAt || null,
+        }),
+        selected_hunt_id: metrics.selectedHuntId,
+        selected_hunt_name: metrics.selectedHuntName,
+        selected_hunt_metrics: metrics.selectedHuntMetrics,
+        session_metrics: { kills_per_hour: metrics.sessionKillsPerHour, waves_per_hour: metrics.sessionWavesPerHour },
+        level_per_hour: metrics.levelPerHour,
+        party_connected: telemetry.shooters.length,
+        party_config_ready: telemetry.shooters.filter((member: any) => member.ready).length,
+        party_ready: telemetry.shooters.length,
+      } as any;
+    },
     getPage: () => pageRef,
     getCdp: () => cdpRef,
     getLatestFrame: () => getFrameRef(),
     onSetHunt: async (huntId: string, auto: boolean) => {
       if (auto || !huntId || huntId === 'auto') {
-        config.forceHunt = false;
-        config.huntId = '';
-        config.huntMode = 'engine';
-        needsHuntEntry = true;
-        console.log(`[${new Date().toLocaleTimeString()}] 🎮 [API /api/hunt] Modo alterado para AUTOMÁTICO (IA)`);
-        writeStatusFile();
-        return { ok: true, message: 'Modo automático ativado com sucesso.' };
+        return { ok: false, error: 'Modo automático desativado. Escolha uma hunt manualmente.' };
       }
 
       const matched = matchHunt(huntId);
+      if (!matched) return { ok: false, error: `Hunt não encontrada: ${huntId}` };
       const targetId = matched?.id || huntId;
       const targetName = matched?.name || huntId;
-
-      config.forceHunt = true;
-      config.huntId = targetId;
-      config.huntMode = 'force';
-      needsHuntEntry = true;
-      console.log(`[${new Date().toLocaleTimeString()}] 🎮 [API /api/hunt] Hunt fixada manualmente para: ${targetName} (${targetId})`);
-
-      // Se o browser estiver pronto, tenta teleporte direto imediatamente
-      try {
-        if (pageRef && watchdog.isConnected()) {
-          void enterHuntDirectOrDom({ id: targetId, name: targetName });
-        }
-      } catch (err) {
-        console.warn(`[${new Date().toLocaleTimeString()}] [API /api/hunt] Teleporte imediato falhou (entrará no próximo tick do loop): ${err}`);
+      const activeId = matchHunt(telemetry.hunt)?.id || authoritativeHuntId || manualHuntId || (profiler as any).activeHuntId || null;
+      const alreadyPending = pendingHuntChange?.id === targetId;
+      if (activeId === targetId && !pendingHuntChange) {
+        return { ok: true, message: `${targetName} já é a hunt ativa.` };
       }
 
+      // Cancela decisões automáticas/antigas que ainda não começaram. Uma
+      // ação já em voo recebe a revisão abaixo e não poderá atualizar o
+      // status como sucesso quando voltar com um alvo obsoleto.
+      huntSelectionRevision += 1;
+      actionQueue.clearQueuedLane('hunt');
+
+      const request: PendingHuntChange = {
+        id: targetId,
+        name: targetName,
+        requestedAt: new Date().toISOString(),
+      };
+      if (huntFinishedForSwitch()) {
+        activateManualHunt(request);
+        writeStatusFile();
+        return { ok: true, message: `Hunt ${targetName} será iniciada agora.`, pending: false };
+      }
+
+      pendingHuntChange = alreadyPending ? pendingHuntChange : request;
+      console.log(`[${new Date().toLocaleTimeString()}] ⏳ [HUNT MANUAL] troca solicitada para ${targetName} (${targetId}); aguardando finalizar ${telemetry.huntStageLabel || 'a etapa atual'}`);
       writeStatusFile();
-      return { ok: true, message: `Hunt alterada para ${targetName} (${targetId})` };
+      return {
+        ok: true,
+        pending: true,
+        message: `Troca agendada para ${targetName}. O bot aguarda finalizar o estágio ${telemetry.huntStageLabel || 'atual'} antes de trocar.`,
+      };
     },
     dataDir,
   });
@@ -975,18 +1193,11 @@ async function main() {
   let lastPickerOpen = false;
   let lastWatchdogCheck = 0;
   let lastForceDebug = 0;
-  let lastForceAction = 0;
-  let lastHuntScan = 0;
-  let huntScanInFlight = false;
-  // Alvo calculado pelo engine/hybrid. Mantém a decisão separada da
-  // "última hunt" persistida para que a fila realmente execute a rotação.
-  let engineTargetId: string | null = null;
   let lastHudCheck = 0;
   // O perfil de dano vem do combatlog acumulado e pode mudar quando a
   // rotação/equipamento troca. Não o congele no primeiro frame: atualize em
   // uma cadência moderada para que a recomendação de magia acompanhe a hunt
   // sem transformar cada tick em uma nova mutação de estado.
-  let lastDamageProfileRefresh = 0;
   let cachedHud: any = {};
   let previousHelperLevel = 0;
   let previousPartySignature = '';
@@ -1099,100 +1310,6 @@ async function main() {
         syncAccountChars().catch(() => null);
       }
 
-      // Engine mode discovers unlocked hunts from the live picker before
-      // making any recommendation. The scan closes the picker without moving
-      // the character and refreshes periodically as levels unlock new hunts.
-      if ((config.huntMode === 'engine' || config.huntMode === 'hybrid') &&
-          !config.forceHunt && !huntScanInFlight &&
-          (!Array.isArray((profiler as any).unlockedIds) || (profiler as any).unlockedIds.length === 0) &&
-          telemetry.online && telemetry.level > 0 && now - lastHuntScan >= 15000) {
-        lastHuntScan = now;
-        // O nível é apenas um fallback: o servidor pode bloquear uma hunt
-        // mesmo quando a faixa de nível já foi atingida. O seletor de hunts é
-        // a fonte mais fiel e também expõe IDs que ainda não aparecem em
-        // offlineInfo.
-        huntScanInFlight = true;
-        const queued = actionQueue.enqueue({
-          id: 'hunt-scan', name: 'hunt-scan', priority: 2, timeoutMs: 18000,
-          run: async () => {
-            try {
-              const scan = await safeEval<any>(pageRef, 'hunt', { scanOnly: true }, 12000);
-              const fromPicker = idsFromPickerRows(scan?.unlocked || []);
-              const mapSnapshot = protocolMapper.snapshot();
-              const fromServer = Array.isArray(mapSnapshot.unlockedHunts) ? mapSnapshot.unlockedHunts : [];
-              const known = [...new Set([...fromPicker, ...fromServer])]
-                .filter((id) => HUNTS_TABLE.some((h) => h.id === id));
-              const fromLevel = HUNTS_TABLE.filter((h) => h.min <= (telemetry.level || 1)).map((h) => h.id);
-              const unlocked = known.length > 0 ? known : fromLevel;
-              if (unlocked.length > 0) (profiler as any).unlockedIds = unlocked;
-              console.log(`[${new Date().toLocaleTimeString()}] [ENGINE SCAN] nível=${telemetry.level} seletor=${fromPicker.length} servidor=${fromServer.length} liberadas=${unlocked.length}`);
-            } finally {
-              huntScanInFlight = false;
-            }
-          },
-        });
-        if (!queued) huntScanInFlight = false;
-      }
-
-      // FORCE_HUNT must not depend on the expensive DOM telemetry tick. The
-      // WebSocket already tells us the current hunt, so enqueue the operator's
-      // target as soon as the session is online.
-      if (config.forceHunt && config.huntId && telemetry.online && !telemetry.inTreino &&
-          now - lastForceAction >= 15000 &&
-          !(forcePendingId === config.huntId && now < forcePendingUntil)) {
-        const current = String(telemetry.hunt || '').toLowerCase().replace(/[-\s]/g, '');
-        const target = String(config.huntId).toLowerCase().replace(/[-\s]/g, '');
-        const currentHunt = matchHunt(telemetry.hunt);
-        const atTarget = current && (
-          current.includes(target) ||
-          target.includes(current) ||
-          currentHunt?.id === config.huntId
-        );
-        if (atTarget) {
-          forcePendingId = null;
-          forcePendingUntil = 0;
-        }
-        if (!atTarget) {
-          lastForceAction = now;
-          // Um envio aceito pelo socket ainda não é uma entrada confirmada.
-          // Aguarde o joined/toHunt antes de reenviar, evitando uma rajada de
-          // stage que expira a reserva da sala (1006/seat reservation).
-          forcePendingId = config.huntId;
-          forcePendingUntil = now + 60_000;
-          const queued = actionQueue.enqueue({
-            id: 'force-hunt',
-            name: 'force-hunt',
-            priority: 20,
-            timeoutMs: 60000,
-            run: async () => {
-              console.log(`[${new Date().toLocaleTimeString()}] [FORCE_HUNT] ${telemetry.hunt} -> ${config.huntId}`);
-              // Reutiliza a confirmação joined/toHunt e o fallback DOM. Não
-              // trate WebSocket.send aceito como mudança de hunt confirmada.
-              const result = await enterHuntDirectOrDom({
-                id: config.huntId,
-                name: String(HUNTS_TABLE.find((h) => h.id === config.huntId)?.name || config.huntId),
-                resumeLast: false,
-              });
-              console.log(`[${new Date().toLocaleTimeString()}] [FORCE_HUNT RESULT] ${JSON.stringify(result)}`);
-              if (result?.success || result?.alreadyThere) {
-                forcePendingId = null;
-                forcePendingUntil = 0;
-                telemetry.updateHunt(result.hunt || config.huntId, result.method === 'room-send' ? 'websocket' : 'dom');
-                needsHuntEntry = false;
-              } else {
-                // Dá uma janela curta para a sala confirmar antes de uma nova
-                // tentativa; a reserva/heartbeat continua independente.
-                forcePendingUntil = Date.now() + 30_000;
-              }
-            },
-          });
-          if (!queued) {
-            lastForceAction = now - 12000;
-            forcePendingUntil = now + 10_000;
-          }
-        }
-      }
-
       // 1. Checagem do Watchdog (Auto-Reconnect imediato se offline)
       const watchdogInterval = watchdog.isConnected() ? 30000 : 3000;
       if (now - lastWatchdogCheck >= watchdogInterval) {
@@ -1202,7 +1319,6 @@ async function main() {
           console.log(`[WATCHDOG] 🔄 Sessão restaurada com sucesso! (${wResult.reason})`);
           needsHuntEntry = true;
           (profiler as any).unlockedIds = [];
-          lastHuntScan = 0;
           // Re-anuncia presença na sala como o cliente real faz após join.
           try { await roomSend(pageRef, 'ready', {}); } catch (_) {}
         }
@@ -1366,6 +1482,7 @@ async function main() {
         }
         if (domState.analyzers && typeof domState.analyzers === 'object') {
           latestAnalyzers = { ...latestAnalyzers, ...domState.analyzers };
+          observeHudSessionXp((latestAnalyzers as any).session_xp ?? (latestAnalyzers as any).raw_xp);
           const analyzerHunt = matchHunt(telemetry.hunt)?.id;
           if (analyzerHunt) protocolMapper.recordAnalyzer(analyzerHunt, latestAnalyzers);
         }
@@ -1400,6 +1517,7 @@ async function main() {
             if (hud.stamina) telemetry.updateStamina(hud.stamina, "dom");
             if (hud.analyzers) {
               latestAnalyzers = hud.analyzers;
+              observeHudSessionXp((latestAnalyzers as any).session_xp ?? (latestAnalyzers as any).raw_xp);
               // Hunt Analyzer do jogo é autoritativo p/ kills/sessão: se o WS
               // perdeu combatlog fragmentado, o painel não fica zerado.
               const hudKills = Number((hud.analyzers as any)?.hunt_kills ?? 0) || 0;
@@ -1456,6 +1574,13 @@ async function main() {
         else cityStreak = 0;
         const isCity = cityStreak >= 3;
 
+        // Troca manual fica pendente durante a hunt atual. Só libera o novo
+        // alvo quando a etapa chegou ao fim ou o jogo saiu para cidade/treino.
+        if (pendingHuntChange && huntFinishedForSwitch()) {
+          activateManualHunt(pendingHuntChange);
+          writeStatusFile();
+        }
+
         // Quando a conta possui Auto Boss liberado, use o mesmo comando nativo
         // do painel. Só inicia a playlist em cidade/templo, nunca no meio de
         // uma wave, para não sacrificar a reserva da sala de hunt.
@@ -1508,118 +1633,34 @@ async function main() {
           console.log(`[${new Date().toLocaleTimeString()}] ⚠️ [BENCHMARK] Morte/templo confirmado. Retornando à última hunt.`);
         }
 
-        // Decisão de Hunt via Profiler
-        const forceId = config.forceHunt ? config.huntId : "";
+        // Decisão de Hunt manual. O profiler continua coletando telemetria,
+        // mas nunca escolhe/retoma uma hunt sozinho.
+        const forceId = manualHuntId || "";
         const liveId = !isCity ? ((profiler as any).activeHuntId || null) : null;
         const gameReady = watchdog.isConnected() || matchHunt(wave) !== null || telemetry.kills > 0;
-        let [shouldEnter, reason] = (profiler as any).shouldResumeLast(config.autoHunt, isCity, liveId, forceId);
+        let shouldEnter = false;
+        let reason = forceId ? `FORCE_HUNT=${forceId}` : 'Escolha manual aguardando alvo';
         if (!gameReady) shouldEnter = false;
         if (telemetry.inTreino || !config.autoHunt) shouldEnter = false;
-
-        // Engine/hybrid sem benchmark: calcula o melhor alvo uma vez e o
-        // mantém. A decisão só muda se o alvo deixar de ser liberado/viável;
-        // tempo de hunt, onda concluída e novas medições não provocam rotação.
-        if ((config.huntMode === 'engine' || config.huntMode === 'hybrid') && !config.forceHunt) {
-          const mapSnapshot = protocolMapper.snapshot();
-          const fromObserved = Array.from(new Set([
-            ...((profiler as any).unlockedIds || []),
-            ...(Array.isArray(mapSnapshot.unlockedHunts) ? mapSnapshot.unlockedHunts : []),
-          ])).filter((id: string) => HUNTS_TABLE.some((h) => h.id === id));
-          const fromLevel = HUNTS_TABLE.filter((h) => h.min <= (telemetry.level || 1)).map((h) => h.id);
-          const unlocked = fromObserved.length > 0 ? fromObserved : fromLevel;
-
-          const elementRows = Object.entries(mapSnapshot.combat?.byElement || {})
-            .filter(([el, row]: any) => el !== 'unknown' && Number(row?.damage || 0) > 0)
-            .sort((a: any, b: any) => Number(b[1]?.damage || 0) - Number(a[1]?.damage || 0));
-          if (elementRows.length > 0 && now - lastDamageProfileRefresh >= 30000) {
-            const totalDamage = elementRows.reduce((n: number, [, row]: any) => n + Number(row?.damage || 0), 0) || 1;
-            const damageProfile: Record<string, number> = {};
-            for (const [el, row] of elementRows) damageProfile[el] = Number((Number((row as any)?.damage || 0) / totalDamage).toFixed(3));
-            const previousProfile = JSON.stringify((magicState as any).damageProfile || {});
-            const nextProfile = JSON.stringify(damageProfile);
-            if (previousProfile !== nextProfile || !(magicState as any).damageProfile) {
-              magicState = { ...magicState, damageProfile, observed_element: elementRows[0][0], element_source: 'combatlog-observed' };
-            }
-            lastDamageProfileRefresh = now;
-          }
-
-          const ranked = rankHuntsObserved(unlocked, telemetry.level, magicState, (profiler as any).simScale || 1, mapSnapshot);
-          const viable = ranked.filter((h: any) => h.can_tank !== false);
-          const candidates = viable.length > 0 ? viable : ranked;
-          const candidateIds = new Set(candidates.map((h: any) => h.id));
-          const hudLiveId = matchHunt(telemetry.hunt)?.id || null;
-          const joinedLiveId = authoritativeHuntId && HUNTS_TABLE.some((h) => h.id === authoritativeHuntId)
-            ? authoritativeHuntId
-            : null;
-          const profilerLiveId = liveId && liveId !== 'current_hunt' ? liveId : null;
-          // O joined é a fonte autoritativa; o HUD fica como fallback.
-          const liveIdNow = joinedLiveId || hudLiveId || profilerLiveId;
-
-          // Não reordene o alvo a cada tick. Se ele ainda está liberado,
-          // preserva-o mesmo que o ranking observado ou o risco oscile.
-          const lockedTarget: any = engineTargetId && unlocked.includes(engineTargetId)
-            ? ranked.find((h: any) => h.id === engineTargetId)
-            : null;
-          const best: any = lockedTarget || candidates[0] || null;
-          if (best) {
-            const changedTarget = engineTargetId !== best.id;
-            engineTargetId = best.id;
-            const targetReason = changedTarget
-              ? `engine estável: alvo escolhido por XP/ouro (${best.name})`
-              : `engine estável: mantendo ${best.name}`;
-            const resistanceElement = best.resistance_source === 'known'
-              ? bestElementForResistances(best.resistances)
-              : null;
-            if (resistanceElement && resistanceElement !== (magicState as any).recommended_element) {
-              magicState = {
-                ...magicState,
-                recommended_element: resistanceElement,
-                element_source: 'server-resistance',
-                observed_element: resistanceElement,
-              };
-            }
-
-            (profiler as any).lastDecision = {
-              ...((profiler as any).lastDecision || {}),
-              mode: 'stable',
-              reason: targetReason,
-              recommended: best.id,
-              explorationPool: candidates.map((h: any) => h.id),
-              measuredHunts: [],
-              pendingHunts: [],
-              engineRuntime: { liveId: liveIdNow, locked: true, candidate: candidateIds.has(liveIdNow || '') },
-            };
-
-            const isAlreadyAtTarget = liveIdNow === best.id;
-            const shouldSwitchNow = !isAlreadyAtTarget && (
-              !liveIdNow || !candidateIds.has(liveIdNow) || needsHuntEntry || liveIdNow !== best.id
-            );
-            if (shouldSwitchNow) {
-              shouldEnter = true;
-              reason = targetReason;
-              if (!candidateIds.has(liveIdNow || '')) huntRetryDelayMs = 2000;
-            }
-          }
-        }
 
         // FORCE_HUNT is an explicit operator command. Do not let an incomplete
         // profiler/session state suppress it after reconnect or initial boot.
         let forceNeedsEntry = false;
-        if (config.forceHunt && config.huntId && !isCity) {
+        if (forceId && !isCity) {
           const current = String(wave || '').toLowerCase().replace(/[-\s]/g, '');
-          const target = String(config.huntId).toLowerCase().replace(/[-\s]/g, '');
+          const target = String(forceId).toLowerCase().replace(/[-\s]/g, '');
           const currentHunt = matchHunt(wave) || matchHunt(telemetry.hunt);
-          const atTarget = (current && (current.includes(target) || target.includes(current))) || currentHunt?.id === config.huntId;
+          const atTarget = (current && (current.includes(target) || target.includes(current))) || currentHunt?.id === forceId;
           if (!atTarget) {
             shouldEnter = true;
             needsHuntEntry = true;
             forceNeedsEntry = true;
-            reason = `FORCE_HUNT=${config.huntId}`;
+            reason = `FORCE_HUNT=${forceId}`;
           }
         }
-        if (config.forceHunt && config.huntId && now - lastForceDebug > 30000) {
+        if (forceId && now - lastForceDebug > 30000) {
           lastForceDebug = now;
-          console.log(`[${new Date().toLocaleTimeString()}] [FORCE DEBUG] current=${wave} target=${config.huntId} gameReady=${gameReady} city=${isCity} treino=${telemetry.inTreino} enter=${shouldEnter} needs=${needsHuntEntry} queue=${actionQueue.pendingCount} currentAction=${actionQueue.currentAction || '-'}`);
+          console.log(`[${new Date().toLocaleTimeString()}] [FORCE DEBUG] current=${wave} target=${forceId} gameReady=${gameReady} city=${isCity} treino=${telemetry.inTreino} enter=${shouldEnter} needs=${needsHuntEntry} queue=${actionQueue.pendingCount} currentAction=${actionQueue.currentAction || '-'}`);
         }
 
         // Transição de Stamina e Treino
@@ -1675,9 +1716,12 @@ async function main() {
         // force-hunt já pendente bloqueia a ação genérica; sem este guarda as
         // duas podiam enviar `stage` para a mesma reserva e reiniciar a wave.
         const huntActionPending = actionQueue.pendingByLane.hunt > 0;
-        if ((shouldEnter || needsHuntEntry || forceNeedsEntry) && !telemetry.inTreino &&
+        const waitingManualHunt = Boolean(pendingHuntChange) && !huntFinishedForSwitch();
+        if (forceId && (shouldEnter || needsHuntEntry || forceNeedsEntry) && !waitingManualHunt && !telemetry.inTreino &&
             !huntActionPending && (now - lastHuntAttempt >= huntRetryDelayMs)) {
           lastHuntAttempt = now;
+          const queuedTargetId = forceId;
+          const queuedRevision = huntSelectionRevision;
           actionQueue.enqueue({
             id: "hunt",
             name: "hunt",
@@ -1688,12 +1732,12 @@ async function main() {
             // uma nova tentativa pode disputar a mesma reserva de sala.
             timeoutMs: 30000,
             run: async () => {
+              if (queuedRevision !== huntSelectionRevision || queuedTargetId !== manualHuntId) {
+                console.log(`[${new Date().toLocaleTimeString()}] 🏹 [HUNT IGNORADA] alvo antigo ${queuedTargetId}`);
+                return;
+              }
               try { (profiler as any).markSwitch(); } catch (_) {}
-              const target = forceId
-                ? (profiler as any).resumeTarget(forceId)
-                : (engineTargetId
-                  ? { id: engineTargetId, name: String(HUNTS_TABLE.find((h) => h.id === engineTargetId)?.name || engineTargetId), resumeLast: false }
-                  : (profiler as any).resumeTarget(""));
+              const target = (profiler as any).resumeTarget(queuedTargetId);
               const label = target.id ? `${target.name} (${target.id})` : "última do jogo (pick-current)";
               console.log(`[${new Date().toLocaleTimeString()}] 🏹 [HUNT DECISÃO] ${reason || "Retomando"}. Alvo: ${label} | Lvl ${telemetry.level}`);
 
@@ -1712,11 +1756,11 @@ async function main() {
                 try { (profiler as any).rememberPlayed(went, wentName); } catch (_) {}
               }
               console.log(`[${new Date().toLocaleTimeString()}] 🏹 [RESULTADO TELEPORTE] ${JSON.stringify(huntRes)}`);
-              if (huntRes?.success || huntRes?.alreadyThere) {
+              if ((huntRes?.success || huntRes?.alreadyThere) && queuedRevision === huntSelectionRevision && queuedTargetId === manualHuntId) {
                 needsHuntEntry = false;
                 telemetry.updateHunt(huntRes.hunt || target.name || target.id, huntRes.method === 'room-send' ? 'websocket' : 'dom');
                 huntRetryDelayMs = 8000 + Math.random() * 6000;
-              } else {
+              } else if (queuedRevision === huntSelectionRevision && queuedTargetId === manualHuntId) {
                 huntRetryDelayMs = 14000 + Math.random() * 12000;
               }
             }
@@ -1726,9 +1770,9 @@ async function main() {
         const isKnownHunt = wave && wave !== "—" && wave !== "-" && wave !== "Conectando...";
         // FORCE_HUNT must be allowed to replace an already-known hunt. The
         // previous unconditional reset cancelled the decision immediately.
-        const forceTarget = config.forceHunt && config.huntId;
+        const forceTarget = manualHuntId;
         const normalizedWave = String(wave || '').toLowerCase().replace(/[-\s]/g, '');
-        const normalizedTarget = String(config.huntId || '').toLowerCase().replace(/[-\s]/g, '');
+        const normalizedTarget = String(manualHuntId || '').toLowerCase().replace(/[-\s]/g, '');
         const alreadyAtForcedHunt = !!forceTarget &&
           (normalizedWave.includes(normalizedTarget) || normalizedTarget.includes(normalizedWave));
         if (isKnownHunt && !isCity && (!forceTarget || alreadyAtForcedHunt)) {
@@ -1750,7 +1794,7 @@ async function main() {
             lastProgressWaves = telemetry.waves;
             lastProgressGold = telemetry.gold;
             lastProgressTime = now;
-          } else if (now - lastProgressTime >= 150000 && telemetry.online) {
+          } else if (now - lastProgressTime >= 150000 && telemetry.online && !pendingHuntChange) {
             const roomAliveMs = (telemetry as any).lastRoomStateAt ? now - (telemetry as any).lastRoomStateAt : Infinity;
             const waveLow = String(wave || '').toLowerCase();
             const looksBoss = /boss|chefe|final|últim|ultim/.test(waveLow);
@@ -1866,10 +1910,19 @@ async function main() {
           healWords: [...HEAL_WORDS], manaWords: [...MANA_WORDS],
         };
         const applyHelperSnap = (res: any) => {
+          for (const row of (Array.isArray(res?.helpers) ? res.helpers : [])) {
+            if (row && row.slot !== undefined && row.slot !== null) {
+              const sid = Number(row.slot);
+              helperBySlot[sid] = { ...(helperBySlot[sid] || {}), ...row };
+            }
+          }
           const snap = res?.helper;
           if (snap && typeof snap === "object" && snap.slot !== undefined && snap.slot !== null) {
             const sid = Number(snap.slot);
             helperBySlot[sid] = { ...(helperBySlot[sid] || {}), ...snap };
+          }
+          if (lastSpellList.length > 0 && (res?.helpers || res?.helper)) {
+            magicState = classifyMagicPreservingFacts(lastSpellList, Object.keys(helperBySlot).sort().map((k) => helperBySlot[Number(k)]));
           }
         };
         // O jogo só cria os elementos rot-* enquanto a janela de rotação está
@@ -1916,29 +1969,41 @@ async function main() {
             timeoutMs: 30000,
             run: async () => {
               try {
-                const slots = magicState.slots || {};
+                let slots = magicState.slots || {};
                 let present = Object.keys(slots).filter((k) => /^\d+$/.test(k)).map(Number);
                 if (!present.length) present = [0, 1];
+                const helperMissing = present.some((sid) => {
+                  if (sid > 2) return false;
+                  const kit = slots[String(sid)] || {};
+                  return !kit.heal || !kit.mana;
+                });
+                if (helperMissing) {
+                  const helperRes = await safeEval<any>(pageRef, "potion", {
+                    autoHeal: config.autoHeal,
+                    healBelowPct: config.healBelowPct,
+                    hpPotionBelowPct: config.hpPotionBelowPct,
+                    manaPotionBelowPct: config.manaPotionBelowPct,
+                  }, 30000);
+                  applyHelperSnap(helperRes);
+                  if (helperRes?.events?.length) console.log(`[${new Date().toLocaleTimeString()}] 🧪 [SPELL PARTY] ${JSON.stringify(helperRes.events)}`);
+                  slots = magicState.slots || slots;
+                }
                 for (const sid of present) {
                   if (sid > 2) continue;
                   const last = spellSlotCooldown.get(sid) || 0;
                   if (now - last < 600000) continue;
                   const kit = slots[String(sid)] || {};
-                  if (kit.ready) continue;
-                  const jobNeed = !kit.heal ? "heal" : !kit.mana ? "mana" : "aoe";
-                  const job = !kit.heal || !kit.mana ? "helper" : "fill";
-                  const spellRes = await safeEval<any>(pageRef, "spell", { ...spellArgs, need: jobNeed, job, slot: sid }, 25000);
+                  if (kit.ready || (kit.empty || 0) <= 0) continue;
+                  const spellRes = await safeEval<any>(pageRef, "spell", { ...spellArgs, need: "aoe", job: "fill", slot: sid }, 20000);
                   lastGearSlot = sid;
                   applyHelperSnap(spellRes);
-                  const snap = spellRes?.helper;
-                  if (snap) spellSlotState.set(sid, JSON.stringify(snap));
                   if (spellRes && (spellRes.ok || spellRes.events)) {
-                    // Só esfrie o slot depois de uma resposta útil. Em caso
-                    // de renderer ocupado/timeout, ele precisa poder tentar
-                    // novamente na próxima rodada, sem esperar 10 minutos.
-                    spellSlotCooldown.set(sid, Date.now());
+                    // Só resfrie quando uma magia foi realmente escolhida.
+                    // open-rot/picker-not-open apenas abriram ou falharam.
+                    const configured = spellRes.ok && !["open-rot", "picker-not-open", "no-use"].includes(String(spellRes.method || spellRes.reason || ""));
+                    if (configured) spellSlotCooldown.set(sid, Date.now());
                     console.log(`[${new Date().toLocaleTimeString()}] 🔮 [GEAR slot${sid}] ${JSON.stringify(spellRes.events || spellRes)}`);
-                    break;
+                    if (configured) break;
                   }
                 }
               } finally {
