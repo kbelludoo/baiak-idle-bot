@@ -1750,9 +1750,10 @@ async function main() {
         if (telemetry.inTreino || !config.autoHunt) shouldEnter = false;
 
         // FORCE_HUNT is an explicit operator command. Do not let an incomplete
-        // profiler/session state suppress it after reconnect or initial boot.
+        // profiler/session state suppress it after reconnect or initial boot,
+        // mas NUNCA dispare entrada de hunt se estiver em treino ou com stamina <= 15%.
         let forceNeedsEntry = false;
-        if (forceId) {
+        if (forceId && !telemetry.inTreino && stamTransition.action !== "enter_treino") {
           const current = String(wave || '').toLowerCase().replace(/[-\s]/g, '');
           const target = String(forceId).toLowerCase().replace(/[-\s]/g, '');
           const currentHunt = matchHunt(wave) || matchHunt(telemetry.hunt);
@@ -1817,7 +1818,7 @@ async function main() {
                 if (tr?.events?.length) {
                   for (const ev of tr.events) console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] ${ev}`);
                 }
-                const trainingConfirmed = tr?.inTreino === true || tr?.action === "ja_treino_tp";
+                const trainingConfirmed = tr?.inTreino === true || tr?.action === "entrou_treino" || tr?.action === "ja_treino_tp" || tr?.action === "ja_treino";
                 if (trainingConfirmed) {
                   telemetry.inTreino = true;
                   telemetry.updateHunt("Treino Online", "dom");
@@ -1867,7 +1868,7 @@ async function main() {
         // Stamina baixa é uma trava real: mesmo que o treino tenha expirado ou
         // o renderer esteja congestionado, não retome a hunt até o Treino
         // Online ser confirmado pela UI.
-        const staminaBlocksHunt = telemetry.stamina === "—" || stamTransition.action === "enter_treino";
+        const staminaBlocksHunt = telemetry.stamina === "—" || stamTransition.action === "enter_treino" || telemetry.inTreino;
         if (forceId && (shouldEnter || needsHuntEntry || forceNeedsEntry) && !staminaBlocksHunt && !waitingManualHunt && !telemetry.inTreino &&
             !huntActionPending && (now - lastHuntAttempt >= huntRetryDelayMs)) {
           lastHuntAttempt = now;
