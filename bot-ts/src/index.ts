@@ -4,7 +4,7 @@ import { parseConfig, describeFlags } from "./config";
 import { launchBrowser } from "./browser";
 import { Watchdog } from "./watchdog";
 import { Profiler } from "./profiler";
-import { HuntMatrix, HUNTS_TABLE, classifyMagic, matchHunt, idsFromPickerRows, inferLevel, AOE_WORDS, STRIKE_WORDS, HEAL_WORDS, MANA_WORDS } from "./hunts";
+import { HuntMatrix, HUNTS_TABLE, classifyMagic, matchHunt, idsFromPickerRows, inferLevel, AOE_WORDS, STRIKE_WORDS, HEAL_WORDS, MANA_WORDS, getOptimalSpellRotation, HUNT_ELEMENT_PROFILES } from "./hunts";
 import { startServer } from "./server";
 import { decodeFrame } from "./protocol";
 import { safeEval } from "./scripts";
@@ -762,7 +762,10 @@ async function main() {
 
       const slotsMap: Record<string, any> = (magicState?.slots || {}) as any;
       const hasMagic = Object.keys(slotsMap).length > 0;
-      const totalSlots = Math.max(rawMembers.length || 0, activeAccountChars.length || 0, telemetry.partySlots || 3);
+      // Uma conta pode ter mais personagens disponíveis que slots ativos. A
+      // party do jogo é limitada a 3; não publique um quarto membro por causa
+      // de uma duplicata entre room/characters.list.
+      const totalSlots = Math.min(3, Math.max(rawMembers.length || 0, activeAccountChars.length || 0, telemetry.partySlots || 3));
       const memberLevels: number[] = [];
       const partyMembersOut: any[] = [];
       for (let sid = 0; sid < totalSlots; sid++) {
@@ -797,11 +800,11 @@ async function main() {
         memberLevels.push(Number(lvl) || 0);
         const sInfo = slotsMap[String(sid)] || {};
         const hInfo = helperBySlot[sid] || {};
-        // Sem magia escaneada ainda, presença observada (found) já conta como
-        // pronta — evita 0/3 eterno quando o hud de spells ainda não rodou.
+        // Presença não é configuração. Sem scan/helper confirmado, o membro
+        // não pode aparecer como READY só porque foi encontrado no room.
         const ready = hasMagic
           ? !!(sInfo.ready || (sInfo.heal && sInfo.mana))
-          : Boolean(found || fallbackChar);
+          : !!(hInfo.heal && hInfo.manaPotion);
         partyMembersOut.push({
           slot: sid, name: charNameVal, voc, level: lvl,
           heal: hInfo.heal || (sInfo.heal ? "Configurada (<75%)" : "Nenhuma"),
@@ -812,7 +815,7 @@ async function main() {
         });
       }
       const topLevel = memberLevels.length > 0 ? Math.max(...memberLevels) : Number(telemetry.level) || 0;
-      const partyConnected = rawMembers.length;
+      const partyConnected = Math.min(3, new Set(rawMembers.map((m: any) => Number(m?.slot)).filter((s: number) => Number.isFinite(s))).size || Math.min(3, rawMembers.length));
       const partyConfigReady = partyMembersOut.filter((member: any) => member.ready).length;
       const activeHunt = telemetry.hunt && telemetry.hunt !== "Conectando..." && telemetry.hunt !== "—" ? telemetry.hunt : "—";
       const mapSnapshot = protocolMapper.snapshot();
@@ -855,7 +858,7 @@ async function main() {
         return `+${n} XP`;
       };
       const snap = telemetry.snapshot({
-        character: partyMembersOut[0]?.name || null,
+        character: primaryChar?.name || partyMembersOut[0]?.name || null,
         subsystems,
         analyzers: analyzerOut,
         hunt_decision: (profiler as any).lastDecision || {},
@@ -869,7 +872,7 @@ async function main() {
       });
       const statusData = {
         ...snap,
-        character: partyMembersOut[0]?.name || null,
+        character: primaryChar?.name || partyMembersOut[0]?.name || null,
         connected: !!snap.online,
         hunt: activeHunt,
         level: Math.max(snap.level, topLevel),
@@ -1025,6 +1028,9 @@ async function main() {
   let getFrameRef: (() => Buffer | null) = () => null;
 
   let needsHuntEntry = false;
+  let lastHuntAttempt = 0;
+  let lastSpellGear = 0;
+  const spellSlotCooldown = new Map<number, number>();
   type PendingHuntChange = {
     id: string;
     name: string;
@@ -1036,10 +1042,21 @@ async function main() {
     const current = String(telemetry.hunt || '').toLowerCase();
     if (!telemetry.online || telemetry.inTreino) return true;
     if (/cidade|city|templo|temple/.test(current)) return true;
+    if (telemetry.huntStage !== null && telemetry.huntStageTotal !== null) {
+      return telemetry.huntStage === 1;
+    }
+    if (telemetry.huntStageLabel) {
+      const m = telemetry.huntStageLabel.match(/(\d+)\s*\/\s*(\d+)/);
+      if (m) {
+        const c = Number(m[1]);
+        if (Number.isFinite(c)) return c === 1;
+      }
+    }
     const stage = parseHuntStage(telemetry.hunt);
     if (stage.current !== null && stage.total !== null) {
-      return stage.current >= stage.total;
+      return stage.current === 1;
     }
+    // Hunts sem estágio (farm infinito) liberam na cidade; sem 1/10 não deve interromper wave no meio
     const activeId = authoritativeHuntId || matchHunt(telemetry.hunt)?.id || (profiler as any).activeHuntId;
     return !activeId && !current.includes('conectando');
   };
@@ -1054,7 +1071,15 @@ async function main() {
       writeFileSync(join(dataDir, 'manual_hunt.json'), JSON.stringify({ hunt_id: target.id, hunt_name: target.name, updated_at: new Date().toISOString() }, null, 2), 'utf-8');
     } catch (_) {}
     needsHuntEntry = true;
-    console.log(`[${new Date().toLocaleTimeString()}] 🎮 [HUNT MANUAL] ${target.name} (${target.id}) liberada após finalizar a etapa atual`);
+    lastHuntAttempt = 0;
+    spellSlotCooldown.clear();
+    lastSpellGear = 0;
+    const optimal = getOptimalSpellRotation(target.id);
+    (magicState as any).recommended_element = optimal.preferredElement;
+    (magicState as any).hunt_weaknesses = optimal.weaknesses;
+    (magicState as any).hunt_resistances = optimal.resistances;
+    console.log(`[${new Date().toLocaleTimeString()}] 🎮 [HUNT MANUAL] ${target.name} (${target.id}) ativada com prioridade`);
+    console.log(`[${new Date().toLocaleTimeString()}] ⚡ [BUILD FRAQUEZAS] Elemento recomendado: ${optimal.preferredElement.toUpperCase()} | Fraquezas: ${optimal.weaknesses.join(', ')} | Resistências a evitar: ${optimal.resistances.join(', ') || 'nenhuma'}`);
   };
 
   // Inicia Servidor Web Bun — getState usa o mesmo contrato do status.json
@@ -1125,20 +1150,26 @@ async function main() {
         name: targetName,
         requestedAt: new Date().toISOString(),
       };
-      if (huntFinishedForSwitch()) {
-        activateManualHunt(request);
+
+      // A troca escolhida no painel não interrompe a hunt atual. Mantemos o
+      // alvo pendente até a sala chegar ao fim da etapa ou retornar à cidade;
+      // ativar o novo alvo aqui fazia o bot disputar a retomada automática da
+      // sala antiga durante um reconnect (ex.: Glooth solicitado, Dragon Lair
+      // ainda ativo).
+      if (!huntFinishedForSwitch()) {
+        pendingHuntChange = request;
         writeStatusFile();
-        return { ok: true, message: `Hunt ${targetName} será iniciada agora.`, pending: false };
+        return {
+          ok: true,
+          message: `Hunt ${targetName} ficará na fila e será iniciada após finalizar a hunt atual.`,
+          pending: true,
+        };
       }
 
-      pendingHuntChange = alreadyPending ? pendingHuntChange : request;
-      console.log(`[${new Date().toLocaleTimeString()}] ⏳ [HUNT MANUAL] troca solicitada para ${targetName} (${targetId}); aguardando finalizar ${telemetry.huntStageLabel || 'a etapa atual'}`);
+      pendingHuntChange = null;
+      activateManualHunt(request);
       writeStatusFile();
-      return {
-        ok: true,
-        pending: true,
-        message: `Troca agendada para ${targetName}. O bot aguarda finalizar o estágio ${telemetry.huntStageLabel || 'atual'} antes de trocar.`,
-      };
+      return { ok: true, message: `Hunt ${targetName} será iniciada agora.`, pending: false };
     },
     dataDir,
   });
@@ -1172,7 +1203,7 @@ async function main() {
   // --- Estado interno de cadências ---
   const t0Loop = Date.now();
   let lastPrint = Date.now();
-  let lastHuntAttempt = 0;
+  lastHuntAttempt = 0;
   let huntRetryDelayMs = 14000;
   let lastSellTime = 0;
   let lastDailyCheck = 0;
@@ -1184,12 +1215,10 @@ async function main() {
   let fastStateBusy = false;
   let lastTreinoTime = 0;
   let lastBossNativeAttempt = 0;
-  let lastSpellGear = 0;
+  lastSpellGear = 0;
   let spellProbeBusy = false;
   let lastSpellProbe = 0;
   let spellProbeFailures = 0;
-  const spellSlotCooldown = new Map<number, number>();
-  const spellSlotState = new Map<number, string>();
   let lastPickerOpen = false;
   let lastWatchdogCheck = 0;
   let lastForceDebug = 0;
@@ -1244,29 +1273,26 @@ async function main() {
     // cinco minutos deixava a conta caçando com p0 mesmo quando a rotação já
     // estava visível. Após duas falhas, tente novamente em 60 s.
     const probeCooldown = spellProbeFailures >= 2 ? 60000 : 30000;
-    if (!pageRef || spellProbeBusy || magicState.power > 0 || nowProbe - lastSpellProbe < probeCooldown) return;
+    const hasEmptySlot = Object.values(magicState.slots as Record<string, any> || {}).some((s: any) => (s.empty || 0) > 0) || (magicState as any).empty > 0;
+    if (!pageRef || spellProbeBusy || (magicState.power > 0 && !hasEmptySlot) || nowProbe - lastSpellProbe < probeCooldown) return;
     spellProbeBusy = true;
     lastSpellProbe = nowProbe;
     try {
-      const elementWords: Record<string, string[]> = {
-        energy: ['exevo gran mas vis', 'exevo gran vis', 'exori vis'],
-        ice: ['exevo gran mas frigo', 'exevo gran frigo', 'exori frigo'],
-        fire: ['exevo gran mas flam', 'exevo gran flam', 'exori flam'],
-        earth: ['exevo gran mas tera', 'exevo gran tera', 'exori tera'],
-        death: ['exevo gran mas pox', 'exori mort'],
-        holy: ['exevo mas san', 'exori san'],
-        physical: ['exori gran', 'exori ico', 'exori'],
-      };
-      const preferred = String((magicState as any).recommended_element || (magicState as any).observed_element || '').toLowerCase();
-      const words = elementWords[preferred] || [];
+      const currentHuntTarget = authoritativeHuntId || manualHuntId || telemetry.hunt;
+      const optimal = getOptimalSpellRotation(currentHuntTarget);
+      (magicState as any).recommended_element = optimal.preferredElement;
+      (magicState as any).hunt_weaknesses = optimal.weaknesses;
+      (magicState as any).hunt_resistances = optimal.resistances;
       // Em SwiftShader a leitura dos slots pode esperar o renderer por mais
       // de uma janela normal de HUD. A sonda é somente leitura e roda no
       // máximo a cada 30/60s; dê tempo para ela capturar rot-* já montados,
       // sem abrir outro modal ou repetir cliques de configuração.
       const scan = await safeEval<any>(pageRef, 'spell', {
-        metaAoe: [...words, ...AOE_WORDS.filter((w) => !words.includes(w))],
-        metaStrike: [...words, ...STRIKE_WORDS.filter((w) => !words.includes(w))],
-        healWords: [...HEAL_WORDS], manaWords: [...MANA_WORDS], job: 'open',
+        metaAoe: optimal.metaAoe,
+        metaStrike: optimal.metaStrike,
+        healWords: optimal.healWords,
+        manaWords: optimal.manaWords,
+        job: 'open',
       }, 25000);
       if (Array.isArray(scan?.spells) && scan.spells.length > 0) {
         magicState = classifyMagicPreservingFacts(scan.spells, Object.keys(helperBySlot).sort().map((k) => helperBySlot[Number(k)]));
@@ -1568,7 +1594,12 @@ async function main() {
         const domAutomationReady = magicState.power > 0 || now - t0Loop >= 180_000;
         const looksCity = wave === "Cidade" || wave === "City" || wave === "Templo" || wave === "Temple"
           || ["cidade", "city", "templo", "temple"].some((w) => waveLow.includes(w));
-        const pickerOpen = !!(hud.pickerOpen ?? domState.pickerOpen);
+        // O HUD é cacheado e pode conservar `pickerOpen=true` depois que o
+        // modal já fechou. Priorize o FAST_STATE atual; só use o HUD como
+        // fallback quando ele for a única fonte disponível.
+        const pickerOpen = domState.pickerOpen !== undefined
+          ? !!domState.pickerOpen
+          : !!hud.pickerOpen;
         lastPickerOpen = pickerOpen;
         if (looksCity && !pickerOpen) cityStreak++;
         else cityStreak = 0;
@@ -1646,16 +1677,16 @@ async function main() {
         // FORCE_HUNT is an explicit operator command. Do not let an incomplete
         // profiler/session state suppress it after reconnect or initial boot.
         let forceNeedsEntry = false;
-        if (forceId && !isCity) {
+        if (forceId) {
           const current = String(wave || '').toLowerCase().replace(/[-\s]/g, '');
           const target = String(forceId).toLowerCase().replace(/[-\s]/g, '');
           const currentHunt = matchHunt(wave) || matchHunt(telemetry.hunt);
-          const atTarget = (current && (current.includes(target) || target.includes(current))) || currentHunt?.id === forceId;
+          const atTarget = !isCity && ((current && (current.includes(target) || target.includes(current))) || currentHunt?.id === forceId);
           if (!atTarget) {
             shouldEnter = true;
             needsHuntEntry = true;
             forceNeedsEntry = true;
-            reason = `FORCE_HUNT=${forceId}`;
+            reason = isCity ? `cidade/templo → FORCE_HUNT=${forceId}` : `FORCE_HUNT=${forceId}`;
           }
         }
         if (forceId && now - lastForceDebug > 30000) {
@@ -1773,8 +1804,11 @@ async function main() {
         const forceTarget = manualHuntId;
         const normalizedWave = String(wave || '').toLowerCase().replace(/[-\s]/g, '');
         const normalizedTarget = String(manualHuntId || '').toLowerCase().replace(/[-\s]/g, '');
-        const alreadyAtForcedHunt = !!forceTarget &&
-          (normalizedWave.includes(normalizedTarget) || normalizedTarget.includes(normalizedWave));
+        const currentHuntForCheck = matchHunt(wave) || matchHunt(telemetry.hunt);
+        const alreadyAtForcedHunt = !!forceTarget && (
+          (currentHuntForCheck?.id === forceTarget) ||
+          (normalizedWave && normalizedTarget && (normalizedWave.includes(normalizedTarget) || normalizedTarget.includes(normalizedWave)))
+        );
         if (isKnownHunt && !isCity && (!forceTarget || alreadyAtForcedHunt)) {
           needsHuntEntry = false;
         }
@@ -1893,21 +1927,16 @@ async function main() {
         // Fila de Ação: Magias / Spells (Prioridade 3)
         const pickerKind = hud.pickerKind;
         const pickerOpenEv = (domState.events || []).some((e: string) => String(e).includes("PICKER_SPELL_ABERTO"));
-        const elementWords: Record<string, string[]> = {
-          energy: ['exevo gran mas vis', 'exevo gran vis', 'exori vis'],
-          ice: ['exevo gran mas frigo', 'exevo gran frigo', 'exori frigo'],
-          fire: ['exevo gran mas flam', 'exevo gran flam', 'exori flam'],
-          earth: ['exevo gran mas tera', 'exevo gran tera', 'exori tera'],
-          death: ['exevo gran mas pox', 'exori mort'],
-          holy: ['exevo mas san', 'exori san'],
-          physical: ['exori gran', 'exori ico', 'exori'],
-        };
-        const preferredElement = String((magicState as any).recommended_element || (magicState as any).observed_element || '').toLowerCase();
-        const preferredWords = elementWords[preferredElement] || [];
+        const currentHuntTarget = authoritativeHuntId || manualHuntId || telemetry.hunt;
+        const optimal = getOptimalSpellRotation(currentHuntTarget);
+        (magicState as any).recommended_element = optimal.preferredElement;
+        (magicState as any).hunt_weaknesses = optimal.weaknesses;
+        (magicState as any).hunt_resistances = optimal.resistances;
         const spellArgs = {
-          metaAoe: [...preferredWords, ...AOE_WORDS.filter((w) => !preferredWords.includes(w))],
-          metaStrike: [...preferredWords, ...STRIKE_WORDS.filter((w) => !preferredWords.includes(w))],
-          healWords: [...HEAL_WORDS], manaWords: [...MANA_WORDS],
+          metaAoe: optimal.metaAoe,
+          metaStrike: optimal.metaStrike,
+          healWords: optimal.healWords,
+          manaWords: optimal.manaWords,
         };
         const applyHelperSnap = (res: any) => {
           for (const row of (Array.isArray(res?.helpers) ? res.helpers : [])) {
@@ -1931,7 +1960,12 @@ async function main() {
         if (magicState.power <= 0 && !pickerOpen && now - lastSpellGear >= 30000) {
           lastSpellGear = now;
           void probeSpellSlots();
-        } else if ((pickerKind === "spell" || pickerKind === "heal" || pickerKind === "mana" || pickerKind === "hp" || pickerOpenEv) && now - lastSpellGear >= 15000) {
+        } else if ((pickerOpen || pickerOpenEv) &&
+          // Helper/party incompleto tem prioridade; um picker cacheado não
+          // pode impedir a configuração dos três personagens.
+          !(magicState.power > 0 && magicState.party_ready !== true) &&
+          (pickerKind === "spell" || pickerKind === "heal" || pickerKind === "mana" || pickerKind === "hp" || pickerOpenEv) &&
+          now - lastSpellGear >= 15000) {
           lastSpellGear = now;
           actionQueue.enqueue({
             id: "spell_picker",
@@ -1966,7 +2000,7 @@ async function main() {
             // renderer SwiftShader. O envio de heartbeat/hunt é independente
             // desta lane, então aguarde a configuração terminar em vez de
             // abortar no meio e deixar o party incompleto.
-            timeoutMs: 30000,
+            timeoutMs: 90000,
             run: async () => {
               try {
                 let slots = magicState.slots || {};
@@ -1983,7 +2017,7 @@ async function main() {
                     healBelowPct: config.healBelowPct,
                     hpPotionBelowPct: config.hpPotionBelowPct,
                     manaPotionBelowPct: config.manaPotionBelowPct,
-                  }, 30000);
+                  }, 80000);
                   applyHelperSnap(helperRes);
                   if (helperRes?.events?.length) console.log(`[${new Date().toLocaleTimeString()}] 🧪 [SPELL PARTY] ${JSON.stringify(helperRes.events)}`);
                   slots = magicState.slots || slots;

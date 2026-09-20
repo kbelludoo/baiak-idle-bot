@@ -225,12 +225,17 @@ function formatXpStr(xp: number): string {
 function publicStatus(status: JsonRecord): JsonRecord {
   const members = Array.isArray(status.party_members) ? status.party_members : [];
   const readyMembers = members.filter((member: JsonRecord) => member?.ready).length;
+  const connectedMembers = status.party_connected !== undefined
+    ? asNumber(status.party_connected)
+    : members.length;
   const analyzers = status.analyzers || {};
   // Fallbacks quando o bot ainda roda build antiga sem os campos novos:
   // deriva uptime_str de uptime_seconds, elapsed de uptime, session_xp de analyzers.
   const uptimeSec = asNumber(status.online_uptime_seconds);
   const analyzersXp = asNumber(analyzers.session_xp ?? analyzers.raw_xp ?? analyzers.sessionXp);
-  const sessionXp = asNumber(status.session_xp) || analyzersXp;
+  // Zero é um valor válido no início da execução: não ressuscite o XP antigo
+  // do Hunt Analyzer como se fosse o total do processo atual.
+  const sessionXp = status.session_xp !== undefined ? asNumber(status.session_xp) : analyzersXp;
   let elapsed = asNumber(status.elapsed_minutes);
   if (!elapsed && uptimeSec > 0) elapsed = Math.floor(uptimeSec / 60);
   let elapsedSec = asNumber(status.elapsed_seconds);
@@ -252,17 +257,29 @@ function publicStatus(status: JsonRecord): JsonRecord {
     session_xp: sessionXp,
     session_xp_str: sessionXpStr,
     level: asNumber(status.level),
+    level_per_hour: asNumber(status.level_per_hour),
     gold: asNumber(status.gold),
     stamina: status.stamina || null,
     hunt: status.hunt || status.last_hunt || null,
+    hunt_stage: status.hunt_stage ?? null,
+    hunt_stage_total: status.hunt_stage_total ?? null,
+    hunt_stage_label: status.hunt_stage_label || null,
+    hunt_stage_complete: Boolean(status.hunt_stage_complete),
     last_hunt: status.last_hunt || null,
     last_hunt_id: status.last_hunt_id || null,
     force_hunt: Boolean(status.force_hunt),
     force_hunt_id: status.force_hunt_id || null,
+    hunt_control: status.hunt_control || 'manual',
+    pending_hunt_id: status.pending_hunt_id || null,
+    pending_hunt_name: status.pending_hunt_name || null,
+    pending_hunt_requested_at: status.pending_hunt_requested_at || null,
     loop_mode: Boolean(status.loop_mode),
     treino: Boolean(status.treino),
     party_slots: asNumber(status.party_slots) || (members.length || 3),
-    party_ready: readyMembers,
+    party_connected: connectedMembers,
+    party_config_ready: status.party_config_ready !== undefined ? asNumber(status.party_config_ready) : readyMembers,
+    // Compatibilidade com o painel antigo: party_ready agora é presença.
+    party_ready: connectedMembers,
     party_members: members,
     kills: asNumber(status.kills),
     waves: asNumber(status.waves),
@@ -271,6 +288,10 @@ function publicStatus(status: JsonRecord): JsonRecord {
     hunt_decision: status.hunt_decision || {},
     subsystems: status.subsystems || {},
     analyzers,
+    selected_hunt_id: status.selected_hunt_id || null,
+    selected_hunt_name: status.selected_hunt_name || null,
+    selected_hunt_metrics: status.selected_hunt_metrics || {},
+    session_metrics: status.session_metrics || {},
     benchmarks: status.benchmarks || {},
     hunt_matrix: status.hunt_matrix || {},
     hunt_metrics: status.hunt_metrics || {},

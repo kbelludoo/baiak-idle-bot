@@ -33,6 +33,27 @@ export interface ShooterInfo {
   vocation?: string;
 }
 
+export interface HuntStageInfo {
+  current: number | null;
+  total: number | null;
+  label: string | null;
+  complete: boolean;
+}
+
+/** Extrai o progresso exibido pelo jogo, por exemplo "Vexclaw 1/10". */
+export function parseHuntStage(value: unknown): HuntStageInfo {
+  const text = String(value ?? '').trim();
+  const matches = [...text.matchAll(/(?:^|\s)(\d+)\s*\/\s*(\d+)(?:\s|$)/g)];
+  const match = matches.at(-1);
+  if (!match) return { current: null, total: null, label: null, complete: false };
+  const current = Number(match[1]);
+  const total = Number(match[2]);
+  if (!Number.isFinite(current) || !Number.isFinite(total) || current < 0 || total <= 0) {
+    return { current: null, total: null, label: null, complete: false };
+  }
+  return { current, total, label: `${current}/${total}`, complete: current >= total };
+}
+
 /** Nível máximo real do jogo (tabela vai a 800; placeholders acima são lixo). */
 export const MAX_GAME_LEVEL = 800;
 
@@ -240,6 +261,9 @@ export class TelemetryStore {
 
   public kills: number = 0;
   public waves: number = 0;
+  public huntStage: number | null = null;
+  public huntStageTotal: number | null = null;
+  public huntStageLabel: string | null = null;
   public inTreino: boolean = false;
   public online = false;
 
@@ -312,6 +336,36 @@ export class TelemetryStore {
     if (clean.toLowerCase().includes('conectando') && this._hunt.value !== 'Conectando...' && this._hunt.value !== '—') {
       return false;
     }
+    const stage = parseHuntStage(clean);
+    // WebSocket pode sobrescrever "Glooth Bandit 7/10" com id "glooth-cave" sem estágio.
+    // Preserva estágio anterior quando a base da hunt é a mesma — senão o
+    // `huntFinishedForSwitch()` nunca vê 10/10 e o `pendingHuntChange` fica pendente para sempre.
+    const stripStage = (s: string) => s.replace(/\s*\d+\s*\/\s*\d+\s*$/, '').trim().toLowerCase();
+    const prevBase = stripStage(this._hunt.value);
+    const newBase = stripStage(clean);
+    const tokenSet = (s: string) => new Set(s.split(/[^a-z0-9]+/g).filter(t => t.length >= 3 && !['cave','lair','camp','dungeon','ground','cavern'].includes(t)));
+    const prevTokens = tokenSet(prevBase);
+    const newTokens = tokenSet(newBase);
+    let overlap = false;
+    for (const tok of prevTokens) if (newTokens.has(tok)) { overlap = true; break; }
+    const sameHunt = !!prevBase && !!newBase && (
+      prevBase === newBase ||
+      prevBase.includes(newBase) ||
+      newBase.includes(prevBase) ||
+      prevBase.replace(/-cave|-lair|-camp|-dungeon|-ground/g, '') === newBase.replace(/-cave|-lair|-camp|-dungeon|-ground/g, '') ||
+      overlap
+    );
+    if (stage.current !== null && stage.total !== null) {
+      this.huntStage = stage.current;
+      this.huntStageTotal = stage.total;
+      this.huntStageLabel = stage.label;
+    } else if (!sameHunt) {
+      // Hunt realmente mudou para outra sem estágio — zera contador
+      this.huntStage = null;
+      this.huntStageTotal = null;
+      this.huntStageLabel = null;
+    }
+    // else: mesma hunt, novo valor sem estágio (ex: id do websocket) — preserva estágio anterior
     this._hunt = { value: clean, source, updatedAt: Date.now() };
     return true;
   }
@@ -571,6 +625,10 @@ export class TelemetryStore {
     elapsed_seconds?: number | null;
     force_hunt?: boolean | null;
     force_hunt_id?: string | null;
+    hunt_control?: 'manual' | string | null;
+    pending_hunt_id?: string | null;
+    pending_hunt_name?: string | null;
+    pending_hunt_requested_at?: string | null;
   } = {}): any {
     const now = Date.now();
     const uptimeSec = this.onlineUptimeSeconds(now);
@@ -587,6 +645,12 @@ export class TelemetryStore {
       gold: this.gold,
       stamina: this.stamina,
       hunt: this.hunt,
+      hunt_stage: this.huntStage,
+      hunt_stage_total: this.huntStageTotal,
+      hunt_stage_label: this.huntStageLabel,
+      hunt_stage_complete: this.huntStage !== null && this.huntStageTotal !== null
+        ? this.huntStage >= this.huntStageTotal
+        : false,
       loop_mode: this.loopMode,
       treino: this.inTreino,
       party_slots: this.partySlots,
@@ -611,6 +675,10 @@ export class TelemetryStore {
       session_xp_str: extra.session_xp_str ?? formatXpStr(sessionXp) ?? '0 XP',
       force_hunt: extra.force_hunt ?? false,
       force_hunt_id: extra.force_hunt_id ?? null,
+      hunt_control: extra.hunt_control ?? 'manual',
+      pending_hunt_id: extra.pending_hunt_id ?? null,
+      pending_hunt_name: extra.pending_hunt_name ?? null,
+      pending_hunt_requested_at: extra.pending_hunt_requested_at ?? null,
       sources: this.getSources(),
       last_update: new Date().toLocaleTimeString('pt-BR'),
       last_update_ts: Math.floor(now / 1000),

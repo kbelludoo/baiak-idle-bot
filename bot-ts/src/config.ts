@@ -98,7 +98,10 @@ export function parseConfig(): BotConfig {
     : has('--no-stream') ? false
     : env.STREAM !== undefined ? envFlag('STREAM', false)
     : envFlag('LIVE_STREAM', true);
-  const autoHunt = has('--no-hunt') ? false : !envFlag('AUTO_HUNT_OFF', false) && envFlag('AUTO_HUNT', true);
+  // Hunt is always selected by the operator.  Keep the legacy CLI flags out
+  // of the decision path so an old AUTO_HUNT=true environment cannot revive
+  // the benchmark/last-hunt selector.
+  const autoHunt = false;
   const autoHeal = has('--no-heal') ? false : envFlag('AUTO_HEAL', true);
   const autoSell = has('--no-sell') ? false : envFlag('AUTO_SELL', true);
   const autoTreino = has('--no-treino') ? false : envFlag('AUTO_TREINO', true);
@@ -109,8 +112,9 @@ export function parseConfig(): BotConfig {
   const autoExtras = has('--no-extras') ? false : envFlag('AUTO_EXTRAS', true);
   const forceHunt = has('--force-hunt') || envFlag('FORCE_HUNT', false) || (env.HUNT_MODE || '').toLowerCase() === 'force';
   const huntId = getVal('--hunt-id', env.HUNT_ID || '');
-  const huntModeRaw = getVal('--hunt-mode', env.HUNT_MODE || (forceHunt ? 'force' : 'last')).toLowerCase();
-  const huntMode = forceHunt ? 'force' : ((['last', 'force', 'engine', 'hybrid'].includes(huntModeRaw) ? huntModeRaw : 'last') as BotConfig['huntMode']);
+  // A escolha de hunt é manual; engine/hybrid não devem mais calcular nem
+  // trocar de hunt sozinhos.
+  const huntMode = forceHunt ? 'force' : 'last';
 
   const sellThresholdPct = clamp(parseInt(getVal('--sell-pct', String(envInt('SELL_THRESHOLD_PCT', 70))), 10) || 70, 10, 100);
   const healBelowPct = clamp(parseInt(getVal('--heal-pct', String(envInt('HEAL_BELOW_PCT', 75))), 10) || 75, 10, 95);

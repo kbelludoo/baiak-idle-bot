@@ -2,6 +2,7 @@ async ({ autoHeal = true, healBelowPct = 75, hpPotionBelowPct = 60, manaPotionBe
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const vis = (el) => !!(el && el.offsetParent !== null);
   const events = [];
+  const helpers = [];
 
   const closePicker = () => {
     const pm = document.getElementById("picker-modal");
@@ -224,22 +225,45 @@ async ({ autoHeal = true, healBelowPct = 75, hpPotionBelowPct = 60, manaPotionBe
         }
       }
 
-      if (hpBtn) {
+      // Não reabra pickers que já têm uma seleção. Em SwiftShader cada
+      // abertura pode consumir vários segundos e a rotina acabava expirando
+      // antes de chegar ao próximo personagem.
+      if (hpBtn && /^(nenhuma|none)$/i.test((hpBtn.textContent || "").trim())) {
         hpBtn.click();
         await configureOpenedPotionPicker(true);
       }
 
-      if (manaBtn) {
+      if (manaBtn && /^(nenhuma|none)$/i.test((manaBtn.textContent || "").trim())) {
         manaBtn.click();
         await configureOpenedPotionPicker(false);
       }
+
+      // Devolve um snapshot por slot para o bot não precisar manter o Helper
+      // aberto. Isso alimenta party_config_ready e evita repetir a mesma
+      // configuração a cada ciclo.
+      const currentHelper = document.getElementById("helper-modal") || helperNow;
+      const currentGrid = currentHelper.querySelector(".helper-healgrid") || currentHelper;
+      const currentBtns = Array.from(currentGrid.querySelectorAll(".helper-spellbtn"));
+      const readBtn = (idx) => (currentBtns[idx]?.textContent || "").replace(/\s+/g, " ").trim();
+      const heal = readBtn(0);
+      const hpPotion = readBtn(1);
+      const manaPotion = readBtn(2);
+      const magia = currentGrid.querySelector('input[type="checkbox"]');
+      helpers.push({
+        slot: slotIdx,
+        heal: /^(nenhuma|none)$/i.test(heal) ? "" : heal,
+        hpPotion: /^(nenhuma|none)$/i.test(hpPotion) ? "" : hpPotion,
+        manaPotion: /^(nenhuma|none)$/i.test(manaPotion) ? "" : manaPotion,
+        autoHeal: /cura autom[aá]tica|exura|healing|mend|cleansing|restoration|wound/i.test(heal),
+        healEnabled: !(magia && !magia.checked),
+      });
     }
 
     closeHelper();
-    return { ok: true, events };
+    return { ok: true, events, helpers };
   } catch (err) {
     closePicker();
     closeHelper();
-    return { ok: false, error: String(err), events };
+    return { ok: false, error: String(err), events, helpers };
   }
 };

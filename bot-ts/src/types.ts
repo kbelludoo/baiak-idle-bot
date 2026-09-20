@@ -55,7 +55,7 @@ export interface BotConfig {
   autoHunt: boolean;
   forceHunt: boolean;
   huntId: string;
-  huntMode: 'last' | 'force' | 'engine' | 'hybrid';
+  huntMode: 'last' | 'force';
   exploreSampleSec: number;
   exploreMaxDeaths: number;
   exploreMaxDamageTakenPct: number;

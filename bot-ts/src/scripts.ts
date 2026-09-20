@@ -6,7 +6,11 @@ const SCRIPTS: Record<string, string> = {};
 // Um evaluate que expirou no limite externo ainda pode estar aguardando o
 // renderer. Impedir outra avaliação concorrente evita uma fila de promises
 // dentro do Chromium, que era a causa dos timeouts em cascata de HUD/spell.
-const ACTIVE_EVAL_PAGES = new WeakSet<object>();
+// Um timeout externo não cancela o Runtime.evaluate do Chromium.  Se o lock
+// for liberado no finally, a próxima ação inicia outro evaluate enquanto o
+// anterior ainda está pendente e o renderer entra numa cascata de timeouts.
+// Mantemos o promise vivo no lock até ele realmente terminar.
+const ACTIVE_EVAL_PAGES = new WeakMap<object, Promise<unknown>>();
 
 export function loadScript(name: string): string {
   if (SCRIPTS[name]) return SCRIPTS[name];
@@ -42,12 +46,8 @@ export async function safeEval<T = any>(
   if (!page) return null;
   const pageObject = page as unknown as object;
   if (ACTIVE_EVAL_PAGES.has(pageObject)) return null;
-  ACTIVE_EVAL_PAGES.add(pageObject);
   const js = loadScript(name);
-  if (!js) {
-    ACTIVE_EVAL_PAGES.delete(pageObject);
-    return null;
-  }
+  if (!js) return null;
 
   try {
     const cleanJs = js.trim().replace(/;+$/, '');
@@ -71,13 +71,20 @@ export async function safeEval<T = any>(
       arg,
       timeoutMs
     ) as Promise<T>;
+    let trackedEvaluate: Promise<T>;
+    trackedEvaluate = evaluatePromise.finally(() => {
+      if (ACTIVE_EVAL_PAGES.get(pageObject) === trackedEvaluate) {
+        ACTIVE_EVAL_PAGES.delete(pageObject);
+      }
+    });
+    ACTIVE_EVAL_PAGES.set(pageObject, trackedEvaluate);
     // Puppeteer pode ficar aguardando a resposta CDP quando o renderer está
     // saturado; o timeout acima vive dentro da página e não cobre essa fila.
     // Este segundo limite garante que nenhuma ação prenda o loop/sonda para
     // sempre. O +1s deixa o timeout da página retornar a razão mais precisa
     // quando o renderer ainda está respondendo.
     const result = await Promise.race([
-      evaluatePromise,
+      trackedEvaluate,
       new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`outer_timeout_${Math.ceil((timeoutMs + 1000) / 1000)}s`)), timeoutMs + 1000)),
     ]);
     return result;
@@ -86,7 +93,5 @@ export async function safeEval<T = any>(
       console.warn(`[SAFE_EVAL AVISO] [${name}] ${err?.message || err}`);
     }
     return null;
-  } finally {
-    ACTIVE_EVAL_PAGES.delete(pageObject);
   }
 }

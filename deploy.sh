@@ -64,6 +64,7 @@ deploy_ts() {
   echo "🚀 Sincronizando bot TS com VPS ($target)..."
   echo "=================================================="
   rsync -avz \
+    --delete \
     -e "ssh -i \"$KEY\" -o StrictHostKeyChecking=accept-new" \
     --exclude '.env' \
     --exclude 'data/' \
@@ -86,6 +87,7 @@ echo "=================================================="
 echo "🚀 Sincronizando monitor com VPS 1 ($VPS1)..."
 echo "=================================================="
 rsync -avz \
+  --delete \
   -e "ssh -i \"$KEY\" -o StrictHostKeyChecking=accept-new" \
   --exclude '.env' \
   --exclude 'data/' \

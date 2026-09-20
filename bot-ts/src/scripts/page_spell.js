@@ -20,7 +20,7 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
   const noneRe = /^(nenhuma|none)$/i;
   const autoHealRe = /cura autom[aá]tica|exura|light healing|wound cleansing|spirit mend|mend|cleansing|san|ico|cura/i;
 
-  const picker = document.getElementById("picker-modal");
+  let picker = document.getElementById("picker-modal");
   const pickerOpen = !!(picker && !picker.classList.contains("hidden"));
   const title = (picker?.querySelector(".im-title")?.textContent || "").toLowerCase();
 
@@ -117,6 +117,20 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
 
   const pickByWords = (words, method) => {
     const rows = Array.from(picker.querySelectorAll(".sp-book-row, .im-row, .stage-row, [class*='sp-']"));
+    // Ordena por level/mana para garantir a melhor magia desbloqueada primeiro
+    const levelOf = (row) => {
+      const m = (row.textContent || "").match(/lvl\s*(\d+)/i);
+      return m ? parseInt(m[1], 10) : 0;
+    };
+    const manaOf = (row) => {
+      const m = (row.textContent || "").match(/(\d+)\s*mana/i);
+      return m ? parseInt(m[1], 10) : 0;
+    };
+    rows.sort((a, b) => {
+      const lv = levelOf(b) - levelOf(a);
+      if (lv !== 0) return lv;
+      return manaOf(b) - manaOf(a);
+    });
     const prefer = (words || []).map((s) => String(s).toLowerCase());
     for (const word of prefer) {
       for (const row of rows) {
@@ -135,16 +149,20 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
   };
 
   const pickFirstUse = (method) => {
-    const anyUse = Array.from(picker.querySelectorAll("button")).find((b) => {
-      const t = (b.textContent || "").trim().toLowerCase();
-      const row = b.closest(".sp-book-row, .im-row");
-      if (row && row.classList.contains("lock")) return false;
-      const rowText = (row?.textContent || "").toLowerCase();
-      return (t === "usar" || t === "use") && !b.disabled && vis(b) && !/n[aã]o bebe|nenhuma \(/.test(rowText);
-    });
-    if (anyUse) {
-      anyUse.click();
-      return { ok: true, picked: (anyUse.closest(".sp-book-row, .im-row, div")?.textContent || "").slice(0, 48), method, slot: wantSlot, events };
+    const rows = Array.from(picker.querySelectorAll(".sp-book-row, .im-row, .stage-row, [class*='sp-']"))
+      .filter((row) => !row.classList.contains("lock") && !/n[aã]o bebe|nenhuma \(/.test((row.textContent || "").toLowerCase()));
+    const levelOf = (row) => {
+      const m = (row.textContent || "").match(/lvl\s*(\d+)/i);
+      return m ? parseInt(m[1], 10) : 0;
+    };
+    rows.sort((a, b) => levelOf(b) - levelOf(a));
+    for (const row of rows) {
+      const btn = useOf(row);
+      const t = (btn?.textContent || "").trim().toLowerCase();
+      if (btn && !btn.disabled && vis(btn) && (t === "usar" || t === "use")) {
+        btn.click();
+        return { ok: true, picked: (row.textContent || "").slice(0, 48), method, slot: wantSlot, events };
+      }
     }
     return null;
   };
@@ -238,7 +256,39 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
         if (el && el.querySelector("small")) {
           el.click();
           events.push(`CLICOU_SLOT_MAGIA_VAZIO: rot-${s}-${u}`);
-          return { ok: true, method: "open-rot", slot: s, u, events };
+          // O clique abre o picker.  Escolher em uma chamada posterior era
+          // incorreto porque o finally do loop fecha o modal e o slot ficava
+          // vazio por até 10 minutos. Continue na mesma execução.
+          await sleep(180);
+          picker = document.getElementById("picker-modal");
+          if (picker && !picker.classList.contains("hidden")) {
+            const onlyUnlockedCheck = picker.querySelector("input[type='checkbox']");
+            if (onlyUnlockedCheck && !onlyUnlockedCheck.checked) {
+              onlyUnlockedCheck.click();
+              await sleep(100);
+            }
+            let hit = null;
+            clickTab(/^(área|area)$/i);
+            await sleep(100);
+            hit = pickByWords(metaAoe || [], "meta-aoe") || pickFirstUse("first-aoe");
+            if (!hit) {
+              clickTab(/^(ataque|strike)$/i);
+              await sleep(120);
+              hit = pickByWords(metaStrike || [], "meta-strike") || pickFirstUse("first-strike");
+            }
+            if (!hit) {
+              clickTab(/^(todas|all)$/i);
+              await sleep(120);
+              hit = pickByWords([...(metaAoe || []), ...(metaStrike || [])], "meta-all") || pickFirstUse("first-all");
+            }
+            if (hit) {
+              events.push(`CONFIGUROU_MAGIA_ATAQUE_SLOT_${s}: ${hit.picked}`);
+              return { ...hit, slot: s, u, events };
+            }
+            closePicker();
+            return { ok: false, reason: "no-use", slot: s, u, events };
+          }
+          return { ok: false, reason: "picker-not-open", slot: s, u, events };
         }
       }
     }

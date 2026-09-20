@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'bun:test';
-import { TelemetryStore, parseGoldAmount, normalizeStamina } from '../src/telemetry';
+import { TelemetryStore, parseGoldAmount, normalizeStamina, parseHuntStage } from '../src/telemetry';
 
 describe('TelemetryStore (Proteção contra Regressão e Rastreamento de Origem)', () => {
+  it('extrai o estágio atual da hunt e identifica o final', () => {
+    expect(parseHuntStage('Vexclaw 1/10')).toEqual({ current: 1, total: 10, label: '1/10', complete: false });
+    expect(parseHuntStage('Vexclaw 10 / 10')).toEqual({ current: 10, total: 10, label: '10/10', complete: true });
+    expect(parseHuntStage('Cidade')).toEqual({ current: null, total: null, label: null, complete: false });
+  });
+
+  it('publica o estágio junto com a hunt atual', () => {
+    const store = new TelemetryStore();
+    store.updateHunt('Vexclaw 3/10', 'websocket');
+    expect(store.snapshot().hunt_stage_label).toBe('3/10');
+    expect(store.snapshot().hunt_stage_complete).toBe(false);
+  });
+
   it('não declara online antes da abertura do WebSocket', () => {
     const telemetry = new TelemetryStore();
     expect(telemetry.snapshot().online).toBe(false);

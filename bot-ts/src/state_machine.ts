@@ -104,6 +104,11 @@ export class ActionQueue {
     this.queue = [];
     this.inFlight = null;
   }
+
+  /** Remove apenas ações ainda enfileiradas de uma lane, preservando gear e extras. */
+  clearQueuedLane(lane: ActionLane): void {
+    this.queue = this.queue.filter((task) => laneOf(task) !== lane);
+  }
 }
 
 /**

@@ -99,6 +99,231 @@ export const PREFERRED: Record<number, string> = {
   350: 'gazer-lair', 450: 'inferniarch-lair', 500: 'livraria-cave', 610: 'lavafungos-cave',
 };
 
+export type ElementType = 'fire' | 'ice' | 'energy' | 'earth' | 'holy' | 'death' | 'physical';
+
+export interface HuntElementProfile {
+  weaknesses: ElementType[];
+  resistances: ElementType[];
+  priority?: 'aoe' | 'single' | 'balanced';
+}
+
+export const ELEMENTAL_SPELLS: Record<ElementType, { aoe: string[]; single: string[] }> = {
+  energy: {
+    aoe: [
+      'exevo gran mas vis', 'rage of the skies',
+      'exevo gran vis lux', 'great energy beam',
+      'exevo vis hur', 'energy wave',
+      'exevo vis lux', 'energy beam',
+    ],
+    single: [
+      'exori vis', 'energy strike',
+      'exori amp vis', 'lightning',
+    ],
+  },
+  ice: {
+    aoe: [
+      'exevo gran mas frigo', 'eternal winter',
+      'exevo gran frigo hur', 'strong ice wave',
+      'exevo infir frigo hur', 'chill out',
+      'exevo frigo hur', 'ice wave',
+    ],
+    single: [
+      'exori frigo', 'ice strike',
+      'icicle',
+    ],
+  },
+  fire: {
+    aoe: [
+      'exevo gran mas flam', "hell's core",
+      'exevo gran flam hur', 'great fire wave',
+      'exevo flam hur', 'fire wave',
+    ],
+    single: [
+      'exori flam', 'flame strike',
+      'exori mas flam', 'fireball',
+    ],
+  },
+  earth: {
+    aoe: [
+      'exevo gran mas tera', 'wrath of nature',
+      'exevo gran mas pox', 'poison storm',
+      'exevo tera hur', 'terra wave',
+    ],
+    single: [
+      'exori tera', 'terra strike',
+      'mud strike',
+    ],
+  },
+  holy: {
+    aoe: [
+      'exevo mas san', 'divine caldera',
+    ],
+    single: [
+      'exori san', 'divine missile',
+    ],
+  },
+  death: {
+    aoe: [
+      'exevo gran mas pox',
+    ],
+    single: [
+      'exori mort', 'death strike',
+      'sudden death',
+    ],
+  },
+  physical: {
+    aoe: [
+      'exori gran', 'fierce berserk',
+      'exori mas', 'groundshaker',
+      'exori dir moe', 'ethereal barrage',
+      'exori mas pug', 'flurry of blows',
+      'exori', 'berserk',
+    ],
+    single: [
+      'exori amp kor', "executioner's throw",
+      'exori scu', 'shield slam',
+      'exori con', 'ethereal spear',
+      'exori gran con', 'strong ethereal spear',
+      'exori ico', 'brutal strike',
+      'exori min', 'front sweep',
+      'exori hur', 'whirlwind throw',
+      'exori pug', 'double jab',
+      'exori infir pug', 'swift jab',
+    ],
+  },
+};
+
+export const HUNT_ELEMENT_PROFILES: Record<string, HuntElementProfile> = {
+  'troll-cave': { weaknesses: ['fire', 'physical'], resistances: [] },
+  'elf-lair': { weaknesses: ['fire', 'death', 'physical'], resistances: [] },
+  'amazon-camp': { weaknesses: ['fire', 'physical', 'ice'], resistances: [] },
+  'minotaur': { weaknesses: ['ice', 'death', 'fire'], resistances: [] },
+  'kongra': { weaknesses: ['fire', 'ice'], resistances: ['earth'] },
+  'cyclopolis': { weaknesses: ['earth', 'death', 'ice'], resistances: ['energy'] },
+  'corym-cave': { weaknesses: ['fire', 'holy', 'ice'], resistances: ['earth'] },
+  'refiner-cave': { weaknesses: ['energy', 'earth', 'ice'], resistances: ['physical', 'fire'] },
+  'giant-spider': { weaknesses: ['fire', 'ice'], resistances: ['earth'] },
+  'crawler-cave': { weaknesses: ['fire', 'ice', 'energy'], resistances: ['earth'] },
+  'glooth-cave': { weaknesses: ['physical', 'energy', 'fire'], resistances: ['earth'] },
+  'hero-cave': { weaknesses: ['physical', 'death', 'ice'], resistances: ['holy'] },
+  'cult-cave': { weaknesses: ['energy', 'fire', 'physical'], resistances: ['earth', 'death'] },
+  'dragon-lair': { weaknesses: ['ice', 'earth', 'physical'], resistances: ['fire'] },
+  'werebadge-cave': { weaknesses: ['fire', 'holy', 'death'], resistances: ['earth'] },
+  'hydra-cave': { weaknesses: ['energy', 'fire', 'physical'], resistances: ['earth', 'ice'] },
+  'behemoth-cave': { weaknesses: ['ice', 'energy', 'death'], resistances: ['physical', 'fire', 'earth'] },
+  'orclops-cave': { weaknesses: ['fire', 'ice', 'energy'], resistances: ['earth'] },
+  'crumbling-cave': { weaknesses: ['fire', 'energy', 'ice'], resistances: ['earth'] },
+  'grimreaper-cave': { weaknesses: ['holy', 'fire', 'energy'], resistances: ['death', 'earth'] },
+  'wyrm-cave': { weaknesses: ['earth', 'ice', 'physical'], resistances: ['energy', 'fire'] },
+  'candia-cave': { weaknesses: ['fire', 'ice', 'energy'], resistances: [] },
+  'werehyaena-cave': { weaknesses: ['fire', 'holy', 'death'], resistances: ['earth'] },
+  'asura-lair': { weaknesses: ['ice', 'fire', 'holy', 'death'], resistances: ['earth'] },
+  'darktorturer-cave': { weaknesses: ['ice', 'holy', 'energy'], resistances: ['fire', 'death'] },
+  'wereliones-cave': { weaknesses: ['fire', 'holy', 'ice'], resistances: ['earth'] },
+  'draken-lair': { weaknesses: ['ice', 'energy', 'earth'], resistances: ['fire'] },
+  'mitmah-cave': { weaknesses: ['fire', 'holy', 'energy'], resistances: ['earth', 'death'] },
+  'cobra-cave': { weaknesses: ['ice', 'earth', 'fire'], resistances: ['energy', 'holy'] },
+  'undeadragon-lair': { weaknesses: ['holy', 'fire', 'physical'], resistances: ['earth', 'death', 'ice'] },
+  'cliffstrider-cave': { weaknesses: ['energy', 'fire', 'ice'], resistances: ['earth'] },
+  'hideous-fungus': { weaknesses: ['fire', 'energy', 'ice'], resistances: ['earth'] },
+  'magmacrawler-cave': { weaknesses: ['ice', 'physical'], resistances: ['fire', 'energy'] },
+  'dreadintruder-cave': { weaknesses: ['ice', 'holy', 'energy'], resistances: ['death'] },
+  'falcon': { weaknesses: ['death', 'earth', 'ice'], resistances: ['holy', 'energy'] },
+  'vexclaw-lair': { weaknesses: ['ice', 'holy', 'physical'], resistances: ['fire', 'death'] },
+  'grimeleech-cave': { weaknesses: ['holy', 'ice', 'energy'], resistances: ['fire', 'death'] },
+  'choking-cave': { weaknesses: ['holy', 'fire', 'energy'], resistances: ['death'] },
+  'crazed-cave': { weaknesses: ['fire', 'death', 'ice'], resistances: [] },
+  'guzzlemaw-cave': { weaknesses: ['holy', 'fire', 'energy'], resistances: ['death', 'earth'] },
+  'raubritter-lair': { weaknesses: ['holy', 'physical', 'ice'], resistances: ['death'] },
+  'catacomb-cave': { weaknesses: ['ice', 'holy', 'energy'], resistances: ['fire', 'death'] },
+  'prison-cave': { weaknesses: ['ice', 'holy', 'energy'], resistances: ['fire', 'death'] },
+  'lionknight-cave': { weaknesses: ['death', 'earth', 'ice'], resistances: ['holy', 'energy'] },
+  'megadragon-cave': { weaknesses: ['ice', 'earth', 'physical'], resistances: ['fire'] },
+  'naga-lair': { weaknesses: ['energy', 'fire', 'ice'], resistances: ['earth'] },
+  'trueazura-cave': { weaknesses: ['ice', 'holy', 'fire'], resistances: ['earth', 'death'] },
+  'freakishlostsoul-cave': { weaknesses: ['holy', 'fire', 'energy'], resistances: ['death'] },
+  'weretiger-cave': { weaknesses: ['fire', 'holy', 'ice'], resistances: ['earth'] },
+  'werecrocodile-cave': { weaknesses: ['fire', 'holy', 'ice'], resistances: ['earth'] },
+  'bulltaur-cave': { weaknesses: ['ice', 'death', 'energy'], resistances: ['earth'] },
+  'gazer-lair': { weaknesses: ['ice', 'fire', 'energy'], resistances: ['death'] },
+  'skeletin-cave': { weaknesses: ['holy', 'fire', 'energy'], resistances: ['death', 'earth'] },
+  'bashmu-cave': { weaknesses: ['ice', 'energy', 'physical'], resistances: ['earth', 'fire'] },
+  'darkcarnisylvan-cave': { weaknesses: ['fire', 'ice', 'holy'], resistances: ['earth', 'death'] },
+  'inferniarch-lair': { weaknesses: ['ice', 'holy', 'energy'], resistances: ['fire', 'death'] },
+  'girtablilu-cave': { weaknesses: ['ice', 'fire', 'energy'], resistances: ['earth'] },
+  'livrariaice-cave': { weaknesses: ['energy', 'fire', 'physical'], resistances: ['ice'] },
+  'livrariafire-cave': { weaknesses: ['ice', 'earth', 'physical'], resistances: ['fire'] },
+  'livrariaearth-cave': { weaknesses: ['fire', 'ice', 'energy'], resistances: ['earth'] },
+  'livraria-cave': { weaknesses: ['earth', 'ice', 'physical'], resistances: ['energy'] },
+  'quararaider-lair': { weaknesses: ['energy', 'earth', 'physical'], resistances: ['ice', 'fire'] },
+  'norcferatu-cave': { weaknesses: ['holy', 'fire', 'energy'], resistances: ['death', 'earth'] },
+  'lavafungos-cave': { weaknesses: ['ice', 'physical', 'energy'], resistances: ['fire'] },
+  'afflictedstrider-cave': { weaknesses: ['energy', 'fire', 'ice'], resistances: ['earth'] },
+  'varnisheddiremaw-cave': { weaknesses: ['fire', 'energy', 'ice'], resistances: ['earth'] },
+  'crypt-cave': { weaknesses: ['holy', 'energy', 'ice'], resistances: ['death', 'earth'] },
+  'gnomprona2-cave': { weaknesses: ['energy', 'fire', 'ice'], resistances: ['earth'] },
+  'rottengolem-cave': { weaknesses: ['holy', 'fire', 'energy'], resistances: ['death', 'earth'] },
+  'cloakofterror-lair': { weaknesses: ['holy', 'fire', 'ice'], resistances: ['death'] },
+  'gnomprona1-cave': { weaknesses: ['holy', 'energy', 'fire'], resistances: ['death', 'earth'] },
+  'gnomprona3-cave': { weaknesses: ['earth', 'fire', 'ice'], resistances: ['energy'] },
+  'infernalmdemon-cave': { weaknesses: ['ice', 'holy', 'physical'], resistances: ['fire', 'death'] },
+  'bonyseadevil-cave': { weaknesses: ['energy', 'earth', 'holy'], resistances: ['ice', 'death'] },
+  'darkthais-cave': { weaknesses: ['holy', 'ice', 'energy'], resistances: ['death', 'earth'] },
+  'bloatedmanmaggot-cave': { weaknesses: ['fire', 'energy', 'holy'], resistances: ['earth', 'death'] },
+  'maggot-cave': { weaknesses: ['fire', 'energy', 'holy'], resistances: ['earth', 'death'] },
+  'draklightsource-cave': { weaknesses: ['holy', 'fire', 'ice'], resistances: ['death'] },
+  'wanderingpillar-cave': { weaknesses: ['energy', 'fire', 'holy'], resistances: ['earth', 'death'] },
+};
+
+export function getOptimalSpellRotation(huntId?: string | null): {
+  preferredElement: ElementType;
+  weaknesses: ElementType[];
+  resistances: ElementType[];
+  metaAoe: string[];
+  metaStrike: string[];
+  healWords: string[];
+  manaWords: string[];
+} {
+  const matched = matchHunt(huntId);
+  const hid = matched?.id || huntId || '';
+  const profile = HUNT_ELEMENT_PROFILES[hid] || {
+    weaknesses: ['fire', 'energy', 'ice', 'physical', 'earth', 'holy', 'death'],
+    resistances: [],
+  };
+
+  const weakElements = profile.weaknesses.length > 0 ? profile.weaknesses : (['physical'] as ElementType[]);
+  const preferredElement = weakElements[0] || 'physical';
+  const resistSet = new Set(profile.resistances);
+
+  // All valid elements in priority order (weaknesses first, then others, excluding resistances)
+  const allElements: ElementType[] = ['physical', 'energy', 'ice', 'fire', 'earth', 'holy', 'death'];
+  const orderedElements = [
+    ...weakElements.filter((e) => !resistSet.has(e)),
+    ...allElements.filter((e) => !weakElements.includes(e) && !resistSet.has(e)),
+  ];
+
+  const metaAoe: string[] = [];
+  const metaStrike: string[] = [];
+
+  for (const elem of orderedElements) {
+    const spellGroup = ELEMENTAL_SPELLS[elem];
+    if (spellGroup) {
+      metaAoe.push(...spellGroup.aoe);
+      metaStrike.push(...spellGroup.single);
+    }
+  }
+
+  return {
+    preferredElement,
+    weaknesses: profile.weaknesses,
+    resistances: profile.resistances,
+    metaAoe: [...new Set(metaAoe)],
+    metaStrike: [...new Set(metaStrike)],
+    healWords: [...HEAL_WORDS],
+    manaWords: [...MANA_WORDS],
+  };
+}
+
 export const AOE_WORDS = [
   'exori gran', 'exori', 'exevo mas san', 'exevo gran mas vis',
   'exevo gran mas flam', 'exevo gran mas tera', 'exevo gran mas frigo',

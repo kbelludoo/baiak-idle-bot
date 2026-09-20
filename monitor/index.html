@@ -980,7 +980,7 @@ function renderHuntPicker(botId, status, isForced) {
       <select id="hunt-select-${botId}" class="hunt-select" aria-label="Escolher hunt por ${categoryLabel}" onchange="pendingHuntSelections['${botId}'] = this.value">${renderHuntOptions(status.selected_hunt_id || status.last_hunt_id || status.force_hunt_id, isForced, botId, status, category)}</select>
       <button class="btn-hunt" id="btn-hunt-${botId}" onclick="changeHunt('${botId}')">Mudar Hunt</button>
     </div>
-    <div class="hunt-picker-note">Lista ordenada por ${categoryLabel}. A troca só acontece após finalizar o estágio atual.</div>
+    <div class="hunt-picker-note">Lista ordenada por ${categoryLabel}. A troca fica na fila e só é aplicada após finalizar o estágio atual.</div>
   </div>`;
 }
 
