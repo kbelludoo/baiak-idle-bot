@@ -1,6 +1,7 @@
 import type { Page } from 'puppeteer-core';
 import type { BotConfig } from './types';
 import { safeEval } from './scripts';
+import { getJevEngine } from './jev';
 
 const STAM_CLOCK = /(\d{1,2})\s*:\s*(\d{2})/;
 const STAM_PCT = /(\d+)\s*%/;
@@ -289,7 +290,18 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
       ['merchant', 240, { job: 'merchant' }],
       ['boosts', 180, { job: 'boosts' }],
       ['market', 200, { job: 'market' }],
-      ['auction', 300, { job: 'auction', enabled: config.auctionEnabled, live: config.auctionLive, budget: config.auctionBudget, minMarginPct: config.auctionMinMarginPct, maxItems: config.auctionMaxItems }],
+      ['auction', 60, {
+        job: 'auction',
+        enabled: config.auctionEnabled,
+        live: config.auctionLive,
+        budget: config.auctionBudget,
+        minMarginPct: config.auctionMinMarginPct,
+        maxItems: config.auctionMaxItems,
+        maxMinutesRemaining: config.auctionSniperMaxMinutes,
+        sellGoldAmount: config.auctionSellGoldAmount,
+        sellEnabled: config.auctionSellEnabled,
+        useJev: config.jevEnabled,
+      }],
       ['supply', 300, { job: 'supply' }],
       ['loopcfg', 600, { job: 'loopcfg' }],
       ['manageloot', 600, { job: 'manageloot' }],

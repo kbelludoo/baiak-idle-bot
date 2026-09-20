@@ -84,6 +84,13 @@ export interface BotConfig {
   auctionBudget: number;
   auctionMinMarginPct: number;
   auctionMaxItems: number;
+  auctionSniperMaxMinutes: number;
+  auctionSellGoldAmount: number;
+  auctionSellEnabled: boolean;
+  jevEnabled: boolean;
+  jevApiKey: string;
+  jevEndpoint: string;
+  jevTimeoutMs: number;
 }
 
 export interface TelemetryState {

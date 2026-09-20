@@ -2,6 +2,8 @@
   const res = {
     level: null,
     gold: null,
+    coins: null,
+    market_coins: null,
     stamina: null,
     vocs: [],
     spells: [],
@@ -111,6 +113,34 @@
       if (!t || t.length > 30) continue;
       const g = parseGoldAmount(t);
       if (g != null && g >= 0) { res.gold = g; break; }
+    }
+  }
+
+  // --- EXTRAÇÃO ROBUSTA DE COINS (Saldo de Moedas Premium / Mercado) ---
+  try {
+    const b = window.__baiak_balances || window.ie?.balances || window.__coin_balances;
+    if (b && typeof b === "object") {
+      if (typeof b.coins === "number") res.coins = Math.floor(b.coins);
+      if (typeof b.marketCoins === "number") res.market_coins = Math.floor(b.marketCoins);
+    }
+  } catch (_) {}
+
+  if (res.coins == null) {
+    const coinDirect = document.querySelector("#hud-coins, .coin.coins b, .coin.coins, [data-i18n-title*='Coins' i] b");
+    if (coinDirect) {
+      const parsed = nums(coinDirect.textContent || "");
+      if (parsed != null && parsed >= 0) res.coins = parsed;
+    }
+  }
+
+  if (res.coins == null) {
+    const coinEls = document.querySelectorAll(
+      "#hud-coins, .ac-wallet-val, .wallet-coins, #coins-count, .coins-count, [data-coins], [title*='coins' i], [title*='Coins' i], .coins-amount"
+    );
+    for (const el of coinEls) {
+      const raw = el.getAttribute("data-coins") || el.getAttribute("data-value") || el.textContent || "";
+      const parsed = nums(raw);
+      if (parsed != null && parsed >= 0) { res.coins = parsed; break; }
     }
   }
 

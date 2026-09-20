@@ -75,6 +75,14 @@ describe('TelemetryStore (Proteção contra Regressão e Rastreamento de Origem)
     expect(store.getSources().stamina).toBe('dom');
   });
 
+  it('não deixa o HUD 100% sobrescrever stamina baixa autoritativa', () => {
+    const store = new TelemetryStore();
+    store.updateStamina('5:20', 'trpc');
+    store.updateStamina('100%', 'dom');
+    expect(store.stamina).toBe('5:20');
+    expect(store.getSources().stamina).toBe('trpc');
+  });
+
   it('protege hunt válida de ser sobrescrita por "Conectando..." ou "—"', () => {
     const store = new TelemetryStore();
     store.updateHunt('Asuras', 'battery-save');

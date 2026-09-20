@@ -16,6 +16,7 @@ import { helperTrigger } from "./helper_triggers";
 import { ActionQueue, evaluateStaminaTransition } from "./state_machine";
 import { createTrpcClient, normalizeChars } from "./trpc";
 import { roomSend, roomSendDetail, roomDrainEvents, sendStage, sendAutosellFull, sendAutosellPct, sendAutoBoss } from "./room_send";
+import { getJevEngine } from "./jev";
 import type { TelemetryState, SubsystemInfo } from "./types";
 
 // ===================================================================
@@ -191,6 +192,21 @@ const FAST_STATE_JS = `() => {
     }
   }
 
+  // Coins (Saldo de Moedas Loja / Mercado)
+  let coins = null;
+  const coinDirect = document.querySelector("#hud-coins, .coin.coins b, .coin.coins, [data-i18n-title*='Coins' i] b");
+  if (coinDirect) {
+    const parsed = parseInt((coinDirect.textContent || "").replace(/\\D/g, ""), 10);
+    if (!isNaN(parsed) && parsed >= 0) coins = parsed;
+  }
+  if (coins == null) {
+    try {
+      const w = window;
+      const b = w.__baiak_balances || w.ie?.balances || w.__coin_balances;
+      if (b && typeof b.coins === "number") coins = Math.floor(b.coins);
+    } catch (_) {}
+  }
+
   // Stamina — relógio, Xh Ym, % e tooltip; placeholder 42:00 = desconhecido
   // Ordem: IDs conhecidos -> espelhos kernel -> varredura genérica stamina.
   let stamina = normStam(text(document.getElementById("stamina-time") || document.querySelector(".stamina-time, .stamina-val, #stamina-val, [data-stamina], .hud-stamina, #stamina-panel, .stamina-panel")));
@@ -299,6 +315,7 @@ const FAST_STATE_JS = `() => {
     partySlotsCount: shooters.length || 3,
     party: shooters,
     gold,
+    coins,
     stamina,
     loopOn,
     invText,
@@ -455,7 +472,16 @@ async function main() {
     hunt_analyzer: { status: "FUNCIONAL", detail: "Coleta de telemetria contínua ativa" },
     daily_reward: { status: "VERIFICANDO", detail: "Monitorando recompensas diárias" },
     auto_promote: { status: "AGUARDANDO_REQUISITO", detail: "Aguardando nível 20 e 20.000 gold" },
+    jev_decision_engine: {
+      status: config.jevEnabled ? "FUNCIONAL" : "AGUARDANDO",
+      detail: config.jevEnabled ? (config.jevApiKey ? "JEV System One (API Conectada)" : "JEV System One (Fallback Determinístico Local)") : "Desativado",
+    },
   };
+
+  const jev = getJevEngine();
+  let jevRecommendation: any = null;
+  let lastJevRecommendationTs = 0;
+  let lastJevBuildTs = 0;
 
   const telemetry = new TelemetryStore();
   const protocolMapper = new ProtocolMapper(dataDir);
@@ -626,11 +652,17 @@ async function main() {
     } catch (_) {}
   };
 
+  // Pre-Teleport Guard: Silencia tarefas pesadas de CDP por 5 segundos
+  // durante a migração de sala do Colyseus, garantindo 100% de CPU na VPS
+  // para o handshake e eliminando seat reservation expired / 1006.
+  let preTeleportSilencedUntil = 0;
+
   // Entrada em hunt: DIRETO primeiro (1 pacote `stage`), DOM só como fallback.
   // `lMe=N=>l.send("stage",{huntId:N})` é o que o botão `.stage-go` chama.
   let directStageMissTarget = '';
   let directStageMisses = 0;
   const enterHuntDirectOrDom = async (target: { id?: string; name?: string; resumeLast?: boolean }): Promise<any> => {
+    preTeleportSilencedUntil = Date.now() + 5000;
     const targetId = String(target?.id || '').toLowerCase();
     const normalizeHuntId = (value: string): string => String(value || '')
       .toLowerCase()
@@ -654,6 +686,7 @@ async function main() {
     };
     if (target?.id) {
       try {
+        preTeleportSilencedUntil = Date.now() + 6000;
         const ok = await sendStage(pageRef, target.id);
         if (ok) {
           console.log(`[${new Date().toLocaleTimeString()}] 🏹 [STAGE-DIRECT] send("stage",{huntId:${target.id}}) aceito (1 pacote)`);
@@ -869,6 +902,7 @@ async function main() {
         force_hunt: Boolean(manualHuntId),
         force_hunt_id: manualHuntId || null,
         hunt_control: 'manual',
+        jev_recommendation: jevRecommendation,
       });
       const statusData = {
         ...snap,
@@ -910,6 +944,7 @@ async function main() {
         // Lista usada pelo engine depois de combinar offlineInfo, servidor e
         // seletor DOM (a lista acima é apenas o mapa protocolar histórico).
         engine_unlocked_hunts: (profiler as any).unlockedIds || [],
+        jev_recommendation: jevRecommendation,
       };
       writeFileSync(join(dataDir, "status.json"), JSON.stringify(statusData, null, 2), "utf-8");
     } catch (_) {}
@@ -984,6 +1019,10 @@ async function main() {
           authoritativeHuntId = hid;
           telemetry.updateHunt(hid, 'websocket');
           protocolMapper.setActiveHunt(hid);
+          if (manualHuntId && hid !== manualHuntId) {
+            console.warn(`[${new Date().toLocaleTimeString()}] 🛡️ [TRAVA HUNT] Sala conectada (${hid}) diverge da hunt manual (${manualHuntId}) — agendando re-entrada`);
+            needsHuntEntry = true;
+          }
         }
         (telemetry as any).lastJoined = pay;
         console.log(`[${new Date().toLocaleTimeString()}] 🏹 [JOINED] hunt=${hid || '?'} wave=${pay?.wave ?? '?'}`);
@@ -994,6 +1033,10 @@ async function main() {
         if (typeof hid === 'string') {
           authoritativeHuntId = hid;
           telemetry.updateHunt(hid, 'websocket');
+          if (manualHuntId && hid !== manualHuntId) {
+            console.warn(`[${new Date().toLocaleTimeString()}] 🛡️ [TRAVA HUNT] Servidor retomou (${hid}) mas hunt manual é (${manualHuntId}) — agendando re-entrada`);
+            needsHuntEntry = true;
+          }
         }
         console.log(`[${new Date().toLocaleTimeString()}] 🔄 [${typ.toUpperCase()}] ${typeof hid === 'string' ? hid : ''}`);
         writeStatusFile();
@@ -1110,6 +1153,7 @@ async function main() {
           pending_hunt_id: pendingHuntChange?.id || null,
           pending_hunt_name: pendingHuntChange?.name || null,
           pending_hunt_requested_at: pendingHuntChange?.requestedAt || null,
+          jev_recommendation: jevRecommendation,
         }),
         selected_hunt_id: metrics.selectedHuntId,
         selected_hunt_name: metrics.selectedHuntName,
@@ -1274,7 +1318,7 @@ async function main() {
     // estava visível. Após duas falhas, tente novamente em 60 s.
     const probeCooldown = spellProbeFailures >= 2 ? 60000 : 30000;
     const hasEmptySlot = Object.values(magicState.slots as Record<string, any> || {}).some((s: any) => (s.empty || 0) > 0) || (magicState as any).empty > 0;
-    if (!pageRef || spellProbeBusy || (magicState.power > 0 && !hasEmptySlot) || nowProbe - lastSpellProbe < probeCooldown) return;
+    if (!pageRef || spellProbeBusy || nowProbe < preTeleportSilencedUntil || (magicState.power > 0 && !hasEmptySlot) || nowProbe - lastSpellProbe < probeCooldown) return;
     spellProbeBusy = true;
     lastSpellProbe = nowProbe;
     try {
@@ -1368,13 +1412,22 @@ async function main() {
               } else if (ev.type === 'pos') {
                 queueFlow.pos = (ev.payload && ev.payload.position !== undefined) ? ev.payload.position : ev.payload;
               } else if (ev.type === 'joined' && ev.payload?.huntId) {
-                authoritativeHuntId = String(ev.payload.huntId);
-                telemetry.updateHunt(String(ev.payload.huntId), 'websocket');
+                const hid = String(ev.payload.huntId);
+                authoritativeHuntId = hid;
+                telemetry.updateHunt(hid, 'websocket');
+                if (manualHuntId && hid !== manualHuntId) {
+                  console.warn(`[${new Date().toLocaleTimeString()}] 🛡️ [TRAVA HUNT] Drain: Sala (${hid}) != hunt manual (${manualHuntId}) — agendando re-entrada`);
+                  needsHuntEntry = true;
+                }
               } else if ((ev.type === 'toHunt' || ev.type === 'resume') && ev.payload) {
                 const hid = typeof ev.payload === 'string' ? ev.payload : (ev.payload.huntId || null);
                 if (typeof hid === 'string') {
                   authoritativeHuntId = hid;
                   telemetry.updateHunt(hid, 'websocket');
+                  if (manualHuntId && hid !== manualHuntId) {
+                    console.warn(`[${new Date().toLocaleTimeString()}] 🛡️ [TRAVA HUNT] Drain: Retomou (${hid}) != hunt manual (${manualHuntId}) — agendando re-entrada`);
+                    needsHuntEntry = true;
+                  }
                 }
               } else if (ev.type === 'toCity') {
                 authoritativeHuntId = null;
@@ -1434,7 +1487,7 @@ async function main() {
 
       // 3. Tick de telemetria ultra-leve (não percorre o body, responde em < 20ms)
       let domState: any = null;
-      if (!fastStateBusy) {
+      if (!fastStateBusy && now >= preTeleportSilencedUntil) {
         fastStateBusy = true;
         let pendingFastEval: Promise<any> | null = null;
         try {
@@ -1492,6 +1545,7 @@ async function main() {
         if (domState.wave) telemetry.updateHunt(domState.wave, source);
         if (domState.level) telemetry.updateLevel(domState.level, source);
         if (domState.gold !== undefined && domState.gold !== null) telemetry.updateGold(domState.gold, source);
+        if (domState.coins !== undefined && domState.coins !== null) telemetry.updateCoins(domState.coins, source);
         if (domState.stamina) telemetry.updateStamina(domState.stamina, source);
         telemetry.updateLoopMode(domState.loopOn, source);
         telemetry.updateBagSlots(domState.invText, source);
@@ -1533,13 +1587,15 @@ async function main() {
 
         // HUD completo (spells/helpers/analyzers) — cadência a cada 15s sem travar loop
         let hud: any = cachedHud;
-        if (now - lastHudCheck >= (magicState.power > 0 ? 15000 : 60000)) {
+        if (now >= preTeleportSilencedUntil && now - lastHudCheck >= (magicState.power > 0 ? 15000 : 60000)) {
           lastHudCheck = now;
           try {
             cachedHud = await safeEval<any>(pageRef, "hud", null, 8000) || cachedHud;
             hud = cachedHud;
             if (hud.level) telemetry.updateLevel(hud.level, "dom");
             if (hud.gold !== undefined && hud.gold !== null) telemetry.updateGold(hud.gold, "dom");
+            if (hud.coins !== undefined && hud.coins !== null) telemetry.updateCoins(hud.coins, "dom");
+            if (hud.market_coins !== undefined && hud.market_coins !== null) telemetry.updateMarketCoins(hud.market_coins, "dom");
             if (hud.stamina) telemetry.updateStamina(hud.stamina, "dom");
             if (hud.analyzers) {
               latestAnalyzers = hud.analyzers;
@@ -1694,10 +1750,42 @@ async function main() {
           console.log(`[${new Date().toLocaleTimeString()}] [FORCE DEBUG] current=${wave} target=${forceId} gameReady=${gameReady} city=${isCity} treino=${telemetry.inTreino} enter=${shouldEnter} needs=${needsHuntEntry} queue=${actionQueue.pendingCount} currentAction=${actionQueue.currentAction || '-'}`);
         }
 
+        // JEV: Recomendação Analítica de Hunt (Apenas Telemetria / Advisory)
+        // Conforme especificado, hunt quem escolhe é o jogador. JEV apenas avalia e sugere.
+        if (config.jevEnabled && (now - lastJevRecommendationTs >= 60000) && telemetry.level > 0) {
+          lastJevRecommendationTs = now;
+          const mapSnap = protocolMapper.snapshot();
+          const currentHId = matchHunt(wave)?.id || matchHunt(telemetry.hunt)?.id || manualHuntId || 'glooth-cave';
+          const unlockedList = (mapSnap.unlockedHunts?.length ? mapSnap.unlockedHunts : HUNTS_TABLE).map((h: any) => ({
+            id: h.id,
+            name: h.name,
+            minLevel: h.minLevel || 1,
+          }));
+          jev.evaluateHuntRecommendation({
+            level: telemetry.level,
+            vocation: (telemetry as any).vocation || 'Knight',
+            currentHuntId: currentHId,
+            unlockedHunts: unlockedList,
+            recentDeaths: 0,
+          }).then((rec) => {
+            jevRecommendation = rec;
+            if (rec?.recommendedHuntName) {
+              console.log(`[${new Date().toLocaleTimeString()}] 🧠 [JEV ADVISORY] Sugestão analítica: ${rec.recommendedHuntName} (confiança: ${Math.round(rec.confidence * 100)}%) | [Operador no controle manual]`);
+            }
+          }).catch(() => null);
+        }
+
         // Transição de Stamina e Treino
         const stamTransition = evaluateStaminaTransition(telemetry.stamina, telemetry.inTreino, config.autoTreino);
-        if (stamTransition.action === "enter_treino" && (now - lastTreinoTime >= 8000)) {
+        // O tRPC pode entregar a stamina baixa antes de o WebSocket/teleporte
+        // estar pronto. Não tente abrir o menu nesse intervalo: o botão de
+        // Treino Online ainda não existe e a ação expira inutilmente.
+        if (stamTransition.action === "enter_treino" && gameReady && (now - lastTreinoTime >= 8000)) {
           lastTreinoTime = now;
+          subsystems.auto_treino = {
+            status: "VERIFICANDO",
+            detail: `Stamina <= 15% (${telemetry.stamina}) — aguardando confirmação do Treino Online`,
+          };
           const queuedHunt = actionQueue.enqueue({
             id: "treino",
             name: "treino",
@@ -1714,6 +1802,10 @@ async function main() {
                   telemetry.inTreino = true;
                   telemetry.updateHunt("Treino Online", "dom");
                   subsystems.auto_treino = { status: "TREINANDO", detail: "Stamina <= 15% — Treino online ativo" };
+                } else if (!tr) {
+                  console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [TREINO] sem confirmação do Treino Online; a hunt permanecerá bloqueada e haverá nova tentativa`);
+                } else {
+                  console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [TREINO] comando não confirmado: ${JSON.stringify(tr).slice(0, 500)}`);
                 }
               } finally {
                 await closeStuckModals();
@@ -1733,14 +1825,18 @@ async function main() {
                 console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] Stamina recuperou (${telemetry.stamina}) — abrindo Hunts para retomar`);
                 const tr = await safeEval<any>(pageRef, "treino", { want: "resume" }, 10000);
                 if (tr?.events?.length) for (const ev of tr.events) console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] ${ev}`);
+                if (tr?.ok && (tr.action === "retomando_hunts" || tr.inTreino === false)) {
+                  telemetry.inTreino = false;
+                  needsHuntEntry = true;
+                  subsystems.auto_treino = { status: "FUNCIONAL", detail: "Stamina recuperou — retomando hunts" };
+                } else if (!tr) {
+                  console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [TREINO] não foi possível confirmar a saída do treino; mantendo Treino Online`);
+                }
               } finally {
                 await closeStuckModals();
               }
             },
           });
-          telemetry.inTreino = false;
-          needsHuntEntry = true;
-          subsystems.auto_treino = { status: "FUNCIONAL", detail: "Stamina recuperou — retomando hunts" };
         }
 
         // Fila de Ação: Seleção / Retorno de Hunt (Prioridade 10). Uma ação
@@ -1748,7 +1844,11 @@ async function main() {
         // duas podiam enviar `stage` para a mesma reserva e reiniciar a wave.
         const huntActionPending = actionQueue.pendingByLane.hunt > 0;
         const waitingManualHunt = Boolean(pendingHuntChange) && !huntFinishedForSwitch();
-        if (forceId && (shouldEnter || needsHuntEntry || forceNeedsEntry) && !waitingManualHunt && !telemetry.inTreino &&
+        // Stamina baixa é uma trava real: mesmo que o treino tenha expirado ou
+        // o renderer esteja congestionado, não retome a hunt até o Treino
+        // Online ser confirmado pela UI.
+        const staminaBlocksHunt = telemetry.stamina === "—" || stamTransition.action === "enter_treino";
+        if (forceId && (shouldEnter || needsHuntEntry || forceNeedsEntry) && !staminaBlocksHunt && !waitingManualHunt && !telemetry.inTreino &&
             !huntActionPending && (now - lastHuntAttempt >= huntRetryDelayMs)) {
           lastHuntAttempt = now;
           const queuedTargetId = forceId;
@@ -1864,7 +1964,20 @@ async function main() {
             const max = parseInt(m[2], 10);
             const pct = max > 0 ? (cur / max) * 100 : 0;
             // 1) Varredura precoce: vende lixo individual (mantém épico+) a partir de 50%
-            if (max > 0 && pct >= 50 && (now - lastSellTime) >= 60000) {
+            const lastSellSecAgo = Math.floor((now - lastSellTime) / 1000);
+            let jevAgreedSell = pct >= 50;
+            if (config.jevEnabled && max > 0 && pct >= 40) {
+              jev.decideSellAndPouch({
+                usedSlots: cur,
+                maxSlots: max,
+                thresholdPct: config.sellThresholdPct,
+                lastSellSecAgo,
+              }).then((dec) => {
+                if (dec && dec.shouldSell) jevAgreedSell = true;
+              }).catch(() => null);
+            }
+
+            if (max > 0 && (pct >= 50 || jevAgreedSell) && (now - lastSellTime) >= 60000) {
               actionQueue.enqueue({
                 id: "lootfilter",
                 name: "lootfilter",
@@ -1929,7 +2042,29 @@ async function main() {
         const pickerOpenEv = (domState.events || []).some((e: string) => String(e).includes("PICKER_SPELL_ABERTO"));
         const currentHuntTarget = authoritativeHuntId || manualHuntId || telemetry.hunt;
         const optimal = getOptimalSpellRotation(currentHuntTarget);
-        (magicState as any).recommended_element = optimal.preferredElement;
+
+        // JEV: Decisão de elemento e estilo de rotação por IA System One
+        if (config.jevEnabled && (now - lastJevBuildTs >= 30000) && telemetry.level > 0) {
+          lastJevBuildTs = now;
+          jev.decideBuildAndSpells({
+            vocation: (telemetry as any).vocation || 'Knight',
+            level: telemetry.level,
+            huntId: String(currentHuntTarget || ''),
+            huntName: matchHunt(currentHuntTarget)?.name,
+            weaknesses: optimal.weaknesses,
+            resistances: optimal.resistances,
+            availableElements: ['physical', 'fire', 'ice', 'earth', 'energy', 'holy', 'death'],
+          }).then((decision) => {
+            if (decision?.primaryElement) {
+              (magicState as any).recommended_element = decision.primaryElement;
+              (magicState as any).rotation_style = decision.rotationStyle;
+              (magicState as any).jev_source = decision.source;
+            }
+          }).catch(() => null);
+        } else if (!(magicState as any).recommended_element) {
+          (magicState as any).recommended_element = optimal.preferredElement;
+        }
+
         (magicState as any).hunt_weaknesses = optimal.weaknesses;
         (magicState as any).hunt_resistances = optimal.resistances;
         const spellArgs = {

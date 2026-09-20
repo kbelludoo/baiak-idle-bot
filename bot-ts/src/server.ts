@@ -299,6 +299,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <div class="grid">
       <div><div class="lbl">Status</div><div class="val" id="st-online">Conectando...</div></div>
       <div><div class="lbl">Hunt Atual</div><div class="val" id="st-hunt">—</div></div>
+      <div><div class="lbl">Gold / Coins</div><div class="val"><span id="st-gold">0</span> | <span id="st-coins" style="color:#f59e0b;">🪙 0</span></div></div>
       <div><div class="lbl">Kills / Waves</div><div class="val"><span id="st-kills">0</span> / <span id="st-waves">0</span></div></div>
       <div><div class="lbl">Stamina / Pouch</div><div class="val"><span id="st-stam">—</span> | <span id="st-pouch">—</span></div></div>
       <div><div class="lbl">Campeões</div><div class="val" id="st-party">3</div></div>
@@ -319,6 +320,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         const d = await res.json();
         document.getElementById('st-online').innerHTML = d.online ? '<span class="badge badge-on">ONLINE</span>' : '<span class="badge badge-off">OFFLINE</span>';
         document.getElementById('st-hunt').textContent = d.hunt || '—';
+        document.getElementById('st-gold').textContent = typeof d.gold === 'number' ? d.gold.toLocaleString('pt-BR') : (d.gold || 0);
+        document.getElementById('st-coins').textContent = '🪙 ' + (d.coins != null ? d.coins : 0);
         document.getElementById('st-kills').textContent = d.kills || 0;
         document.getElementById('st-waves').textContent = d.waves || 0;
         document.getElementById('st-stam').textContent = d.stamina || '—';

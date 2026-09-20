@@ -8,6 +8,7 @@
 
 # Logs / dumps locais
 *.log
+logs/
 bot-ts/data/*
 bot-ts/data-ts/*
 !bot-ts/data/.gitkeep

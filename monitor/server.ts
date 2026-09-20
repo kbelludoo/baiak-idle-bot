@@ -259,6 +259,8 @@ function publicStatus(status: JsonRecord): JsonRecord {
     level: asNumber(status.level),
     level_per_hour: asNumber(status.level_per_hour),
     gold: asNumber(status.gold),
+    coins: asNumber(status.coins),
+    market_coins: asNumber(status.market_coins),
     stamina: status.stamina || null,
     hunt: status.hunt || status.last_hunt || null,
     hunt_stage: status.hunt_stage ?? null,

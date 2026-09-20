@@ -378,6 +378,20 @@ async ({ job, ...auctionCfg }) => {
       const unit = match[2].toLowerCase();
       return amount === null ? null : amount * (unit === "k" ? 1000 : 1000000);
     };
+    const parseRemainingMinutes = (text) => {
+      const clock = text.match(/(\d{1,2})\s*:\s*(\d{2})(?:\s*:\s*(\d{2}))?/);
+      if (clock) {
+        const h = parseInt(clock[1], 10) || 0;
+        const m = parseInt(clock[2], 10) || 0;
+        return (h * 60) + m;
+      }
+      const mMin = text.match(/(\d+)\s*(?:m|min|minutos)/i);
+      if (mMin) return parseInt(mMin[1], 10);
+      const mH = text.match(/(\d+)\s*(?:h|horas)/i);
+      if (mH) return parseInt(mH[1], 10) * 60;
+      return null;
+    };
+
     const rows = Array.from(root.querySelectorAll("[data-auction-id], [data-id].auction-row, .auction-row, .auction-card, .auction-item, .leilao-row"))
       .filter(vis);
     const listings = rows.map((row) => {
@@ -387,21 +401,46 @@ async ({ job, ...auctionCfg }) => {
       const goldAmount = isGold(row, text) ? goldAmountOf(row, text) : null;
       const id = row.dataset.auctionId || row.dataset.id || null;
       const buy = Array.from(row.querySelectorAll("button, .btn")).find((b) => vis(b) && !b.disabled && /comprar|buy|lance|bid/i.test(textOf(b)));
-      return { row, name: String(name).toLowerCase().replace(/\s+/g, " ").trim(), price, goldAmount, id, buy };
+      const minutesRemaining = parseRemainingMinutes(text);
+      return { row, name: String(name).toLowerCase().replace(/\s+/g, " ").trim(), price, goldAmount, id, buy, minutesRemaining };
     }).filter((x) => x.price !== null && x.price > 0 && x.goldAmount !== null && x.goldAmount > 0);
-    const rates = listings.map((item) => item.goldAmount / item.price).sort((a, b) => a - b);
-    const reference = rates.length ? rates[Math.floor(rates.length / 2)] : 0;
+    let historyRates = [];
+    try {
+      const histRes = await fetch("/api/trpc/auction.history?batch=1&input=%7B%220%22%3A%7B%22page%22%3A1%2C%22perPage%22%3A30%7D%7D")
+        .then((r) => r.json())
+        .catch(() => null);
+      const histRows = histRes?.[0]?.result?.data?.json?.rows || [];
+      historyRates = histRows
+        .filter((r) => r.type === "gold" && r.goldAmount > 0 && r.currentPrice > 0)
+        .map((r) => r.goldAmount / r.currentPrice);
+    } catch (_) {}
+
+    const rates = listings.map((item) => item.goldAmount / item.price).concat(historyRates).sort((a, b) => a - b);
+    const reference = rates.length ? rates[Math.floor(rates.length / 2)] : 5500000;
+    
+    // Sniping: Prioriza lotes com maior gold por coin que estão terminando (<= maxMinutesRemaining, default 5m)
+    const maxMins = cfg.maxMinutesRemaining ?? 5;
     const opportunities = listings.map((item) => {
       const goldPerCoin = item.goldAmount / item.price;
       const marginPct = reference > 0 ? ((goldPerCoin - reference) / reference) * 100 : 0;
-      return { ...item, reference, goldPerCoin, marginPct };
+      const mins = item.minutesRemaining !== null ? item.minutesRemaining : 360;
+      const isEnding = mins <= maxMins;
+      return { ...item, reference, goldPerCoin, marginPct, isEnding, mins };
     }).filter((x) => x.price <= cfg.budget && x.marginPct >= cfg.minMarginPct)
-      .sort((a, b) => b.goldPerCoin - a.goldPerCoin);
+      .sort((a, b) => {
+        // Ordenação prioritária: Lotes acabando primeiro; depois melhor taxa
+        if (a.isEnding && !b.isEnding) return -1;
+        if (!a.isEnding && b.isEnding) return 1;
+        return b.goldPerCoin - a.goldPerCoin;
+      });
     if (!opportunities.length) {
-      events.push(`sem pacote de gold vantajoso (gold=${listings.length}, mediana=${reference.toFixed(2)} gold/coin)`);
+      events.push(`sem pacote de gold vantajoso no leilao (gold=${listings.length}, mediana=${reference.toFixed(2)} gold/coin)`);
       return { ok: true, action: "scan", events };
     }
-    for (const opportunity of opportunities.slice(0, cfg.maxItems)) {
+    const finalOpportunities = cfg.targetId
+      ? opportunities.filter((o) => o.id === cfg.targetId || !cfg.targetId)
+      : opportunities;
+    for (const opportunity of finalOpportunities.slice(0, cfg.maxItems)) {
       const msg = `${(opportunity.goldAmount / 1000000).toFixed(2)}kk por ${opportunity.price}c -> ${opportunity.goldPerCoin.toFixed(0)} gold/coin (+${opportunity.marginPct.toFixed(0)}%)`;
       if (!cfg.live) {
         events.push("DRY-RUN " + msg);

@@ -248,6 +248,8 @@ export class TelemetryStore {
   private _hunt: TelemetryField<string> = { value: 'Conectando...', source: 'fallback', updatedAt: Date.now() };
   private _level: TelemetryField<number> = { value: 0, source: 'fallback', updatedAt: Date.now() };
   private _gold: TelemetryField<number> = { value: 0, source: 'fallback', updatedAt: Date.now() };
+  private _coins: TelemetryField<number> = { value: 0, source: 'fallback', updatedAt: Date.now() };
+  private _marketCoins: TelemetryField<number> = { value: 0, source: 'fallback', updatedAt: Date.now() };
   private _stamina: TelemetryField<string> = { value: '—', source: 'fallback', updatedAt: Date.now() };
   private _loopMode: TelemetryField<boolean> = { value: true, source: 'fallback', updatedAt: Date.now() };
   private _bagSlots: TelemetryField<string> = { value: '', source: 'fallback', updatedAt: Date.now() };
@@ -276,6 +278,8 @@ export class TelemetryStore {
   get hunt(): string { return this._hunt.value; }
   get level(): number { return this._level.value; }
   get gold(): number { return this._gold.value; }
+  get coins(): number { return this._coins.value; }
+  get marketCoins(): number { return this._marketCoins.value; }
   get stamina(): string { return this._stamina.value; }
   get loopMode(): boolean { return this._loopMode.value; }
   get bagSlots(): string { return this._bagSlots.value; }
@@ -408,9 +412,33 @@ export class TelemetryStore {
     return true;
   }
 
+  updateCoins(val?: number | string | null, source: TelemetrySource = 'dom'): boolean {
+    if (val === undefined || val === null) return false;
+    const c = typeof val === 'number' ? (Number.isFinite(val) ? Math.floor(val) : NaN) : parseInt(String(val).replace(/\D/g, ''), 10);
+    if (!Number.isFinite(c) || c < 0) return false;
+    this._coins = { value: c, source, updatedAt: Date.now() };
+    return true;
+  }
+
+  updateMarketCoins(val?: number | string | null, source: TelemetrySource = 'dom'): boolean {
+    if (val === undefined || val === null) return false;
+    const c = typeof val === 'number' ? (Number.isFinite(val) ? Math.floor(val) : NaN) : parseInt(String(val).replace(/\D/g, ''), 10);
+    if (!Number.isFinite(c) || c < 0) return false;
+    this._marketCoins = { value: c, source, updatedAt: Date.now() };
+    return true;
+  }
+
   updateStamina(val?: string | number | null, source: TelemetrySource = 'dom'): boolean {
     const norm = normalizeStamina(val);
     if (!norm) return false;
+    // O HUD pode exibir 100%/um valor padrão enquanto a conta ainda está
+    // carregando. Não permita que essa leitura DOM substitua por até uma
+    // janela a stamina autoritativa recebida pelo tRPC ou pelo WebSocket;
+    // caso contrário 5:20 vira 100% e o bot retorna à hunt sem treinar.
+    if (source === 'dom' || source === 'battery-save') {
+      const authoritative = this._stamina.source === 'trpc' || this._stamina.source === 'websocket';
+      if (authoritative && Date.now() - this._stamina.updatedAt < 70_000) return false;
+    }
     this._stamina = { value: norm, source, updatedAt: Date.now() };
     return true;
   }
@@ -629,6 +657,7 @@ export class TelemetryStore {
     pending_hunt_id?: string | null;
     pending_hunt_name?: string | null;
     pending_hunt_requested_at?: string | null;
+    jev_recommendation?: any;
   } = {}): any {
     const now = Date.now();
     const uptimeSec = this.onlineUptimeSeconds(now);
@@ -643,6 +672,8 @@ export class TelemetryStore {
       character: extra.character || 'default',
       level: this.level,
       gold: this.gold,
+      coins: this.coins,
+      market_coins: this.marketCoins,
       stamina: this.stamina,
       hunt: this.hunt,
       hunt_stage: this.huntStage,
@@ -679,6 +710,7 @@ export class TelemetryStore {
       pending_hunt_id: extra.pending_hunt_id ?? null,
       pending_hunt_name: extra.pending_hunt_name ?? null,
       pending_hunt_requested_at: extra.pending_hunt_requested_at ?? null,
+      jev_recommendation: extra.jev_recommendation ?? null,
       sources: this.getSources(),
       last_update: new Date().toLocaleTimeString('pt-BR'),
       last_update_ts: Math.floor(now / 1000),
