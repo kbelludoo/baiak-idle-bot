@@ -392,24 +392,50 @@ async ({ job, ...auctionCfg }) => {
       return null;
     };
 
-    const rows = Array.from(root.querySelectorAll("[data-auction-id], [data-id].auction-row, .auction-row, .auction-card, .auction-item, .leilao-row"))
-      .filter(vis);
-    const listings = rows.map((row) => {
-      const text = textOf(row);
-      const name = row.dataset.name || row.querySelector("[data-item-name], .item-name, .name, img[alt]")?.getAttribute("data-item-name") || row.querySelector("img[alt]")?.alt || text.slice(0, 80);
-      const price = number(row.dataset.price || row.querySelector("[data-price], .price, .auction-price, .coin-price")?.textContent || text);
-      const goldAmount = isGold(row, text) ? goldAmountOf(row, text) : null;
-      const id = row.dataset.auctionId || row.dataset.id || null;
-      const buy = Array.from(row.querySelectorAll("button, .btn")).find((b) => vis(b) && !b.disabled && /comprar|buy|lance|bid/i.test(textOf(b)));
-      const minutesRemaining = parseRemainingMinutes(text);
-      return { row, name: String(name).toLowerCase().replace(/\s+/g, " ").trim(), price, goldAmount, id, buy, minutesRemaining };
-    }).filter((x) => x.price !== null && x.price > 0 && x.goldAmount !== null && x.goldAmount > 0);
+    // 1. Obtenção autoritativa via tRPC (mais rápido, preciso e não depende de classes DOM)
+    let listings = [];
+    try {
+      const browseRes = await fetch("/api/trpc/auction.browse?batch=1&input=%7B%220%22%3A%7B%22page%22%3A1%2C%22perPage%22%3A100%2C%22type%22%3A%22gold%22%7D%7D")
+        .then((r) => r.json())
+        .catch(() => null);
+      const rows = browseRes?.[0]?.result?.data?.rows || browseRes?.[0]?.result?.data?.json?.rows || [];
+      const now = Date.now();
+      listings = rows
+        .filter((r) => r.type === "gold" && r.goldAmount > 0 && r.currentPrice > 0 && !r.isOwn && !r.isLeading)
+        .map((r) => ({
+          id: r.id,
+          name: `${(r.goldAmount / 1000000).toFixed(0)}kk Gold`,
+          price: r.currentPrice,
+          goldAmount: r.goldAmount,
+          bids: r.bidCount,
+          minutesRemaining: Math.max(0, Math.round((r.endsAt - now) / 60000)),
+          isOwn: !!r.isOwn,
+          isLeading: !!r.isLeading,
+          trpc: true
+        }));
+    } catch (_) {}
+
+    // Fallback DOM se o tRPC falhar
+    if (!listings.length) {
+      const rows = Array.from(root.querySelectorAll("[data-auction-id], [data-id].auction-row, .auction-row, .auction-card, .auction-item, .leilao-row"))
+        .filter(vis);
+      listings = rows.map((row) => {
+        const text = textOf(row);
+        const name = row.dataset.name || row.querySelector("[data-item-name], .item-name, .name, img[alt]")?.getAttribute("data-item-name") || row.querySelector("img[alt]")?.alt || text.slice(0, 80);
+        const price = number(row.dataset.price || row.querySelector("[data-price], .price, .auction-price, .coin-price")?.textContent || text);
+        const goldAmount = isGold(row, text) ? goldAmountOf(row, text) : null;
+        const id = row.dataset.auctionId || row.dataset.id || null;
+        const buy = Array.from(row.querySelectorAll("button, .btn")).find((b) => vis(b) && !b.disabled && /comprar|buy|lance|bid/i.test(textOf(b)));
+        const minutesRemaining = parseRemainingMinutes(text);
+        return { row, name: String(name).toLowerCase().replace(/\s+/g, " ").trim(), price, goldAmount, id, buy, minutesRemaining, trpc: false };
+      }).filter((x) => x.price !== null && x.price > 0 && x.goldAmount !== null && x.goldAmount > 0);
+    }
     let historyRates = [];
     try {
       const histRes = await fetch("/api/trpc/auction.history?batch=1&input=%7B%220%22%3A%7B%22page%22%3A1%2C%22perPage%22%3A30%7D%7D")
         .then((r) => r.json())
         .catch(() => null);
-      const histRows = histRes?.[0]?.result?.data?.json?.rows || [];
+      const histRows = histRes?.[0]?.result?.data?.rows || histRes?.[0]?.result?.data?.json?.rows || [];
       historyRates = histRows
         .filter((r) => r.type === "gold" && r.goldAmount > 0 && r.currentPrice > 0)
         .map((r) => r.goldAmount / r.currentPrice);
@@ -418,35 +444,53 @@ async ({ job, ...auctionCfg }) => {
     const rates = listings.map((item) => item.goldAmount / item.price).concat(historyRates).sort((a, b) => a - b);
     const reference = rates.length ? rates[Math.floor(rates.length / 2)] : 5500000;
     
-    // Sniping: Prioriza lotes com maior gold por coin que estão terminando (<= maxMinutesRemaining, default 5m)
+    // Sniping: Prioriza lotes com maior gold por coin que estão estritamente terminando (<= maxMinutesRemaining, default 5m)
     const maxMins = cfg.maxMinutesRemaining ?? 5;
     const opportunities = listings.map((item) => {
-      const goldPerCoin = item.goldAmount / item.price;
+      const nextPrice = item.bids > 0 ? item.price + 1 : item.price;
+      const goldPerCoin = item.goldAmount / nextPrice;
       const marginPct = reference > 0 ? ((goldPerCoin - reference) / reference) * 100 : 0;
       const mins = item.minutesRemaining !== null ? item.minutesRemaining : 360;
       const isEnding = mins <= maxMins;
-      return { ...item, reference, goldPerCoin, marginPct, isEnding, mins };
-    }).filter((x) => x.price <= cfg.budget && x.marginPct >= cfg.minMarginPct)
-      .sort((a, b) => {
-        // Ordenação prioritária: Lotes acabando primeiro; depois melhor taxa
-        if (a.isEnding && !b.isEnding) return -1;
-        if (!a.isEnding && b.isEnding) return 1;
-        return b.goldPerCoin - a.goldPerCoin;
-      });
+      return { ...item, nextPrice, reference, goldPerCoin, marginPct, isEnding, mins };
+    }).filter((x) => x.isEnding && x.nextPrice <= cfg.budget && x.marginPct >= cfg.minMarginPct)
+      .sort((a, b) => b.goldPerCoin - a.goldPerCoin);
     if (!opportunities.length) {
-      events.push(`sem pacote de gold vantajoso no leilao (gold=${listings.length}, mediana=${reference.toFixed(2)} gold/coin)`);
+      events.push(`sem pacote de gold vantajoso terminando em <=${maxMins}m (gold=${listings.length}, mediana=${reference.toFixed(2)} gold/coin)`);
       return { ok: true, action: "scan", events };
     }
     const finalOpportunities = cfg.targetId
       ? opportunities.filter((o) => o.id === cfg.targetId || !cfg.targetId)
       : opportunities;
     for (const opportunity of finalOpportunities.slice(0, cfg.maxItems)) {
-      const msg = `${(opportunity.goldAmount / 1000000).toFixed(2)}kk por ${opportunity.price}c -> ${opportunity.goldPerCoin.toFixed(0)} gold/coin (+${opportunity.marginPct.toFixed(0)}%)`;
+      const msg = `Lote #${opportunity.id}: ${(opportunity.goldAmount / 1000000).toFixed(0)}kk por ${opportunity.nextPrice}c (${opportunity.goldPerCoin.toFixed(0)} gold/c, +${opportunity.marginPct.toFixed(0)}%, restam ${opportunity.mins}m)`;
       if (!cfg.live) {
         events.push("DRY-RUN " + msg);
         continue;
       }
-      if (opportunity.buy) {
+      if (opportunity.trpc) {
+        try {
+          const bidRes = await fetch("/api/trpc/auction.bid?batch=1", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              "0": {
+                listingId: opportunity.id,
+                maxAmount: opportunity.nextPrice,
+                currency: "normal"
+              }
+            })
+          }).then((r) => r.json());
+          if (bidRes?.[0]?.result?.data) {
+            events.push("LANCE REGISTRADO: " + msg);
+          } else {
+            const err = bidRes?.[0]?.error?.message || "falha";
+            events.push(`LANCE RECUSADO (${err}): ` + msg);
+          }
+        } catch (e) {
+          events.push(`ERRO LANCE (${String(e)}): ` + msg);
+        }
+      } else if (opportunity.buy) {
         opportunity.buy.click();
         events.push("COMPROU " + msg);
         await sleep(350);
