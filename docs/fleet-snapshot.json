@@ -1,38 +1,38 @@
 {
-  "generatedAt": "2026-09-20T04:53:47.663Z",
+  "generatedAt": "2026-09-20T04:57:30.756Z",
   "bots": {
     "vps1": {
       "status": {
         "online": true,
         "connected": true,
-        "online_uptime_seconds": 1217,
-        "online_uptime_str": "20m 17s",
+        "online_uptime_seconds": 13,
+        "online_uptime_str": "13s",
         "ws_disconnect_count": 0,
         "last_ws_disconnect_at": null,
-        "session_xp": 2239218,
-        "session_xp_str": "+2.24kk XP",
-        "level": 135,
-        "level_per_hour": 2.8,
-        "gold": 931316,
-        "stamina": "33:50",
-        "hunt": "Glooth Bandit",
+        "session_xp": 0,
+        "session_xp_str": "0 XP",
+        "level": 148,
+        "level_per_hour": 0,
+        "gold": 929571,
+        "stamina": "100%",
+        "hunt": "glooth-cave",
         "hunt_stage": null,
         "hunt_stage_total": null,
         "hunt_stage_label": null,
         "hunt_stage_complete": false,
         "last_hunt": "Glooth Bandit",
         "last_hunt_id": "glooth-cave",
-        "force_hunt": false,
-        "force_hunt_id": null,
+        "force_hunt": true,
+        "force_hunt_id": "refiner-cave",
         "hunt_control": "manual",
-        "pending_hunt_id": "refiner-cave",
-        "pending_hunt_name": "Stone Refiner",
-        "pending_hunt_requested_at": "2026-09-20T04:42:51.332Z",
+        "pending_hunt_id": null,
+        "pending_hunt_name": null,
+        "pending_hunt_requested_at": null,
         "loop_mode": true,
         "treino": false,
-        "party_slots": 3,
+        "party_slots": 4,
         "party_connected": 3,
-        "party_config_ready": 0,
+        "party_config_ready": 4,
         "party_ready": 3,
         "party_members": [
           {
@@ -43,18 +43,18 @@
             "heal": "Nenhuma",
             "mana": "mana potion",
             "attack": true,
-            "ready": false,
+            "ready": true,
             "observed": true
           },
           {
             "slot": 1,
-            "name": "Slot 2",
+            "name": "Sofisico",
             "voc": "Druid (ED)",
-            "level": 135,
+            "level": 139,
             "heal": "Nenhuma",
             "mana": "mana potion",
             "attack": true,
-            "ready": false,
+            "ready": true,
             "observed": true
           },
           {
@@ -65,14 +65,25 @@
             "heal": "Nenhuma",
             "mana": "mana potion",
             "attack": true,
-            "ready": false,
+            "ready": true,
+            "observed": true
+          },
+          {
+            "slot": 3,
+            "name": "Sirsorenor",
+            "voc": "SORCERER",
+            "level": 8,
+            "heal": "Nenhuma",
+            "mana": "mana potion",
+            "attack": true,
+            "ready": true,
             "observed": true
           }
         ],
-        "kills": 262,
-        "waves": 117,
-        "elapsed_minutes": 21,
-        "elapsed_seconds": 1299,
+        "kills": 0,
+        "waves": 2,
+        "elapsed_minutes": 0,
+        "elapsed_seconds": 57,
         "hunt_decision": {},
         "subsystems": {
           "anti_bot": {
@@ -137,57 +148,51 @@
           }
         },
         "analyzers": {
-          "session_xp": 2239218,
-          "raw_xp": 2239218,
-          "xp_per_hour": 4683910,
-          "session_time": "\u2014",
-          "hunt_kills": 158,
-          "loot_value": 62363,
-          "balance": 16496,
-          "loot_per_hour": 302420,
+          "session_xp": 0,
+          "raw_xp": 0,
+          "xp_per_hour": 6708725.804075742,
+          "session_time": "00:00:00",
+          "hunt_kills": 0,
+          "loot_value": 0,
+          "balance": 0,
           "hunt": {
-            "session00": "12:03",
-            "_raw": "Hunt Analyzer \u21ba\u2013 Session00:12:03 XP/h4.683.910 XP Stack254.263 XP Gain815.899 Kills158 Loot62.363 Supplies45.867 Balance16.496"
+            "session00": "00:00",
+            "_raw": "Hunt Analyzer \u21ba\u2013 Session00:00:00 XP/h0 XP Stack0 XP Gain0 Kills0 Loot0 Supplies0 Balance0"
           },
           "damage": {
-            "session00": "12:02",
-            "rp585/s": "422.882",
-            "ek536/s": "387.327",
-            "mk144/s": "104.203",
-            "_raw": "Damage \u21ba\u2013 Session00:12:02 RP585/s \u00b7 422.882EK536/s \u00b7 387.327MK144/s \u00b7 104.203 635.809 (70%)225.095 (25%)53.508 (6%)"
+            "session00": "00:00",
+            "_raw": "Damage \u21ba\u2013 Session00:00:00"
           },
           "taken": {
-            "session00": "12:02",
-            "rp76/s": "55.110",
-            "ek70/s": "50.498",
-            "mk23/s": "16.314",
-            "_raw": "Damage Taken \u21ba\u2013 Session00:12:02 RP76/s \u00b7 55.110EK70/s \u00b7 50.498MK23/s \u00b7 16.314 121.922 (100%)"
+            "session00": "00:00",
+            "_raw": "Damage Taken \u21ba\u2013 Session00:00:00"
           },
           "loot": {
-            "session00": "12:03",
-            "_raw": "Loot Analyser \u21ba\u2013 Session00:12:03 Gold value62.363 Per hour302.420 3127.633271332141172421624161"
+            "session00": "00:00",
+            "_raw": "Loot Analyser \u21ba\u2013 Session00:00:00 Gold value0 Per hour0"
           },
           "supply": {
-            "session00": "12:03",
-            "_raw": "Supply Analyser \u21ba\u2013 Session00:12:03 Gold value45.867 Per hour227.496 620202349"
+            "session00": "00:00",
+            "_raw": "Supply Analyser \u21ba\u2013 Session00:00:00 Gold value0 Per hour0"
           },
+          "loot_per_hour": 335623,
           "net_gold_per_hour": 335623,
           "goldPerHour": 335623,
-          "killsPerHour": 726.1,
-          "wavesPerHour": 324.2
+          "killsPerHour": 0,
+          "wavesPerHour": 126.3
         },
         "selected_hunt_id": "glooth-cave",
         "selected_hunt_name": "Glooth Bandit",
         "selected_hunt_metrics": {
-          "xp_per_hour": 4683910,
-          "loot_per_hour": 302420,
+          "xp_per_hour": 6708725.804075742,
+          "loot_per_hour": 335623,
           "gold_per_hour": 335623,
-          "source": "hunt-analyzer",
-          "window_seconds": 1201.668
+          "source": "selected-hunt-live",
+          "window_seconds": 0.197
         },
         "session_metrics": {
-          "kills_per_hour": 726.1,
-          "waves_per_hour": 324.2
+          "kills_per_hour": 0,
+          "waves_per_hour": 126.3
         },
         "benchmarks": {
           "cyclopolis": {
@@ -536,17 +541,17 @@
         },
         "hunt_metrics": {
           "glooth-cave": {
-            "xpPerHour": 6708329.422103276,
+            "xpPerHour": 6708725.804075742,
             "lootGoldPerHour": 335623,
             "supplyGoldPerHour": 0,
             "netGoldPerHour": 335623,
-            "damagePerSecond": 336.7,
+            "damagePerSecond": 335.8,
             "healingPerSecond": 0,
-            "kills": 262,
+            "kills": 5670,
             "wipeMs": 0,
-            "updatedAt": "2026-09-20T04:52:41.926Z",
-            "sampleSeconds": 1201.668,
-            "sampleReady": true,
+            "updatedAt": "2026-09-20T04:57:23.776Z",
+            "sampleSeconds": 0.197,
+            "sampleReady": false,
             "source": "live-window"
           },
           "troll-cave": {
@@ -582,13 +587,13 @@
             "lootGoldPerHour": 1373925,
             "supplyGoldPerHour": 0,
             "netGoldPerHour": 1373925,
-            "damagePerSecond": 123,
+            "damagePerSecond": 119.1,
             "healingPerSecond": 0,
-            "kills": 366,
+            "kills": 3420,
             "wipeMs": 0,
-            "updatedAt": "2026-09-20T04:07:48.848Z",
-            "sampleSeconds": 629.701,
-            "sampleReady": true,
+            "updatedAt": "2026-09-20T04:57:23.578Z",
+            "sampleSeconds": 12.208,
+            "sampleReady": false,
             "source": "live-window"
           },
           "elf-lair": {
@@ -691,72 +696,33 @@
           }
         },
         "magic": {
-          "power": 2,
-          "aoe": 4,
-          "strike": 1,
+          "power": 0,
+          "aoe": 0,
+          "strike": 0,
           "heal": 0,
           "mana": 0,
-          "filled": 10,
-          "empty": 2,
-          "names": [
-            "1. Ethereal Barrage (exori dir moe) \u2014 lvl 60 \u00b7 135 mana \u00b7 cd 4s\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "2. Ethereal Spear (exori con) \u2014 lvl 23 \u00b7 25 mana \u00b7 cd 2s\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "3. Divine Caldera (exevo mas san) \u2014 lvl 50 \u00b7 160 mana \u00b7 cd 4s\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "1. Groundshaker (exori mas) \u2014 lvl 33 \u00b7 160 mana \u00b7 cd 4s\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "2. Executioner's Throw (exori amp kor) \u2014 lvl 300 \u00b7 225 mana \u00b7 cd 18s\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "3. Berserk (exori) \u2014 lvl 35 \u00b7 115 mana \u00b7 cd 2s\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "4. Shield Slam (exori scu) \u2014 lvl 30 \u00b7 90 mana \u00b7 cd 6s\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "1. Swift Jab (exori infir pug) \u2014 lvl 1 \u00b7 3 mana \u00b7 cd 2s\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "2. Flurry of Blows (exori mas pug) \u2014 lvl 35 \u00b7 110 mana \u00b7 cd 4s\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "3. Double Jab (exori pug) \u2014 lvl 14 \u00b7 30 mana \u00b7 cd 3s\nBot\u00e3o direito: op\u00e7\u00f5es"
-          ],
-          "slots": {
-            "0": {
-              "aoe": 3,
-              "strike": 1,
-              "heal": 0,
-              "mana": 0,
-              "attack": true,
-              "ready": false,
-              "empty": 1
-            },
-            "1": {
-              "aoe": 2,
-              "strike": 0,
-              "heal": 0,
-              "mana": 0,
-              "attack": true,
-              "ready": false,
-              "empty": 0
-            },
-            "2": {
-              "aoe": 1,
-              "strike": 0,
-              "heal": 0,
-              "mana": 0,
-              "attack": true,
-              "ready": false,
-              "empty": 1
-            }
-          },
-          "slot1_present": true,
+          "filled": 0,
+          "empty": 0,
+          "names": [],
+          "slots": {},
+          "slot1_present": false,
           "party_ready": false
         },
-        "bag_slots": "0 / 8",
-        "character": "sencodtank",
+        "bag_slots": "",
+        "character": "Secondpally",
         "sources": {
           "hunt": "websocket",
           "level": "trpc",
           "gold": "trpc",
-          "stamina": "trpc",
-          "loopMode": "dom",
-          "bagSlots": "dom",
-          "partySlots": "dom",
-          "shooters": "dom",
+          "stamina": "dom",
+          "loopMode": "fallback",
+          "bagSlots": "fallback",
+          "partySlots": "fallback",
+          "shooters": "fallback",
           "magic": "fallback"
         },
-        "last_update": "04:52:42",
-        "last_update_ts": 1789879962
+        "last_update": "04:57:23",
+        "last_update_ts": 1789880243
       },
       "benchmarks": {
         "cyclopolis": {
@@ -1104,27 +1070,27 @@
         }
       },
       "health": {
-        "state": "stale",
-        "detail": "Sem atualiza\u00e7\u00e3o h\u00e1 66s",
-        "received_at": "2026-09-20T04:53:40.955Z",
-        "age_seconds": 66
+        "state": "online",
+        "detail": "Conex\u00e3o e telemetria atualizadas",
+        "received_at": "2026-09-20T04:57:29.461Z",
+        "age_seconds": 8
       }
     },
     "vps2": {
       "status": {
-        "online": true,
-        "connected": true,
-        "online_uptime_seconds": 1364,
-        "online_uptime_str": "22m 44s",
+        "online": false,
+        "connected": false,
+        "online_uptime_seconds": 0,
+        "online_uptime_str": null,
         "ws_disconnect_count": 0,
         "last_ws_disconnect_at": null,
-        "session_xp": 1775289,
-        "session_xp_str": "+1.78kk XP",
+        "session_xp": 0,
+        "session_xp_str": "0 XP",
         "level": 311,
         "level_per_hour": 0,
-        "gold": 200,
-        "stamina": "100%",
-        "hunt": "vexclaw-lair",
+        "gold": 885673367,
+        "stamina": "17:15",
+        "hunt": "\u2014",
         "hunt_stage": null,
         "hunt_stage_total": null,
         "hunt_stage_label": null,
@@ -1141,7 +1107,7 @@
         "treino": false,
         "party_slots": 3,
         "party_connected": 3,
-        "party_config_ready": 0,
+        "party_config_ready": 3,
         "party_ready": 3,
         "party_members": [
           {
@@ -1152,7 +1118,7 @@
             "heal": "Nenhuma",
             "mana": "mana potion",
             "attack": true,
-            "ready": false,
+            "ready": true,
             "observed": true
           },
           {
@@ -1160,10 +1126,10 @@
             "name": "sdfasfasdfd",
             "voc": "Druid (ED)",
             "level": 310,
-            "heal": "Restoration",
-            "mana": "ultimate mana potion",
+            "heal": "Nenhuma",
+            "mana": "mana potion",
             "attack": true,
-            "ready": false,
+            "ready": true,
             "observed": true
           },
           {
@@ -1174,14 +1140,14 @@
             "heal": "Nenhuma",
             "mana": "mana potion",
             "attack": true,
-            "ready": false,
+            "ready": true,
             "observed": true
           }
         ],
-        "kills": 180,
-        "waves": 101,
-        "elapsed_minutes": 23,
-        "elapsed_seconds": 1415,
+        "kills": 0,
+        "waves": 0,
+        "elapsed_minutes": 0,
+        "elapsed_seconds": 35,
         "hunt_decision": {},
         "subsystems": {
           "anti_bot": {
@@ -1205,8 +1171,8 @@
             "detail": "Ciclo autom\u00e1tico de stamina e treino online"
           },
           "auto_boss": {
-            "status": "AGUARDANDO_REQUISITO",
-            "detail": "Auto Boss sem playlist/libera\u00e7\u00e3o no servidor; nenhuma rota\u00e7\u00e3o executada"
+            "status": "FUNCIONAL",
+            "detail": "Desafio di\u00e1rio de chefes ativo"
           },
           "auto_extras": {
             "status": "FUNCIONAL",
@@ -1246,9 +1212,9 @@
           }
         },
         "analyzers": {
-          "session_xp": 1775289,
-          "raw_xp": 1775289,
-          "xp_per_hour": 3469398.909586847,
+          "session_xp": 0,
+          "raw_xp": 0,
+          "xp_per_hour": 0,
           "session_time": "00:00:00",
           "hunt_kills": 0,
           "loot_value": 0,
@@ -1273,24 +1239,24 @@
             "session00": "00:00",
             "_raw": "Supply Analyser \u21ba\u2013 Session00:00:00 Gold value0 Per hour0"
           },
-          "loot_per_hour": 428357,
-          "net_gold_per_hour": 428357,
-          "goldPerHour": 428357,
-          "killsPerHour": 458,
-          "wavesPerHour": 257
+          "loot_per_hour": 0,
+          "net_gold_per_hour": 0,
+          "goldPerHour": 0,
+          "killsPerHour": 0,
+          "wavesPerHour": 0
         },
-        "selected_hunt_id": "vexclaw-lair",
-        "selected_hunt_name": "Vexclaw",
+        "selected_hunt_id": null,
+        "selected_hunt_name": null,
         "selected_hunt_metrics": {
-          "xp_per_hour": 3469398.909586847,
-          "loot_per_hour": 428357,
-          "gold_per_hour": 428357,
-          "source": "selected-hunt-live",
-          "window_seconds": 1044.887
+          "xp_per_hour": 0,
+          "loot_per_hour": 0,
+          "gold_per_hour": 0,
+          "source": "selected-hunt-history",
+          "window_seconds": 0
         },
         "session_metrics": {
-          "kills_per_hour": 458,
-          "waves_per_hour": 257
+          "kills_per_hour": 0,
+          "waves_per_hour": 0
         },
         "benchmarks": {
           "troll-cave": {
@@ -1354,8 +1320,8 @@
             "gold_gained": 4004,
             "kills": 223,
             "deaths": 0,
-            "gold_per_hour": 6120.3,
-            "kills_per_hour": 616,
+            "gold_per_hour": 5932.6,
+            "kills_per_hour": 606,
             "last_death_ts": 0,
             "samples_count": 5
           },
@@ -1584,21 +1550,21 @@
             "id": "vexclaw-lair",
             "name": "Vexclaw",
             "min_level": 210,
-            "samples": 891,
+            "samples": 892,
             "deaths": 0,
             "avg_gold_h": 428357.1,
             "max_gold_h": 8817127,
-            "avg_kills_h": 620.7,
-            "avg_waves_h": 256.7,
+            "avg_kills_h": 616.3,
+            "avg_waves_h": 259.9,
             "avg_xp_h": 5766482.9,
-            "avg_loot_h": 428357.2,
+            "avg_loot_h": 428357.1,
             "balance_score": 68.46,
             "xp_h_display": "5.810.423",
             "loot_h_display": "428357",
             "safety_rating": "SEGURO",
             "category": "TOP_LUCRO (OURO ALTO)",
             "efficiency_score": 95,
-            "last_seen_ts": 1789880016.782
+            "last_seen_ts": 1789880091.207
           },
           "cyclopolis": {
             "id": "cyclopolis",
@@ -1763,17 +1729,17 @@
         },
         "hunt_metrics": {
           "wyrm-cave": {
-            "xpPerHour": 4732000.888494003,
-            "lootGoldPerHour": 110009.77343402932,
+            "xpPerHour": 9661317.159572756,
+            "lootGoldPerHour": 1546390.424561215,
             "supplyGoldPerHour": 168893.37707884618,
-            "netGoldPerHour": -58883.60364481686,
-            "damagePerSecond": 389.2,
+            "netGoldPerHour": 1377497.047482369,
+            "damagePerSecond": 390.3,
             "healingPerSecond": 0,
-            "kills": 249,
+            "kills": 27,
             "wipeMs": 0,
-            "updatedAt": "2026-09-20T04:53:36.696Z",
-            "sampleSeconds": 1350.6,
-            "sampleReady": true,
+            "updatedAt": "2026-09-20T04:56:33.980Z",
+            "sampleSeconds": 37.262,
+            "sampleReady": false,
             "source": "live-window"
           },
           "troll-cave": {
@@ -1851,12 +1817,12 @@
             "lootGoldPerHour": 428357,
             "supplyGoldPerHour": 0,
             "netGoldPerHour": 428357,
-            "damagePerSecond": 71.2,
+            "damagePerSecond": 70.3,
             "healingPerSecond": 0,
             "kills": 139,
             "wipeMs": 0,
-            "updatedAt": "2026-09-20T04:48:30.287Z",
-            "sampleSeconds": 1044.887,
+            "updatedAt": "2026-09-20T04:55:57.105Z",
+            "sampleSeconds": 0.521,
             "sampleReady": false,
             "source": "live-window"
           },
@@ -1974,73 +1940,33 @@
           }
         },
         "magic": {
-          "power": 2,
-          "aoe": 8,
-          "strike": 2,
+          "power": 0,
+          "aoe": 0,
+          "strike": 0,
           "heal": 0,
           "mana": 0,
-          "filled": 11,
-          "empty": 1,
-          "names": [
-            "1. Fierce Berserk (exori gran) \u2014 lvl 90 \u00b7 340 mana \u00b7 cd 4s \u00b7 dispara com 2+ mobs\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "3. Berserk (exori) \u2014 lvl 35 \u00b7 115 mana \u00b7 cd 2s \u00b7 dispara com 1+ mobs\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "4. Shield Slam (exori scu) \u2014 lvl 30 \u00b7 90 mana \u00b7 cd 6s\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "1. Eternal Winter (exevo gran mas frigo) \u2014 lvl 60 \u00b7 1050 mana \u00b7 cd 10s \u00b7 dispara com 2+ mobs\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "2. Strong Ice Wave (exevo gran frigo hur) \u2014 lvl 40 \u00b7 170 mana \u00b7 cd 4s \u00b7 dispara com 1+ mobs\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "3. Ice Strike (exori frigo) \u2014 lvl 15 \u00b7 20 mana \u00b7 cd 2s\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "4. Chill Out (exevo infir frigo hur) \u2014 lvl 1 \u00b7 8 mana \u00b7 cd 4s\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "1. Great Energy Beam (exevo gran vis lux) \u2014 lvl 29 \u00b7 110 mana \u00b7 cd 4s \u00b7 dispara com 1+ mobs\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "2. Rage of the Skies (exevo gran mas vis) \u2014 lvl 55 \u00b7 600 mana \u00b7 cd 10s \u00b7 dispara com 2+ mobs\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "3. Energy Wave (exevo vis hur) \u2014 lvl 38 \u00b7 170 mana \u00b7 cd 4s \u00b7 dispara com 1+ mobs\nBot\u00e3o direito: op\u00e7\u00f5es",
-            "4. Energy Strike (exori vis) \u2014 lvl 12 \u00b7 20 mana \u00b7 cd 2s\nBot\u00e3o direito: op\u00e7\u00f5es"
-          ],
-          "slots": {
-            "0": {
-              "aoe": 4,
-              "strike": 0,
-              "heal": 0,
-              "mana": 0,
-              "attack": true,
-              "ready": false,
-              "empty": 1
-            },
-            "1": {
-              "aoe": 3,
-              "strike": 1,
-              "heal": 0,
-              "mana": 0,
-              "attack": true,
-              "ready": false,
-              "empty": 0
-            },
-            "2": {
-              "aoe": 3,
-              "strike": 1,
-              "heal": 0,
-              "mana": 0,
-              "attack": true,
-              "ready": false,
-              "empty": 0
-            }
-          },
-          "slot1_present": true,
+          "filled": 0,
+          "empty": 0,
+          "names": [],
+          "slots": {},
+          "slot1_present": false,
           "party_ready": false
         },
         "bag_slots": "0 / 8",
         "character": "tanknodeath",
         "sources": {
-          "hunt": "websocket",
+          "hunt": "fallback",
           "level": "trpc",
-          "gold": "dom",
-          "stamina": "dom",
+          "gold": "trpc",
+          "stamina": "trpc",
           "loopMode": "dom",
           "bagSlots": "dom",
           "partySlots": "dom",
           "shooters": "dom",
           "magic": "fallback"
         },
-        "last_update": "04:53:36",
-        "last_update_ts": 1789880016
+        "last_update": "04:57:28",
+        "last_update_ts": 1789880248
       },
       "benchmarks": {
         "troll-cave": {
@@ -2104,8 +2030,8 @@
           "gold_gained": 4004,
           "kills": 223,
           "deaths": 0,
-          "gold_per_hour": 6120.3,
-          "kills_per_hour": 616,
+          "gold_per_hour": 5932.6,
+          "kills_per_hour": 606,
           "last_death_ts": 0,
           "samples_count": 5
         },
@@ -2334,21 +2260,21 @@
           "id": "vexclaw-lair",
           "name": "Vexclaw",
           "min_level": 210,
-          "samples": 891,
+          "samples": 892,
           "deaths": 0,
           "avg_gold_h": 428357.1,
           "max_gold_h": 8817127,
-          "avg_kills_h": 620.7,
-          "avg_waves_h": 256.7,
+          "avg_kills_h": 616.3,
+          "avg_waves_h": 259.9,
           "avg_xp_h": 5766482.9,
-          "avg_loot_h": 428357.2,
+          "avg_loot_h": 428357.1,
           "balance_score": 68.46,
           "xp_h_display": "5.810.423",
           "loot_h_display": "428357",
           "safety_rating": "SEGURO",
           "category": "TOP_LUCRO (OURO ALTO)",
           "efficiency_score": 95,
-          "last_seen_ts": 1789880016.782
+          "last_seen_ts": 1789880091.207
         },
         "cyclopolis": {
           "id": "cyclopolis",
@@ -2512,10 +2438,10 @@
         }
       },
       "health": {
-        "state": "online",
-        "detail": "Conex\u00e3o e telemetria atualizadas",
-        "received_at": "2026-09-20T04:53:41.401Z",
-        "age_seconds": 12
+        "state": "offline",
+        "detail": "Bot desconectado do jogo",
+        "received_at": "2026-09-20T04:57:29.545Z",
+        "age_seconds": 3
       }
     }
   },
@@ -9153,6 +9079,33 @@
         "lootPerHour": 302420,
         "deaths": 0,
         "uptimeSeconds": 1217
+      },
+      {
+        "at": "2026-09-20T04:54:25.570Z",
+        "state": "offline",
+        "level": 135,
+        "xpPerHour": 0,
+        "lootPerHour": 0,
+        "deaths": 0,
+        "uptimeSeconds": 0
+      },
+      {
+        "at": "2026-09-20T04:55:36.579Z",
+        "state": "offline",
+        "level": 148,
+        "xpPerHour": 0,
+        "lootPerHour": 0,
+        "deaths": 0,
+        "uptimeSeconds": 0
+      },
+      {
+        "at": "2026-09-20T04:56:46.562Z",
+        "state": "offline",
+        "level": 0,
+        "xpPerHour": 9246925.763179667,
+        "lootPerHour": 1373925,
+        "deaths": 0,
+        "uptimeSeconds": 0
       }
     ],
     "vps2": [
@@ -15788,6 +15741,33 @@
         "lootPerHour": 428357,
         "deaths": 0,
         "uptimeSeconds": 1332
+      },
+      {
+        "at": "2026-09-20T04:54:25.570Z",
+        "state": "online",
+        "level": 311,
+        "xpPerHour": 3469398.909586847,
+        "lootPerHour": 428357,
+        "deaths": 0,
+        "uptimeSeconds": 1402
+      },
+      {
+        "at": "2026-09-20T04:55:36.579Z",
+        "state": "offline",
+        "level": 311,
+        "xpPerHour": 0,
+        "lootPerHour": 0,
+        "deaths": 0,
+        "uptimeSeconds": 0
+      },
+      {
+        "at": "2026-09-20T04:56:46.562Z",
+        "state": "online",
+        "level": 311,
+        "xpPerHour": 3469398.909586847,
+        "lootPerHour": 428357,
+        "deaths": 0,
+        "uptimeSeconds": 51
       }
     ]
   }
