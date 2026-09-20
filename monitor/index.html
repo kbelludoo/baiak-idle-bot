@@ -693,6 +693,7 @@ const levelHistory = {};
 const maxObservedLevels = {};
 const pendingHuntSelections = {};
 const huntCategorySelections = {};
+const huntSessionState = {};
 let historyWindowHours = 1;
 let benchmarkFilter = '';
 let benchmarkSort = 'gold';
@@ -1040,6 +1041,31 @@ function card(id, b) {
   const damage = an.damage || {};
   const taken = an.taken || {};
 
+  // Rastreador de Hunt: ao trocar de hunt, zera contadores e recomeça a medição
+  const currentHuntKey = String(s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id || s.hunt || 'unknown').trim().toLowerCase().replace(/-lair|-cave|-dungeon|-camp|-ground/g, '');
+  const rawKills = Number(s.kills) || 0;
+  const rawWaves = Number(s.waves) || 0;
+  const rawSessionXp = Number(s.session_xp ?? an.session_xp ?? an.raw_xp ?? 0) || 0;
+  const rawLevel = level;
+
+  if (!huntSessionState[id] || huntSessionState[id].huntKey !== currentHuntKey) {
+    huntSessionState[id] = {
+      huntKey: currentHuntKey,
+      startedAt: Date.now(),
+      baseKills: rawKills,
+      baseWaves: rawWaves,
+      baseXp: rawSessionXp,
+      baseLevel: rawLevel,
+    };
+  }
+  const hState = huntSessionState[id];
+  const huntKills = Math.max(0, rawKills - hState.baseKills);
+  const huntWaves = Math.max(0, rawWaves - hState.baseWaves);
+  const huntXp = Math.max(0, rawSessionXp - hState.baseXp);
+  const huntElapsedSec = Math.max(0, Math.floor((Date.now() - hState.startedAt) / 1000));
+  const huntElapsedStr = formatElapsed(huntElapsedSec, Math.floor(huntElapsedSec / 60));
+  const huntElapsedHours = huntElapsedSec > 0 ? huntElapsedSec / 3600 : 0;
+
   const isForced = Boolean(s.force_hunt && s.force_hunt_id);
   const uptimeSec = Number(s.online_uptime_seconds ?? 0) || 0;
   const elapsedSecForUptime = Number(s.elapsed_seconds ?? 0) || 0;
@@ -1047,45 +1073,44 @@ function card(id, b) {
   const uptimeStr = s.online
     ? formatUptimeSec(s.online_uptime_seconds ?? uptimeBase)
     : 'Reconectando...';
-  const sessionXpStr = s.session_xp_str || formatXp(s.session_xp || an.session_xp || an.raw_xp || 0);
-  const elapsedSec = elapsedSecForUptime || uptimeSec || (Number(s.elapsed_minutes) || 0) * 60;
-  const elapsedStr = formatElapsed(elapsedSec, s.elapsed_minutes);
+  const sessionXpStr = formatXp(huntXp);
   const tickAt = Date.now();
-  // Cálculo robusto de taxas ao vivo por hora com fallback
-  const sessionXpNum = Number(s.session_xp ?? an.session_xp ?? an.raw_xp ?? 0) || 0;
-  const elapsedHours = elapsedSec > 0 ? elapsedSec / 3600 : 0;
-  const liveXpPerHour = elapsedHours > 0 && sessionXpNum > 0 ? Math.round(sessionXpNum / elapsedHours) : 0;
-  const liveKillsPerHour = elapsedHours > 0 && Number(s.kills) > 0 ? Math.round(Number(s.kills) / elapsedHours) : 0;
-  const liveWavesPerHour = elapsedHours > 0 && Number(s.waves) > 0 ? Math.round(Number(s.waves) / elapsedHours) : 0;
 
-  // XP / hora: analyzer -> benchmark/matrix -> live session XP/h
+  // Cálculo robusto de taxas ao vivo por hora reiniciando com a nova hunt
+  const liveXpPerHour = huntElapsedHours > 0 && huntXp > 0 ? Math.round(huntXp / huntElapsedHours) : 0;
+  const liveKillsPerHour = huntElapsedHours > 0 && huntKills > 0 ? Math.round(huntKills / huntElapsedHours) : 0;
+  const liveWavesPerHour = huntElapsedHours > 0 && huntWaves > 0 ? Math.round(huntWaves / huntElapsedHours) : 0;
+
+  // XP / hora da nova medição
   const rawXpRate = selected.xp_per_hour ?? an.xp_per_hour;
   let parsedXpRate = parseHuntMetric(rawXpRate);
-  if (!(parsedXpRate > 0)) {
-    parsedXpRate = huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'xp') || liveXpPerHour;
+  if (!(parsedXpRate > 0) || huntElapsedSec < 60) {
+    parsedXpRate = liveXpPerHour || huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'xp');
   }
-  const displayXpHour = parsedXpRate > 0 ? `${formatXp(parsedXpRate)}/h` : 'Calculando…';
+  const displayXpHour = parsedXpRate > 0 ? `${formatXp(parsedXpRate)}/h` : (huntElapsedSec < 60 ? 'Calculando…' : '0 XP/h');
 
-  // Loot / hora: analyzer -> benchmark/matrix
+  // Loot / hora da nova medição
   const rawLootRate = selected.loot_per_hour ?? an.loot_per_hour;
   let parsedLootRate = parseHuntMetric(rawLootRate);
-  if (!(parsedLootRate > 0)) {
+  if (!(parsedLootRate > 0) || huntElapsedSec < 60) {
     parsedLootRate = huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'loot');
   }
-  const displayLootHour = parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : 'Calculando…';
+  const displayLootHour = parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : (huntElapsedSec < 60 ? 'Calculando…' : '0/h');
 
   // Gold / hora
   const goldHourVal = Number(selected.gold_per_hour ?? a.goldPerHour ?? an.net_gold_per_hour ?? 0) || 0;
   const displayGoldHour = goldHourVal > 0 ? `${formatGold(goldHourVal)}/h` : (parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : '0/h');
 
   // Kills / hora & Waves / hora
-  const killsHourVal = Number(sessionMetrics.kills_per_hour ?? a.killsPerHour ?? liveKillsPerHour) || liveKillsPerHour;
-  const wavesHourVal = Number(sessionMetrics.waves_per_hour ?? a.wavesPerHour ?? liveWavesPerHour) || liveWavesPerHour;
+  const killsHourVal = huntElapsedSec >= 60 ? (liveKillsPerHour || Number(sessionMetrics.kills_per_hour ?? a.killsPerHour ?? 0)) : (liveKillsPerHour || 0);
+  const wavesHourVal = huntElapsedSec >= 60 ? (liveWavesPerHour || Number(sessionMetrics.waves_per_hour ?? a.wavesPerHour ?? 0)) : (liveWavesPerHour || 0);
 
   // Level / hora display
-  const displayLevelHour = rate === null || !Number.isFinite(rate)
-    ? (elapsedSec < 120 ? 'Calculando…' : '0,0')
-    : num(rate);
+  const liveLevelGain = Math.max(0, rawLevel - hState.baseLevel);
+  const liveLevelRate = huntElapsedHours > 0 && liveLevelGain > 0 ? Math.round((liveLevelGain / huntElapsedHours) * 10) / 10 : 0;
+  const displayLevelHour = huntElapsedSec < 60
+    ? 'Calculando…'
+    : (liveLevelRate > 0 ? num(liveLevelRate) : (rate !== null && Number.isFinite(rate) ? num(rate) : '0,0'));
 
   return `
     <article class="bot ${id}">
@@ -1113,7 +1138,7 @@ function card(id, b) {
 
           <div class="hero-stat xp">
             <div class="hero-label">
-              <span>XP TOTAL DA EXECUÇÃO</span>
+              <span>XP TOTAL DESTA HUNT</span>
               <span style="font-size:12px;">⚡</span>
             </div>
             <strong class="hero-val">${esc(sessionXpStr)}</strong>
@@ -1147,15 +1172,15 @@ function card(id, b) {
           </div>
           <div class="metric">
             <span>Kills na Sessão</span>
-            <b>${num(s.kills)}</b>
+            <b>${num(huntKills)}</b>
           </div>
           <div class="metric">
             <span>Waves</span>
-            <b>${num(s.waves)}</b>
+            <b>${num(huntWaves)}</b>
           </div>
           <div class="metric">
-            <span>Tempo Total</span>
-            <b data-tick-base="${elapsedSec}" data-tick-at="${tickAt}" data-tick-kind="elapsed">${esc(elapsedStr)}</b>
+            <span>Tempo na Hunt</span>
+            <b data-tick-base="${huntElapsedSec}" data-tick-at="${tickAt}" data-tick-kind="elapsed">${esc(huntElapsedStr)}</b>
           </div>
           <div class="metric">
             <span>Loop Mode</span>
