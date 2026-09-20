@@ -1425,6 +1425,17 @@ async function changeHunt(botId) {
       msg.className = data.pending ? 'hunt-msg busy' : 'hunt-msg ok';
       msg.textContent = '✅ ' + (data.message || 'Comando executado! O bot trocará de hunt em instantes.');
       pendingHuntSelections[botId] = huntId;
+      // Prepara o zeramento imediato dos contadores para a nova medição
+      const normNew = String(huntId).trim().toLowerCase().replace(/-lair|-cave|-dungeon|-camp|-ground/g, '');
+      const curBot = window.latestFleetData?.bots?.[botId]?.status || {};
+      huntSessionState[botId] = {
+        huntKey: normNew,
+        startedAt: Date.now(),
+        baseKills: Number(curBot.kills) || 0,
+        baseWaves: Number(curBot.waves) || 0,
+        baseXp: Number(curBot.session_xp ?? curBot.analyzers?.session_xp ?? 0) || 0,
+        baseLevel: Number(curBot.level) || 0,
+      };
       setTimeout(update, 1200);
     } else {
       msg.className = 'hunt-msg err';
