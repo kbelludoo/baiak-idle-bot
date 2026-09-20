@@ -865,7 +865,7 @@ function party(s) {
         <b>${esc(m.name || ('Slot ' + m.slot))}</b>
         <small>${esc(m.voc || '')} · lvl ${esc(m.level || '—')}</small>
       </div>
-      <small class="${m.ready ? 'ready' : 'notready'}">${m.ready ? 'READY' : 'NOT READY'}</small>
+      <small class="${m.ready ? 'ready' : 'notready'}">${m.ready ? 'CONFIG OK' : 'CONFIG PENDENTE'}</small>
     </div>
   `).join('');
 }
@@ -1026,10 +1026,13 @@ function card(id, b) {
   const s = b.status || {};
   const a = s.analyzers || {};
   const an = s.analyzers || {};
+  const selected = s.selected_hunt_metrics || {};
+  const sessionMetrics = s.session_metrics || {};
   const d = s.hunt_decision || {};
   const m = s.hunt_matrix?.[s.last_hunt_id] || s.hunt_matrix?.[Object.keys(s.hunt_matrix || {})[0]] || {};
   const level = Number(s.level) || 0;
-  const rate = typeof s._levelRate === 'number' ? s._levelRate : null;
+  const rate = Number.isFinite(Number(s.level_per_hour)) ? Number(s.level_per_hour)
+    : (typeof s._levelRate === 'number' ? s._levelRate : null);
   const damage = an.damage || {};
   const taken = an.taken || {};
 
@@ -1044,6 +1047,41 @@ function card(id, b) {
   const elapsedSec = elapsedSecForUptime || uptimeSec || (Number(s.elapsed_minutes) || 0) * 60;
   const elapsedStr = formatElapsed(elapsedSec, s.elapsed_minutes);
   const tickAt = Date.now();
+  // Cálculo robusto de taxas ao vivo por hora com fallback
+  const sessionXpNum = Number(s.session_xp ?? an.session_xp ?? an.raw_xp ?? 0) || 0;
+  const elapsedHours = elapsedSec > 0 ? elapsedSec / 3600 : 0;
+  const liveXpPerHour = elapsedHours > 0 && sessionXpNum > 0 ? Math.round(sessionXpNum / elapsedHours) : 0;
+  const liveKillsPerHour = elapsedHours > 0 && Number(s.kills) > 0 ? Math.round(Number(s.kills) / elapsedHours) : 0;
+  const liveWavesPerHour = elapsedHours > 0 && Number(s.waves) > 0 ? Math.round(Number(s.waves) / elapsedHours) : 0;
+
+  // XP / hora: analyzer -> benchmark/matrix -> live session XP/h
+  const rawXpRate = selected.xp_per_hour ?? an.xp_per_hour;
+  let parsedXpRate = parseHuntMetric(rawXpRate);
+  if (!(parsedXpRate > 0)) {
+    parsedXpRate = huntMetricValue(s, s.last_hunt_id || s.force_hunt_id, 'xp') || liveXpPerHour;
+  }
+  const displayXpHour = parsedXpRate > 0 ? `${formatXp(parsedXpRate)}/h` : 'Calculando…';
+
+  // Loot / hora: analyzer -> benchmark/matrix
+  const rawLootRate = selected.loot_per_hour ?? an.loot_per_hour;
+  let parsedLootRate = parseHuntMetric(rawLootRate);
+  if (!(parsedLootRate > 0)) {
+    parsedLootRate = huntMetricValue(s, s.last_hunt_id || s.force_hunt_id, 'loot');
+  }
+  const displayLootHour = parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : 'Calculando…';
+
+  // Gold / hora
+  const goldHourVal = Number(selected.gold_per_hour ?? a.goldPerHour ?? an.net_gold_per_hour ?? 0) || 0;
+  const displayGoldHour = goldHourVal > 0 ? `${formatGold(goldHourVal)}/h` : (parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : '0/h');
+
+  // Kills / hora & Waves / hora
+  const killsHourVal = Number(sessionMetrics.kills_per_hour ?? a.killsPerHour ?? liveKillsPerHour) || liveKillsPerHour;
+  const wavesHourVal = Number(sessionMetrics.waves_per_hour ?? a.wavesPerHour ?? liveWavesPerHour) || liveWavesPerHour;
+
+  // Level / hora display
+  const displayLevelHour = rate === null || !Number.isFinite(rate)
+    ? (elapsedSec < 120 ? 'Calculando…' : '0,0')
+    : num(rate);
 
   return `
     <article class="bot ${id}">
@@ -1058,7 +1096,7 @@ function card(id, b) {
       </div>
 
       <div class="bot-body">
-        <!-- UPTIME CONTÍNUO SEM CAIR & XP TOTAL DA SESSÃO -->
+        <!-- UPTIME CONTÍNUO SEM CAIR & XP TOTAL DA EXECUÇÃO -->
         <div class="hero-stats">
           <div class="hero-stat uptime">
             <div class="hero-label">
@@ -1071,11 +1109,11 @@ function card(id, b) {
 
           <div class="hero-stat xp">
             <div class="hero-label">
-              <span>XP TOTAL DESTE TEMPO</span>
+              <span>XP TOTAL DA EXECUÇÃO</span>
               <span style="font-size:12px;">⚡</span>
             </div>
             <strong class="hero-val">${esc(sessionXpStr)}</strong>
-            <small>Taxa atual: ${esc(an.xp_per_hour ?? m.xp_h_display ?? '—')}</small>
+            <small>Taxa da hunt: ${esc(displayXpHour)}</small>
           </div>
         </div>
 
@@ -1096,8 +1134,12 @@ function card(id, b) {
             <b>${esc(s.stamina)}</b>
           </div>
           <div class="metric">
-            <span>Party pronta</span>
-            <b>${num(s.party_ready ?? (s.party_members || []).filter(m => m.ready).length)} / ${num(s.party_slots)}</b>
+            <span>Party conectada</span>
+            <b>${num(s.party_connected ?? s.party_ready ?? (s.party_members || []).filter(m => m.observed).length)} / ${num(s.party_slots)}</b>
+          </div>
+          <div class="metric">
+            <span>Config. de combate</span>
+            <b>${num(s.party_config_ready ?? (s.party_members || []).filter(m => m.ready).length)} / ${num(s.party_slots)}</b>
           </div>
           <div class="metric">
             <span>Kills na Sessão</span>
@@ -1121,27 +1163,27 @@ function card(id, b) {
         <div class="rates">
           <div class="rate">
             <span>Level / hora</span>
-            <b>${rate === null ? 'Calculando…' : num(rate)}</b>
+            <b>${esc(displayLevelHour)}</b>
           </div>
           <div class="rate">
             <span>XP / hora</span>
-            <b>${esc(an.xp_per_hour ?? m.xp_h_display ?? '—')}</b>
+            <b>${esc(displayXpHour)}</b>
           </div>
           <div class="rate">
             <span>Loot / hora</span>
-            <b>${esc(an.loot_per_hour ?? m.loot_h_display ?? '—')}</b>
+            <b>${esc(displayLootHour)}</b>
           </div>
           <div class="rate">
             <span>Gold / hora</span>
-            <b>${num(a.goldPerHour ?? m.avg_gold_h ?? 0)}</b>
+            <b>${esc(displayGoldHour)}</b>
           </div>
           <div class="rate">
             <span>Kills / hora</span>
-            <b>${num(a.killsPerHour ?? m.avg_kills_h ?? 0)}</b>
+            <b>${num(killsHourVal)}</b>
           </div>
           <div class="rate">
             <span>Waves / hora</span>
-            <b>${num(m.avg_waves_h ?? 0)}</b>
+            <b>${num(wavesHourVal)}</b>
           </div>
           <div class="rate wide-rate">
             <span>Dano / seg</span>
@@ -1205,7 +1247,7 @@ function summary(bots) {
       <small>maior nível entre VPS</small>
     </div>
     <div class="summary">
-      <span class="label">XP TOTAL DA SESSÃO</span>
+      <span class="label">XP TOTAL DAS EXECUÇÕES</span>
       <strong>${formatXp(totalSessionXp)}</strong>
       <small>ganho combinado contínuo</small>
     </div>
@@ -1285,6 +1327,10 @@ function rates(d) {
   const now = Date.now();
   for (const [id, b] of Object.entries(d.bots)) {
     const level = Number(b.status?.level) || 0;
+    if (Number.isFinite(Number(b.status?.level_per_hour))) {
+      levelHistory[id] = { level, time: now };
+      continue;
+    }
     const samples = (d.history?.[id] || []).filter(point => Number(point.level) > 0);
     if (samples.length >= 2) {
       const first = samples[0];
