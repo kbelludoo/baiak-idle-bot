@@ -280,6 +280,25 @@ body {
   font-weight: 800;
   color: var(--bot);
 }
+.hunt-stage {
+  color: var(--cyan);
+  border: 1px solid #24566b;
+  background: #102633;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+.hunt-pending {
+  color: var(--orange);
+  background: #2d2114;
+  border: 1px solid #64451f;
+  border-radius: 7px;
+  font-size: 11px;
+  margin-top: 9px;
+  padding: 7px 9px;
+}
 .mode-pill {
   font-size: 10px;
   padding: 3px 8px;
@@ -679,7 +698,6 @@ let benchmarkFilter = '';
 let benchmarkSort = 'gold';
 
 const HUNTS_CATALOG = [
-  { id: 'auto', name: '🤖 AUTOMÁTICO (IA decide por maior lucro/segurança)', min: 0 },
   { id: 'troll-cave', name: 'Troll Cave (Lvl 1+)', min: 1 },
   { id: 'elf-lair', name: 'Elf (Lvl 8+)', min: 8 },
   { id: 'amazon-camp', name: 'Amazon (Lvl 9+)', min: 9 },
@@ -880,21 +898,34 @@ function parseHuntMetric(value) {
 }
 
 function huntMetricValue(status, huntId, category) {
-  const records = [
-    status?.hunt_metrics?.[huntId],
-    status?.hunt_matrix?.[huntId],
-    status?.benchmarks?.[huntId],
-  ].filter(Boolean);
+  const sources = [];
+  if (status) sources.push(status);
+  // Inclui também os dados coletados pela frota inteira se disponíveis
+  const allBots = window.latestFleetData?.bots || {};
+  for (const b of Object.values(allBots)) {
+    if (b?.status && b.status !== status) sources.push(b.status);
+  }
+
   const keys = category === 'xp'
     ? ['xpPerHour', 'xp_per_hour', 'avg_xp_h', 'xp_h', 'xp_h_display']
     : ['lootGoldPerHour', 'loot_per_hour', 'avg_loot_h', 'avg_gold_h', 'gold_per_hour', 'netGoldPerHour'];
-  for (const record of records) {
-    for (const key of keys) {
-      const value = parseHuntMetric(record[key]);
-      if (value > 0) return value;
+
+  let best = 0;
+  for (const s of sources) {
+    const records = [
+      s?.hunt_metrics?.[huntId],
+      s?.hunt_matrix?.[huntId],
+      s?.benchmarks?.[huntId],
+    ].filter(Boolean);
+
+    for (const record of records) {
+      for (const key of keys) {
+        const val = parseHuntMetric(record[key]);
+        if (val > best) best = val;
+      }
     }
   }
-  return 0;
+  return best;
 }
 
 function huntMetricLabel(value, category) {
@@ -902,22 +933,39 @@ function huntMetricLabel(value, category) {
   return category === 'xp' ? `${formatXp(value)}/h` : `${formatGold(value)}/h`;
 }
 
+function huntStageInfo(status) {
+  const raw = String(status?.hunt || status?.last_hunt || '');
+  const label = status?.hunt_stage_label || raw.match(/(\d+)\s*\/\s*(\d+)\s*$/)?.slice(1).join('/') || '';
+  const match = label.match(/^(\d+)\s*\/\s*(\d+)$/);
+  return { raw, label: match ? `${match[1]}/${match[2]}` : '' };
+}
+
+function huntNameWithoutStage(value) {
+  const name = String(value || '—').replace(/\s+\d+\s*\/\s*\d+\s*$/, '').trim();
+  return name || '—';
+}
+
 function renderHuntOptions(currentHuntId, isForced, botId, status, category) {
-  const selected = pendingHuntSelections[botId] ?? (isForced ? currentHuntId : 'auto');
-  const ranked = HUNTS_CATALOG.map((h, index) => ({
+  const selected = pendingHuntSelections[botId] ?? currentHuntId ?? '';
+  const ranked = HUNTS_CATALOG.filter(h => h.id !== 'auto').map((h, index) => ({
     h,
     index,
-    metric: h.id === 'auto' ? 0 : huntMetricValue(status, h.id, category),
+    metric: huntMetricValue(status, h.id, category),
   })).sort((a, b) => {
-    if (a.h.id === 'auto') return -1;
-    if (b.h.id === 'auto') return 1;
     if (a.metric !== b.metric) return b.metric - a.metric;
     return a.index - b.index;
   });
+
+  let rankPosition = 1;
   return ranked.map(({ h, metric }) => {
-    const isSel = (selected === h.id || (!isForced && selected === 'auto' && h.id === 'auto')) ? 'selected' : '';
-    const suffix = h.id === 'auto' ? '' : ` · ${huntMetricLabel(metric, category)}`;
-    return `<option value="${h.id}" ${isSel}>${esc(h.name + suffix)}</option>`;
+    const isSel = selected === h.id ? 'selected' : '';
+    let prefix = '';
+    if (metric > 0) {
+      prefix = `#${rankPosition} `;
+      rankPosition++;
+    }
+    const suffix = ` · ${huntMetricLabel(metric, category)}`;
+    return `<option value="${h.id}" ${isSel}>${esc(prefix + h.name + suffix)}</option>`;
   }).join('');
 }
 
@@ -936,7 +984,7 @@ function renderHuntPicker(botId, status, isForced) {
       <select id="hunt-select-${botId}" class="hunt-select" aria-label="Escolher hunt por ${categoryLabel}" onchange="pendingHuntSelections['${botId}'] = this.value">${renderHuntOptions(status.last_hunt_id || status.force_hunt_id, isForced, botId, status, category)}</select>
       <button class="btn-hunt" id="btn-hunt-${botId}" onclick="changeHunt('${botId}')">Mudar Hunt</button>
     </div>
-    <div class="hunt-picker-note">Lista ordenada por ${categoryLabel}; hunts sem telemetria ficam no final.</div>
+    <div class="hunt-picker-note">Lista ordenada por ${categoryLabel}. A troca só acontece após finalizar o estágio atual.</div>
   </div>`;
 }
 
@@ -951,22 +999,26 @@ function setHuntCategory(botId, category) {
 }
 
 function huntSection(id, s, decision, isForced) {
-  const huntName = esc(s.hunt || s.last_hunt || '—');
-  const mode = isForced ? '🔒 HUNT FIXADA' : '🤖 IA AUTOMÁTICA';
+  const stage = huntStageInfo(s);
+  const huntName = esc(huntNameWithoutStage(stage.raw || s.last_hunt || s.hunt || '—'));
+  const mode = isForced ? '🎮 ESCOLHA MANUAL' : '🎮 ÚLTIMA HUNT';
+  const stageBadge = stage.label ? `<span class="hunt-stage">ESTÁGIO ${esc(stage.label)}</span>` : '';
+  const pending = s.pending_hunt_id ? `<div class="hunt-pending">⏳ Troca solicitada para <b>${esc(s.pending_hunt_name || s.pending_hunt_id)}</b>. A hunt atual será finalizada antes da troca.</div>` : '';
   if (PUBLIC_MODE) {
     return `<div class="hunt-section hunt-readonly">
-      <div><div class="hunt-label">HUNT ATIVA</div><div class="hunt-curr-name">${huntName}</div></div>
+      <div><div class="hunt-label">HUNT ATIVA</div><div class="hunt-curr-info"><div class="hunt-curr-name">${huntName}</div>${stageBadge}</div>${pending}</div>
       <div><span class="mode-pill ${isForced ? 'forced' : 'auto'}">${mode}</span><small>${esc(decision.reason || 'Telemetria em modo leitura')}</small></div>
     </div>`;
   }
   return `<div class="hunt-section">
     <div class="hunt-top-bar">
-      <div class="hunt-curr-info"><span style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;">HUNT ATIVA:</span><span class="hunt-curr-name">${huntName}</span></div>
+      <div class="hunt-curr-info"><span style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;">HUNT ATIVA:</span><span class="hunt-curr-name">${huntName}</span>${stageBadge}</div>
       <span class="mode-pill ${isForced ? 'forced' : 'auto'}">${mode}</span>
     </div>
     ${renderHuntPicker(id, s, isForced)}
+    ${pending}
     <span class="hunt-msg" id="hunt-msg-${id}"></span>
-    <div style="color:var(--muted);font-size:10px;margin-top:2px;">${esc(decision.reason || 'IA operando normalmente')}</div>
+    <div style="color:var(--muted);font-size:10px;margin-top:2px;">${esc(decision.reason || 'Escolha manual ativa')}</div>
   </div>`;
 }
 
@@ -1289,13 +1341,13 @@ async function changeHunt(botId) {
       body: JSON.stringify({
         bot: botId,
         hunt_id: huntId,
-        auto: huntId === 'auto'
+        auto: false
       })
     });
 
     const data = await res.json();
     if (data.ok) {
-      msg.className = 'hunt-msg ok';
+      msg.className = data.pending ? 'hunt-msg busy' : 'hunt-msg ok';
       msg.textContent = '✅ ' + (data.message || 'Comando executado! O bot trocará de hunt em instantes.');
       pendingHuntSelections[botId] = huntId;
       setTimeout(update, 1200);
