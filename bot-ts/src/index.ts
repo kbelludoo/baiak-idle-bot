@@ -1794,11 +1794,23 @@ async function main() {
           lastJevRecommendationTs = now;
           const mapSnap = protocolMapper.snapshot();
           const currentHId = matchHunt(wave)?.id || matchHunt(telemetry.hunt)?.id || manualHuntId || 'glooth-cave';
-          const unlockedList = (mapSnap.unlockedHunts?.length ? mapSnap.unlockedHunts : HUNTS_TABLE).map((h: any) => ({
-            id: h.id,
-            name: h.name,
-            minLevel: h.minLevel || 1,
-          }));
+          const rawUnlocked = mapSnap.unlockedHunts?.length ? mapSnap.unlockedHunts : HUNTS_TABLE;
+          const unlockedList = rawUnlocked.map((item: any) => {
+            if (typeof item === 'string') {
+              const matched = matchHunt(item);
+              return {
+                id: matched?.id || item,
+                name: matched?.name || item,
+                minLevel: matched?.min || 1,
+              };
+            }
+            const matched = matchHunt(item.id) || matchHunt(item.name);
+            return {
+              id: item.id || matched?.id || 'unknown',
+              name: item.name || matched?.name || item.id,
+              minLevel: item.minLevel ?? item.min ?? matched?.min ?? 1,
+            };
+          });
           jev.evaluateHuntRecommendation({
             level: telemetry.level,
             vocation: (telemetry as any).vocation || 'Knight',

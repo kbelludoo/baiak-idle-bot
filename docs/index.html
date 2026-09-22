@@ -428,6 +428,97 @@ body {
 }
 .hunt-readonly small { color: var(--muted); }
 
+/* JEV AI RECOMMENDATION CARD */
+.jev-suggestion-card {
+  margin-top: 10px;
+  margin-bottom: 12px;
+  background: linear-gradient(135deg, rgba(88, 28, 135, 0.22) 0%, rgba(30, 27, 75, 0.45) 100%);
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  border-radius: 9px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  animation: jevGlow 4s ease-in-out infinite alternate;
+}
+@keyframes jevGlow {
+  0% { border-color: rgba(168, 85, 247, 0.3); }
+  100% { border-color: rgba(192, 132, 252, 0.6); box-shadow: 0 0 12px rgba(168, 85, 247, 0.2); }
+}
+.jev-sug-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.jev-sug-badge {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #d8b4fe;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.jev-sug-conf {
+  font-size: 10px;
+  font-weight: 700;
+  color: #a7f3d0;
+  background: rgba(6, 78, 59, 0.5);
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  border-radius: 5px;
+  padding: 2px 6px;
+}
+.jev-sug-body {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.jev-sug-name {
+  font-size: 14px;
+  font-weight: 800;
+  color: #f3e8ff;
+}
+.jev-sug-rationale {
+  font-size: 11px;
+  color: #c4b5fd;
+  font-style: italic;
+}
+.btn-jev-apply {
+  align-self: flex-start;
+  margin-top: 4px;
+  background: rgba(126, 34, 206, 0.4);
+  border: 1px solid #a855f7;
+  color: #faf5ff;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all .15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.btn-jev-apply:hover {
+  background: #9333ea;
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.5);
+  transform: translateY(-1px);
+}
+.btn-jev-apply:active {
+  transform: translateY(0);
+}
+.highlight-pulse {
+  animation: pulseBorder 1.2s ease-out;
+}
+@keyframes pulseBorder {
+  0% { border-color: #a855f7; box-shadow: 0 0 14px #a855f7; }
+  100% { border-color: var(--line-light); box-shadow: none; }
+}
+
 /* GRID DE MÉTRICAS PRINCIPAIS */
 .metrics {
   display: grid;
@@ -1006,6 +1097,33 @@ function setHuntCategory(botId, category) {
   picker.outerHTML = renderHuntPicker(botId, status, Boolean(status.force_hunt && status.force_hunt_id));
 }
 
+function applyJevHunt(botId, huntId) {
+  const sel = document.getElementById('hunt-select-' + botId);
+  if (!sel) return;
+  let targetVal = huntId;
+  let matched = Array.from(sel.options).find(o => o.value === targetVal);
+  if (!matched) {
+    matched = Array.from(sel.options).find(o => o.value.includes(huntId) || huntId.includes(o.value));
+    if (matched) targetVal = matched.value;
+  }
+  if (matched) {
+    sel.value = targetVal;
+    pendingHuntSelections[botId] = targetVal;
+    sel.classList.add('highlight-pulse');
+    setTimeout(() => sel.classList.remove('highlight-pulse'), 1200);
+    const msg = document.getElementById('hunt-msg-' + botId);
+    if (msg) {
+      msg.className = 'hunt-msg busy';
+      msg.textContent = '🎯 Sugestão da IA selecionada! Clique em "Mudar Hunt" para confirmar a troca.';
+      setTimeout(() => {
+        if (msg.textContent.includes('Sugestão')) msg.textContent = '';
+      }, 7000);
+    }
+    const btn = document.getElementById('btn-hunt-' + botId);
+    if (btn) btn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+}
+
 function huntSection(id, s, decision, isForced) {
   const stage = huntStageInfo(s);
   const huntName = esc(huntNameWithoutStage(stage.raw || s.last_hunt || s.hunt || '—'));
@@ -1015,10 +1133,41 @@ function huntSection(id, s, decision, isForced) {
     : (decision.reason || 'Telemetria em modo leitura');
   const stageBadge = stage.label ? `<span class="hunt-stage">ESTÁGIO ${esc(stage.label)}</span>` : '';
   const pending = s.pending_hunt_id ? `<div class="hunt-pending">⏳ Troca solicitada para <b>${esc(s.pending_hunt_name || s.pending_hunt_id)}</b>. A hunt atual será finalizada antes da troca.</div>` : '';
+
+  const jev = s.jev_recommendation;
+  let jevHtml = '';
+  if (jev && jev.recommendedHuntName) {
+    const recName = esc(jev.recommendedHuntName);
+    const recId = esc(jev.recommendedHuntId || '');
+    const conf = Math.round((Number(jev.confidence) || 0.85) * 100);
+    const rationale = esc(jev.rationale || 'Otimização algorítmica por nível e vocação');
+    const isCurrent = (s.selected_hunt_id && s.selected_hunt_id === recId) ||
+                      (s.last_hunt_id && s.last_hunt_id === recId) ||
+                      (s.force_hunt_id && s.force_hunt_id === recId);
+    const actionBtn = (!PUBLIC_MODE && recId && !isCurrent)
+      ? `<button type="button" class="btn-jev-apply" onclick="applyJevHunt('${id}', '${recId}')">🎯 Selecionar esta hunt</button>`
+      : (isCurrent ? `<span style="font-size:10px;color:#a7f3d0;font-weight:700;display:inline-flex;align-items:center;gap:4px;">✅ Hunt sugerida já em execução</span>` : '');
+
+    jevHtml = `<div class="jev-suggestion-card">
+      <div class="jev-sug-header">
+        <span class="jev-sug-badge">🧠 JEV AI SUGERE</span>
+        <span class="jev-sug-conf">${conf}% confiança</span>
+      </div>
+      <div class="jev-sug-body">
+        <span class="jev-sug-name">${recName}</span>
+        <span class="jev-sug-rationale">${rationale}</span>
+      </div>
+      ${actionBtn}
+    </div>`;
+  }
+
   if (PUBLIC_MODE) {
-    return `<div class="hunt-section hunt-readonly">
-      <div><div class="hunt-label">HUNT ATIVA</div><div class="hunt-curr-info"><div class="hunt-curr-name">${huntName}</div>${stageBadge}</div>${pending}</div>
-      <div><span class="mode-pill forced">${mode}</span><small>${esc(decisionText)}</small></div>
+    return `<div class="hunt-section">
+      <div class="hunt-readonly">
+        <div><div class="hunt-label">HUNT ATIVA</div><div class="hunt-curr-info"><div class="hunt-curr-name">${huntName}</div>${stageBadge}</div>${pending}</div>
+        <div><span class="mode-pill forced">${mode}</span><small>${esc(decisionText)}</small></div>
+      </div>
+      ${jevHtml}
     </div>`;
   }
   return `<div class="hunt-section">
@@ -1026,6 +1175,7 @@ function huntSection(id, s, decision, isForced) {
       <div class="hunt-curr-info"><span style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;">HUNT ATIVA:</span><span class="hunt-curr-name">${huntName}</span>${stageBadge}</div>
       <span class="mode-pill forced">${mode}</span>
     </div>
+    ${jevHtml}
     ${renderHuntPicker(id, s, isForced)}
     ${pending}
     <span class="hunt-msg" id="hunt-msg-${id}"></span>

@@ -539,7 +539,12 @@ export class JevEngine {
     advisoryOnly: true;
     source: 'jev_api' | 'fallback';
   }> {
-    const candidates = state.unlockedHunts.filter(h => h.minLevel <= state.level);
+    const normalizedHunts = state.unlockedHunts.map((h: any) => ({
+      id: h.id,
+      name: h.name || h.id,
+      minLevel: Number(h.minLevel ?? h.min ?? 1),
+    }));
+    const candidates = normalizedHunts.filter(h => h.minLevel <= state.level);
     const sorted = [...candidates].sort((a, b) => b.minLevel - a.minLevel);
     const fallbackHunt = sorted[0] || { id: state.currentHuntId, name: state.currentHuntId, minLevel: 1 };
 
@@ -555,7 +560,7 @@ export class JevEngine {
     if (!this.enabled || !this.apiKey || candidates.length <= 1) return fallbackResult;
 
     const criteriaDict: Record<string, string> = {};
-    for (const h of candidates.slice(0, 10)) {
+    for (const h of sorted.slice(0, 10)) {
       criteriaDict[h.id] = `${h.name} (Lvl ${h.minLevel}+)`;
     }
 

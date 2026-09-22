@@ -150,4 +150,25 @@ describe('JEV (TypeSafe AI Decision Engine)', () => {
     expect(rec.recommendedHuntId).toBe('glooth-cave');
     expect(rec.source).toBe('fallback');
   });
+
+  it('evaluateHuntRecommendation supports hunts table with min field', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const huntsWithMin = [
+      { id: 'troll-cave', name: 'Troll Cave', min: 1 },
+      { id: 'wyrm-cave', name: 'Wyrm', min: 130 },
+      { id: 'naga-lair', name: 'Naga Lair', min: 300 },
+    ];
+
+    const rec = await offlineEngine.evaluateHuntRecommendation({
+      level: 150,
+      vocation: 'Knight',
+      currentHuntId: 'troll-cave',
+      unlockedHunts: huntsWithMin as any,
+      recentDeaths: 0,
+    });
+
+    expect(rec.recommendedHuntId).toBe('wyrm-cave');
+    expect(rec.recommendedHuntName).toBe('Wyrm');
+    expect(rec.advisoryOnly).toBe(true);
+  });
 });

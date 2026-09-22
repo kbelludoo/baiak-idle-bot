@@ -303,6 +303,7 @@ function publicStatus(status: JsonRecord): JsonRecord {
     magic: status.magic || {},
     bag_slots: status.bag_slots || '',
     character: status.character || null,
+    jev_recommendation: status.jev_recommendation || null,
     sources: status.sources || {},
     last_update: status.last_update || null,
     last_update_ts: asNumber(status.last_update_ts) || null,
