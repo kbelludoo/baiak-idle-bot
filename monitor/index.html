@@ -1263,7 +1263,7 @@ function card(id, b) {
   // XP / hora da nova medição
   const rawXpRate = selected.xp_per_hour ?? an.xp_per_hour;
   const provisionalXpReady = !currentSampleReady && Number(parseHuntMetric(rawXpRate)) > 0
-    && (selected.source === 'matrix-observed' || selected.source === 'live-observed');
+    && (selected.source === 'matrix-observed' || selected.source === 'live-observed' || selected.source === 'profiler-live');
   let parsedXpRate = (currentSampleReady || provisionalXpReady) ? parseHuntMetric(rawXpRate) : 0;
   if (currentSampleReady && !(parsedXpRate > 0) && !hasSampleFlag) {
     parsedXpRate = liveXpPerHour || huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'xp');
@@ -1273,7 +1273,7 @@ function card(id, b) {
   // Loot / hora da nova medição
   const rawLootRate = selected.loot_per_hour ?? an.loot_per_hour;
   const provisionalLootReady = !currentSampleReady && Number(parseHuntMetric(rawLootRate)) > 0
-    && (selected.source === 'matrix-observed' || selected.source === 'live-observed');
+    && (selected.source === 'matrix-observed' || selected.source === 'live-observed' || selected.source === 'profiler-live');
   let parsedLootRate = (currentSampleReady || provisionalLootReady) ? parseHuntMetric(rawLootRate) : 0;
   if (currentSampleReady && !(parsedLootRate > 0) && !hasSampleFlag) {
     parsedLootRate = huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'loot');
