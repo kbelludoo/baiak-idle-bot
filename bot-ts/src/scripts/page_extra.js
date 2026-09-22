@@ -45,6 +45,7 @@ async ({ job, ...auctionCfg }) => {
       const error = item?.error?.json?.message || item?.error?.json?.data?.message ||
         item?.error?.message || item?.error?.data?.message ||
         (!response.ok ? rawText.slice(0, 240) : null);
+      if (!response.ok) console.warn(`[BOT TRPC] ${path} HTTP ${response.status}: ${String(error || rawText).slice(0, 240)}`);
       return { data: response.ok && !error ? unwrapTrpc(raw) : null, error, status: response.status };
     } catch (error) {
       return { data: null, error: String(error) };

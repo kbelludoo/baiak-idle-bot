@@ -378,7 +378,7 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
               buyDecision,
               goldToSell: scanRes.goldToSell,
               live: config.auctionLive,
-            }, 30000);
+            }, 60000);
             if (execRes?.events && Array.isArray(execRes.events)) {
               for (const ev of execRes.events) logs.push(`[AUCTION] ${ev}`);
             }
