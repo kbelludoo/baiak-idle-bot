@@ -469,16 +469,14 @@ export class JevEngine {
     source: 'jev_api' | 'fallback';
   }> {
     const validRates = state.currentMarketRates.filter(r => r > 0).sort((a, b) => a - b);
-    // Para vender pelo maior preço possível em coins, o rate (gold por coin) deve ser menor ou igual à mediana inferior
-    // Exemplo: se o mercado vende 5kk por coin (mediana), vender a 4kk por coin rende mais coins por gold!
     const medianRate = validRates.length ? validRates[Math.floor(validRates.length / 2)] : 5_000_000;
-    const premiumRate = medianRate * 0.85; // vende gold mais caro em coins
-    const calculatedCoins = Math.max(1, Math.round(state.goldToSell / premiumRate));
+    const competitiveCoins = Math.max(25, Math.round(state.goldToSell / medianRate));
+    const premiumCoins = Math.max(25, Math.round(state.goldToSell / (medianRate * 0.85)));
 
     const fallbackResult = {
-      shouldList: state.goldToSell >= 100_000_000,
-      targetPriceCoins: calculatedCoins,
-      reason: `Venda calculada: ${(state.goldToSell / 1_000_000).toFixed(0)}kk por ${calculatedCoins} coins`,
+      shouldList: state.goldToSell >= 25_000_000,
+      targetPriceCoins: competitiveCoins,
+      reason: `Venda calculada: ${(state.goldToSell / 1_000_000).toFixed(0)}kk por ${competitiveCoins} coins`,
       source: 'fallback' as const,
     };
 
@@ -488,12 +486,17 @@ export class JevEngine {
       state: {
         gold_to_sell: state.goldToSell,
         median_market_rate: medianRate,
-        calculated_price_coins: calculatedCoins,
+        premium_price_coins: premiumCoins,
+        competitive_price_coins: competitiveCoins,
       },
       questions: {
-        is_optimal_sell: {
+        can_sell_premium: {
           type: 'noul',
-          instructions: 'O preço sugerido em coins maximiza o retorno de coins sem ficar fora da liquidez do mercado?',
+          instructions: 'O mercado atual possui liquidez suficiente para absorver o lote pelo preço premium em coins?',
+        },
+        should_list_now: {
+          type: 'noul',
+          instructions: 'É vantajoso para o jogador colocar o lote de ouro à venda no leilão neste momento?',
         },
       },
     };
@@ -501,13 +504,16 @@ export class JevEngine {
     const res = await this.systemOne(req);
     if (!res.ok) return fallbackResult;
 
-    const prob = res.answers?.is_optimal_sell?.noul;
-    const shouldList = typeof prob === 'number' ? (prob > 0.50 && fallbackResult.shouldList) : fallbackResult.shouldList;
+    const premiumProb = res.answers?.can_sell_premium?.noul ?? 0;
+    const listProb = res.answers?.should_list_now?.noul ?? 0.8;
+
+    const chosenCoins = premiumProb > 0.55 ? premiumCoins : competitiveCoins;
+    const shouldList = listProb > 0.35 && state.goldToSell >= 25_000_000;
 
     return {
       shouldList,
-      targetPriceCoins: calculatedCoins,
-      reason: `JEV sell listing: ${shouldList ? 'Anunciar' : 'Aguardar'} ${(state.goldToSell / 1_000_000).toFixed(0)}kk por ${calculatedCoins} coins`,
+      targetPriceCoins: chosenCoins,
+      reason: `JEV sell listing: ${shouldList ? 'Anunciar' : 'Aguardar'} ${(state.goldToSell / 1_000_000).toFixed(0)}kk por ${chosenCoins} coins (liq_prem=${premiumProb.toFixed(2)}, list=${listProb.toFixed(2)})`,
       source: 'jev_api',
     };
   }

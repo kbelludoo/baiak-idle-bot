@@ -44,9 +44,10 @@ const FAST_STATE_JS = `() => {
     else if (unit === "k" || unit === "mil") num *= 1000;
     return Math.round(num);
   };
-  const normStam = (s) => {
+  const normStam = (s, allowFull = false) => {
     const t = String(s || "").trim();
     if (!t) return null;
+    if (allowFull && /(?:^|\\D)(?:42\\s*:\\s*00(?:\\s*:\\s*00)?|2520(?:\\s*min)?|100\\s*%)(?=\\D|$)/i.test(t)) return "100%";
     const pct = t.match(/(\\d{1,3})\\s*%/);
     if (pct) return pct[1] + "%";
     const clock = t.match(/(\\d{1,2})\\s*:\\s*(\\d{2})/);
@@ -102,6 +103,7 @@ const FAST_STATE_JS = `() => {
     const tm = (document.title || "").match(/·\\s*(.*?)\\s*—/);
     if (tm && tm[1]) wave = tm[1].trim();
   }
+  const trainingView = inTraining || /treino|online training|exercise|dummy/i.test(String(wave || ""));
 
   // Party e Nível — seletores tolerantes a rename de build + espelhos do kernel
   let shooters = Array.from(document.querySelectorAll("#bar-shooters .bar-member")).map((el, slot) => ({
@@ -209,31 +211,31 @@ const FAST_STATE_JS = `() => {
 
   // Stamina — relógio, Xh Ym, % e tooltip; placeholder 42:00 = desconhecido
   // Ordem: IDs conhecidos -> espelhos kernel -> varredura genérica stamina.
-  let stamina = normStam(text(document.getElementById("stamina-time") || document.querySelector(".stamina-time, .stamina-val, #stamina-val, [data-stamina], .hud-stamina, #stamina-panel, .stamina-panel")));
+  let stamina = normStam(text(document.getElementById("stamina-time") || document.querySelector(".stamina-time, .stamina-val, #stamina-val, [data-stamina], .hud-stamina, #stamina-panel, .stamina-panel")), trainingView);
   if (!stamina) {
     const panel = document.getElementById("stamina-panel");
-    stamina = normStam(panel?.textContent || "") || normStam(panel?.getAttribute("title") || "");
+    stamina = normStam(panel?.textContent || "", trainingView) || normStam(panel?.getAttribute("title") || "", trainingView);
   }
   if (!stamina) {
     try {
       const w = window;
       const ms = w.__baiak_telemetry?.stamina || w.__baiak_engine?.state?.stamina || w.__baiak_state?.stamina;
-      stamina = normStam(ms || "");
+      stamina = normStam(ms || "", trainingView);
     } catch (_) {}
   }
   if (!stamina) {
     const genericS = document.querySelectorAll("[class*='stamina' i], [id*='stamina' i]");
     for (const sEl of Array.from(genericS).slice(0, 10)) {
-      const cand = normStam(text(sEl)) || normStam(sEl.getAttribute && (sEl.getAttribute("title") || sEl.getAttribute("data-tip") || ""));
+      const cand = normStam(text(sEl), trainingView) || normStam(sEl.getAttribute && (sEl.getAttribute("title") || sEl.getAttribute("data-tip") || ""), trainingView);
       if (cand) { stamina = cand; break; }
     }
   }
-  let staminaPct = normStam(text(document.getElementById("stamina-pct") || document.querySelector(".stamina-pct")));
+  let staminaPct = normStam(text(document.getElementById("stamina-pct") || document.querySelector(".stamina-pct")), trainingView);
   if (!staminaPct) {
     const bTip = document.querySelector("button[title*='stamina' i], [data-tip*='stamina' i], [aria-label*='stamina' i]");
     if (bTip) {
       const tip = bTip.getAttribute("title") || bTip.getAttribute("data-tip") || bTip.getAttribute("aria-label") || bTip.textContent || "";
-      const cand = normStam(tip);
+      const cand = normStam(tip, trainingView);
       if (cand) { if (/%$/.test(cand)) staminaPct = cand; else if (!stamina) stamina = cand; }
     }
   }
@@ -1121,6 +1123,11 @@ async function main() {
     } catch (_) {}
     needsHuntEntry = true;
     lastHuntAttempt = 0;
+    if (telemetry.inTreino) {
+      telemetry.inTreino = false;
+      subsystems.auto_treino = { status: "FUNCIONAL", detail: "Comando manual do operador — saindo do treino" };
+      sendStage(pageRef, target.id).catch(() => null);
+    }
     spellSlotCooldown.clear();
     lastSpellGear = 0;
     const optimal = getOptimalSpellRotation(target.id);
@@ -1185,7 +1192,7 @@ async function main() {
       const targetName = matched?.name || huntId;
       const activeId = matchHunt(telemetry.hunt)?.id || authoritativeHuntId || manualHuntId || (profiler as any).activeHuntId || null;
       const alreadyPending = pendingHuntChange?.id === targetId;
-      if (activeId === targetId && !pendingHuntChange) {
+      if (activeId === targetId && !pendingHuntChange && !telemetry.inTreino) {
         return { ok: true, message: `${targetName} já é a hunt ativa.` };
       }
 
@@ -1201,25 +1208,13 @@ async function main() {
         requestedAt: new Date().toISOString(),
       };
 
-      // A troca escolhida no painel não interrompe a hunt atual. Mantemos o
-      // alvo pendente até a sala chegar ao fim da etapa ou retornar à cidade;
-      // ativar o novo alvo aqui fazia o bot disputar a retomada automática da
-      // sala antiga durante um reconnect (ex.: Glooth solicitado, Dragon Lair
-      // ainda ativo).
-      if (!huntFinishedForSwitch()) {
-        pendingHuntChange = request;
-        writeStatusFile();
-        return {
-          ok: true,
-          message: `Hunt ${targetName} ficará na fila e será iniciada após finalizar a hunt atual.`,
-          pending: true,
-        };
-      }
-
+      // Quando o operador escolhe uma hunt no painel web, o comando tem prioridade máxima.
+      // Ativa imediatamente e encerra qualquer estado de treino bloqueante.
+      telemetry.inTreino = false;
       pendingHuntChange = null;
       activateManualHunt(request);
       writeStatusFile();
-      return { ok: true, message: `Hunt ${targetName} será iniciada agora.`, pending: false };
+      return { ok: true, message: `Hunt ${targetName} iniciada com sucesso.`, pending: false };
     },
     dataDir,
   });
@@ -1598,12 +1593,12 @@ async function main() {
           }
         }
 
-        // HUD completo (spells/helpers/analyzers) — cadência a cada 15s sem travar loop
+        // HUD completo (spells/helpers/analyzers) — cadência suave (45s) sem travar o loop
         let hud: any = cachedHud;
-        if (now >= preTeleportSilencedUntil && now - lastHudCheck >= (magicState.power > 0 ? 15000 : 60000)) {
+        if (now >= preTeleportSilencedUntil && now - lastHudCheck >= (magicState.power > 0 ? 45000 : 75000)) {
           lastHudCheck = now;
           try {
-            cachedHud = await safeEval<any>(pageRef, "hud", null, 8000) || cachedHud;
+            cachedHud = await safeEval<any>(pageRef, "hud", null, 15000) || cachedHud;
             hud = cachedHud;
             if (hud.level) telemetry.updateLevel(hud.level, "dom");
             if (hud.gold !== undefined && hud.gold !== null) telemetry.updateGold(hud.gold, "dom");
@@ -1744,30 +1739,34 @@ async function main() {
         const forceId = manualHuntId || "";
         const liveId = !isCity ? ((profiler as any).activeHuntId || null) : null;
         const gameReady = watchdog.isConnected() || matchHunt(wave) !== null || telemetry.kills > 0;
+        // Em alguns frames do VPS o overlay do treino some antes de a
+        // telemetria atualizar `inTreino`. O nome da wave ainda é a fonte
+        // correta nesse intervalo; não deixe esse frame bloquear a retomada.
+        const trainingActive = telemetry.inTreino || looksLikeTreino(wave);
         let shouldEnter = false;
         let reason = forceId ? `FORCE_HUNT=${forceId}` : 'Escolha manual aguardando alvo';
+        const stamTransition = evaluateStaminaTransition(telemetry.stamina, trainingActive, config.autoTreino);
         if (!gameReady) shouldEnter = false;
-        if (telemetry.inTreino || !config.autoHunt) shouldEnter = false;
+        if ((trainingActive && stamTransition.action !== "resume_hunt") || !config.autoHunt) shouldEnter = false;
 
-        // FORCE_HUNT is an explicit operator command. Do not let an incomplete
-        // profiler/session state suppress it after reconnect or initial boot,
-        // mas NUNCA dispare entrada de hunt se estiver em treino ou com stamina <= 15%.
+        // FORCE_HUNT é ordem explícita do operador. Se forceId estiver definido,
+        // ele tem prioridade sobre o treino para garantir que comandos manuais da Web sejam atendidos.
         let forceNeedsEntry = false;
-        if (forceId && !telemetry.inTreino && stamTransition.action !== "enter_treino") {
+        if (forceId) {
           const current = String(wave || '').toLowerCase().replace(/[-\s]/g, '');
           const target = String(forceId).toLowerCase().replace(/[-\s]/g, '');
           const currentHunt = matchHunt(wave) || matchHunt(telemetry.hunt);
-          const atTarget = !isCity && ((current && (current.includes(target) || target.includes(current))) || currentHunt?.id === forceId);
-          if (!atTarget) {
+          const atTarget = !isCity && !trainingActive && ((current && (current.includes(target) || target.includes(current))) || currentHunt?.id === forceId);
+          if (!atTarget || trainingActive) {
             shouldEnter = true;
             needsHuntEntry = true;
             forceNeedsEntry = true;
-            reason = isCity ? `cidade/templo → FORCE_HUNT=${forceId}` : `FORCE_HUNT=${forceId}`;
+            reason = isCity ? `cidade/templo → FORCE_HUNT=${forceId}` : (trainingActive ? `treino → FORCE_HUNT=${forceId}` : `FORCE_HUNT=${forceId}`);
           }
         }
         if (forceId && now - lastForceDebug > 30000) {
           lastForceDebug = now;
-          console.log(`[${new Date().toLocaleTimeString()}] [FORCE DEBUG] current=${wave} target=${forceId} gameReady=${gameReady} city=${isCity} treino=${telemetry.inTreino} enter=${shouldEnter} needs=${needsHuntEntry} queue=${actionQueue.pendingCount} currentAction=${actionQueue.currentAction || '-'}`);
+          console.log(`[${new Date().toLocaleTimeString()}] [FORCE DEBUG] current=${wave} target=${forceId} gameReady=${gameReady} city=${isCity} treino=${trainingActive} enter=${shouldEnter} needs=${needsHuntEntry} queue=${actionQueue.pendingCount} currentAction=${actionQueue.currentAction || '-'}`);
         }
 
         // JEV: Recomendação Analítica de Hunt (Apenas Telemetria / Advisory)
@@ -1796,7 +1795,6 @@ async function main() {
         }
 
         // Transição de Stamina e Treino
-        const stamTransition = evaluateStaminaTransition(telemetry.stamina, telemetry.inTreino, config.autoTreino);
         // O tRPC pode entregar a stamina baixa antes de o WebSocket/teleporte
         // estar pronto. Não tente abrir o menu nesse intervalo: o botão de
         // Treino Online ainda não existe e a ação expira inutilmente.
@@ -1834,25 +1832,35 @@ async function main() {
             }
           });
           if (!queuedHunt) console.log(`[${new Date().toLocaleTimeString()}] [HUNT] ação já estava na fila: ${forceId || 'resume'}`);
-        } else if (stamTransition.action === "resume_hunt" && telemetry.inTreino) {
+        } else if (stamTransition.action === "resume_hunt" && trainingActive) {
           lastTreinoTime = now;
+          // Se a seleção manual ainda não foi persistida, retome a última
+          // hunt realmente jogada pelo profiler, em vez de cair sempre em
+          // Asura Lair.
+          const resumeTargetId = forceId || matchHunt(telemetry.hunt)?.id || (profiler as any).lastPlayedId || "asura-lair";
           actionQueue.enqueue({
             id: "resume-treino",
             name: "treino",
             priority: 10,
-            timeoutMs: 12000,
+            timeoutMs: 15000,
             run: async () => {
               try {
-                console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] Stamina recuperou (${telemetry.stamina}) — abrindo Hunts para retomar`);
-                const tr = await safeEval<any>(pageRef, "treino", { want: "resume" }, 10000);
-                if (tr?.events?.length) for (const ev of tr.events) console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] ${ev}`);
-                if (tr?.ok && (tr.action === "retomando_hunts" || tr.inTreino === false)) {
-                  telemetry.inTreino = false;
-                  needsHuntEntry = true;
-                  subsystems.auto_treino = { status: "FUNCIONAL", detail: "Stamina recuperou — retomando hunts" };
-                } else if (!tr) {
-                  console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [TREINO] não foi possível confirmar a saída do treino; mantendo Treino Online`);
+                console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] Stamina recuperou (${telemetry.stamina}) — saindo do treino para ${resumeTargetId}...`);
+                let entered = false;
+                if (resumeTargetId) {
+                  const sent = await sendStage(pageRef, resumeTargetId);
+                  if (sent) {
+                    console.log(`[${new Date().toLocaleTimeString()}] 🏹 [STAGE-RESUME] send("stage",{huntId:${resumeTargetId}}) aceito`);
+                    entered = true;
+                  }
                 }
+                if (!entered) {
+                  const tr = await safeEval<any>(pageRef, "treino", { want: "resume" }, 10000);
+                  if (tr?.events?.length) for (const ev of tr.events) console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] ${ev}`);
+                }
+                telemetry.inTreino = false;
+                needsHuntEntry = true;
+                subsystems.auto_treino = { status: "FUNCIONAL", detail: "Stamina recuperou — retornando às hunts" };
               } finally {
                 await closeStuckModals();
               }
@@ -1860,16 +1868,18 @@ async function main() {
           });
         }
 
-        // Fila de Ação: Seleção / Retorno de Hunt (Prioridade 10). Uma ação
-        // force-hunt já pendente bloqueia a ação genérica; sem este guarda as
-        // duas podiam enviar `stage` para a mesma reserva e reiniciar a wave.
+        // Fila de Ação: Seleção / Retorno de Hunt (Prioridade 10).
+        if (pendingHuntChange) {
+          activateManualHunt(pendingHuntChange);
+          pendingHuntChange = null;
+          writeStatusFile();
+        }
         const huntActionPending = actionQueue.pendingByLane.hunt > 0;
-        const waitingManualHunt = Boolean(pendingHuntChange) && !huntFinishedForSwitch();
-        // Stamina baixa é uma trava real: mesmo que o treino tenha expirado ou
-        // o renderer esteja congestionado, não retome a hunt até o Treino
-        // Online ser confirmado pela UI.
-        const staminaBlocksHunt = telemetry.stamina === "—" || stamTransition.action === "enter_treino" || telemetry.inTreino;
-        if (forceId && (shouldEnter || needsHuntEntry || forceNeedsEntry) && !staminaBlocksHunt && !waitingManualHunt && !telemetry.inTreino &&
+        const waitingManualHunt = false;
+        // Stamina baixa só bloqueia rotação automática, NUNCA a escolha direta do operador (forceNeedsEntry)
+        const staminaBlocksHunt = !forceNeedsEntry && (telemetry.stamina === "—" || stamTransition.action === "enter_treino" || (trainingActive && stamTransition.action !== "resume_hunt"));
+        if (forceId && (shouldEnter || needsHuntEntry || forceNeedsEntry) && !staminaBlocksHunt && !waitingManualHunt &&
+            (!trainingActive || stamTransition.action === "resume_hunt" || forceNeedsEntry) &&
             !huntActionPending && (now - lastHuntAttempt >= huntRetryDelayMs)) {
           lastHuntAttempt = now;
           const queuedTargetId = forceId;
@@ -1910,6 +1920,8 @@ async function main() {
               console.log(`[${new Date().toLocaleTimeString()}] 🏹 [RESULTADO TELEPORTE] ${JSON.stringify(huntRes)}`);
               if ((huntRes?.success || huntRes?.alreadyThere) && queuedRevision === huntSelectionRevision && queuedTargetId === manualHuntId) {
                 needsHuntEntry = false;
+                telemetry.inTreino = false;
+                subsystems.auto_treino = { status: "FUNCIONAL", detail: "Caçando normalmente" };
                 telemetry.updateHunt(huntRes.hunt || target.name || target.id, huntRes.method === 'room-send' ? 'websocket' : 'dom');
                 huntRetryDelayMs = 8000 + Math.random() * 6000;
               } else if (queuedRevision === huntSelectionRevision && queuedTargetId === manualHuntId) {
@@ -1926,11 +1938,11 @@ async function main() {
         const normalizedWave = String(wave || '').toLowerCase().replace(/[-\s]/g, '');
         const normalizedTarget = String(manualHuntId || '').toLowerCase().replace(/[-\s]/g, '');
         const currentHuntForCheck = matchHunt(wave) || matchHunt(telemetry.hunt);
-        const alreadyAtForcedHunt = !!forceTarget && (
+        const alreadyAtForcedHunt = !trainingActive && !isCity && !!forceTarget && (
           (currentHuntForCheck?.id === forceTarget) ||
           (normalizedWave && normalizedTarget && (normalizedWave.includes(normalizedTarget) || normalizedTarget.includes(normalizedWave)))
         );
-        if (isKnownHunt && !isCity && (!forceTarget || alreadyAtForcedHunt)) {
+        if (isKnownHunt && !isCity && !trainingActive && (!forceTarget || alreadyAtForcedHunt)) {
           needsHuntEntry = false;
         }
 
@@ -2140,23 +2152,15 @@ async function main() {
             }
           });
         } else if (magicState.power > 0 &&
-          // O HUD completo pode expirar enquanto a rotação continua visível.
-          // Não deixe isso impedir a primeira configuração do Helper: party
-          // incompleto é evidência suficiente para tentar a ação, e a fila
-          // serializada evita cliques concorrentes.
           (magicState.party_ready !== true || (telemetry as any).helperTriggerState?.run) &&
-          now - lastSpellGear >= 30000) {
+          now - lastSpellGear >= 180000) {
           lastSpellGear = now;
           lastHelperTrigger = now;
           actionQueue.enqueue({
             id: "spell_party",
             name: "spell",
-            priority: 3,
-            // Trocar o personagem dentro do Helper pode levar >15s no
-            // renderer SwiftShader. O envio de heartbeat/hunt é independente
-            // desta lane, então aguarde a configuração terminar em vez de
-            // abortar no meio e deixar o party incompleto.
-            timeoutMs: 90000,
+            priority: 2,
+            timeoutMs: 20000,
             run: async () => {
               try {
                 let slots = magicState.slots || {};
@@ -2173,7 +2177,7 @@ async function main() {
                     healBelowPct: config.healBelowPct,
                     hpPotionBelowPct: config.hpPotionBelowPct,
                     manaPotionBelowPct: config.manaPotionBelowPct,
-                  }, 80000);
+                  }, 12000);
                   applyHelperSnap(helperRes);
                   if (helperRes?.events?.length) console.log(`[${new Date().toLocaleTimeString()}] 🧪 [SPELL PARTY] ${JSON.stringify(helperRes.events)}`);
                   slots = magicState.slots || slots;
@@ -2184,12 +2188,10 @@ async function main() {
                   if (now - last < 600000) continue;
                   const kit = slots[String(sid)] || {};
                   if (kit.ready || (kit.empty || 0) <= 0) continue;
-                  const spellRes = await safeEval<any>(pageRef, "spell", { ...spellArgs, need: "aoe", job: "fill", slot: sid }, 20000);
+                  const spellRes = await safeEval<any>(pageRef, "spell", { ...spellArgs, need: "aoe", job: "fill", slot: sid }, 12000);
                   lastGearSlot = sid;
                   applyHelperSnap(spellRes);
                   if (spellRes && (spellRes.ok || spellRes.events)) {
-                    // Só resfrie quando uma magia foi realmente escolhida.
-                    // open-rot/picker-not-open apenas abriram ou falharam.
                     const configured = spellRes.ok && !["open-rot", "picker-not-open", "no-use"].includes(String(spellRes.method || spellRes.reason || ""));
                     if (configured) spellSlotCooldown.set(sid, Date.now());
                     console.log(`[${new Date().toLocaleTimeString()}] 🔮 [GEAR slot${sid}] ${JSON.stringify(spellRes.events || spellRes)}`);
@@ -2197,6 +2199,7 @@ async function main() {
                   }
                 }
               } finally {
+                lastSpellGear = Date.now();
                 await closeStuckModals();
               }
             }
@@ -2204,7 +2207,7 @@ async function main() {
         }
 
         // Fila de Ação: Auto-Potion (Prioridade 2)
-        if (config.autoHeal && domAutomationReady && !telemetry.inTreino && !lastPickerOpen && (now - lastPotionCheck >= 60000 || needPotionCheck)) {
+        if (config.autoHeal && domAutomationReady && !telemetry.inTreino && !lastPickerOpen && (now - lastPotionCheck >= 240000 || needPotionCheck)) {
           needPotionCheck = false;
           lastPotionCheck = now;
           actionQueue.enqueue({
@@ -2224,6 +2227,7 @@ async function main() {
                   for (const ev of potRes.events) console.log(`[${new Date().toLocaleTimeString()}] 🧪 [POTION/CURA] ${ev}`);
                 }
               } finally {
+                lastPotionCheck = Date.now();
                 await closeStuckModals();
               }
             }
@@ -2231,13 +2235,13 @@ async function main() {
         }
 
         // Fila de Ação: Auto-Equip (Prioridade 1)
-        if (config.autoEquip && domAutomationReady && !telemetry.inTreino && !lastPickerOpen && (now - lastEquipCheck >= 30000)) {
+        if (config.autoEquip && domAutomationReady && !telemetry.inTreino && !lastPickerOpen && (now - lastEquipCheck >= 75000)) {
           lastEquipCheck = now;
           actionQueue.enqueue({
             id: "equip",
             name: "equip",
             priority: 1,
-            timeoutMs: 15000,
+            timeoutMs: 20000,
             run: async () => {
               try {
                 const combatElements = Object.entries(protocolMapper.snapshot().combat?.byElement || {})
@@ -2247,7 +2251,7 @@ async function main() {
                 const eqRes = await safeEval<any>(pageRef, "equip", {
                   preferredElement: observedElement,
                   preferredProtection: observedElement,
-                }, 12000);
+                }, 16000);
                 if (eqRes?.events?.length) {
                   for (const ev of eqRes.events) console.log(`[${new Date().toLocaleTimeString()}] 🛡️ [AUTO-EQUIP] ${ev}`);
                 }
@@ -2260,20 +2264,21 @@ async function main() {
                   };
                 }
               } finally {
+                lastEquipCheck = Date.now();
                 await closeStuckModals();
               }
             }
           });
         }
 
-        // Fila de Ação: Extras (Prioridade 1)
+        // Fila de Ação: Extras (Prioridade 2)
         if (domAutomationReady && now - lastTreinoCheck >= 20000) {
           lastTreinoCheck = now;
           actionQueue.enqueue({
             id: "extras",
             name: "extras",
-            priority: 1,
-            timeoutMs: 12000,
+            priority: 2,
+            timeoutMs: 50000,
             run: async () => {
               try {
                 const extraLogs = await extrasScheduler.tick(
@@ -2283,7 +2288,7 @@ async function main() {
                   telemetry.inTreino,
                   jev,
                   telemetry.gold,
-                  telemetry.marketCoins
+                  telemetry.coins
                 );
                 for (const log of extraLogs) console.log(`[${new Date().toLocaleTimeString()}] ⚡ ${log}`);
               } finally {

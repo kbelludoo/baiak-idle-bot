@@ -158,7 +158,9 @@ export function parseConfig(): BotConfig {
     reduceVfx: has('--no-reduce-vfx') ? false : envFlag('REDUCE_VFX', true),
     chromeGl: getVal('--chrome-gl', env.CHROME_GL || 'swiftshader').toLowerCase(),
     auctionEnabled: has('--no-auction') ? false : envFlag('AUCTION_ENABLED', true),
-    auctionLive: has('--auction-live') || envFlag('AUCTION_LIVE', false),
+    // O modo ao vivo é o comportamento esperado do bot de arbitragem. Use
+    // --no-auction/AUCTION_ENABLED=false para desligá-lo explicitamente.
+    auctionLive: has('--auction-live') || envFlag('AUCTION_LIVE', true),
     auctionBudget: parseInt(getVal('--auction-budget', env.AUCTION_BUDGET || '100'), 10),
     auctionMinMarginPct: parseInt(getVal('--auction-margin', env.AUCTION_MARGIN || '20'), 10),
     auctionMaxItems: parseInt(getVal('--auction-max-items', env.AUCTION_MAX_ITEMS || '2'), 10),

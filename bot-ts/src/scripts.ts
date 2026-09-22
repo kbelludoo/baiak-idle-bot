@@ -41,11 +41,24 @@ export async function safeEval<T = any>(
   page: Page | null,
   name: string,
   arg: any = null,
-  timeoutMs: number = 12000
+  timeoutMs: number = 20000
 ): Promise<T | null> {
   if (!page) return null;
   const pageObject = page as unknown as object;
-  if (ACTIVE_EVAL_PAGES.has(pageObject)) return null;
+
+  // Se já houver um evaluate em andamento na página, aguarde até 6s para ele liberar
+  if (ACTIVE_EVAL_PAGES.has(pageObject)) {
+    const existing = ACTIVE_EVAL_PAGES.get(pageObject);
+    if (existing) {
+      try {
+        await Promise.race([
+          existing,
+          new Promise((r) => setTimeout(r, 6000))
+        ]);
+      } catch (_) {}
+    }
+  }
+
   const js = loadScript(name);
   if (!js) return null;
 
@@ -71,6 +84,7 @@ export async function safeEval<T = any>(
       arg,
       timeoutMs
     ) as Promise<T>;
+
     let trackedEvaluate: Promise<T>;
     trackedEvaluate = evaluatePromise.finally(() => {
       if (ACTIVE_EVAL_PAGES.get(pageObject) === trackedEvaluate) {
@@ -78,17 +92,16 @@ export async function safeEval<T = any>(
       }
     });
     ACTIVE_EVAL_PAGES.set(pageObject, trackedEvaluate);
-    // Puppeteer pode ficar aguardando a resposta CDP quando o renderer está
-    // saturado; o timeout acima vive dentro da página e não cobre essa fila.
-    // Este segundo limite garante que nenhuma ação prenda o loop/sonda para
-    // sempre. O +1s deixa o timeout da página retornar a razão mais precisa
-    // quando o renderer ainda está respondendo.
+
     const result = await Promise.race([
       trackedEvaluate,
-      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`outer_timeout_${Math.ceil((timeoutMs + 1000) / 1000)}s`)), timeoutMs + 1000)),
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(`outer_timeout_${Math.ceil((timeoutMs + 2000) / 1000)}s`)), timeoutMs + 2000)
+      ),
     ]);
     return result;
   } catch (err: any) {
+    ACTIVE_EVAL_PAGES.delete(pageObject);
     if (!err?.message?.includes('Execution context was destroyed')) {
       console.warn(`[SAFE_EVAL AVISO] [${name}] ${err?.message || err}`);
     }

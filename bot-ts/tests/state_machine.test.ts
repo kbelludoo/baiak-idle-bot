@@ -46,6 +46,7 @@ describe('State Machine & Stamina Transitions', () => {
     expect(staminaIsAbove85Pct('40:00')).toBe(true);
     expect(staminaIsAbove85Pct('85%')).toBe(true);
     expect(staminaIsAbove85Pct('90%')).toBe(true);
+    expect(staminaIsAbove85Pct('42:00')).toBe(true); // stamina cheia do HUD
     expect(staminaIsAbove85Pct('30:00')).toBe(false);
     expect(staminaIsAbove85Pct('80%')).toBe(false);
   });
@@ -68,6 +69,12 @@ describe('State Machine & Stamina Transitions', () => {
   it('transição: stamina >= 85% sai do treino e retoma hunts', () => {
     const res = evaluateStaminaTransition('36:00', true, true);
     expect(res.action).toBe('resume_hunt');
+
+    const res100 = evaluateStaminaTransition('100%', true, true);
+    expect(res100.action).toBe('resume_hunt');
+
+    const res90 = evaluateStaminaTransition('90%', true, true);
+    expect(res90.action).toBe('resume_hunt');
   });
 
   it('ActionQueue executa tarefas por prioridade e não trava com timeout', async () => {

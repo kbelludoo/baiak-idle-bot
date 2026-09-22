@@ -33,29 +33,32 @@ async () => {
   };
 
   let opened = 0;
-  for (let n = 0; n < 10; n++) {
-    const bags = findBags();
-    if (!bags.length) break;
-    const img = bags[0];
-    const cell = img.closest(".cell, [class*='cell'], #backpack-grid > *, #inv-grid > *") || img;
-    cell.click();
-    await sleep(280);
-    let how = clickOpen(document.getElementById("item-modal")) || clickOpen(document.querySelector(".ctx-menu")) || clickOpen(document);
-    if (!how) {
-      cell.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-      await sleep(220);
-      how = clickOpen(document.querySelector(".ctx-menu")) || clickOpen(document);
-    }
-    if (!how) {
-      events.push("bag visivel mas sem Abrir");
+  try {
+    for (let n = 0; n < 2; n++) {
+      const bags = findBags();
+      if (!bags.length) break;
+      const img = bags[0];
+      const cell = img.closest(".cell, [class*='cell'], #backpack-grid > *, #inv-grid > *") || img;
+      cell.click();
+      await sleep(100);
+      let how = clickOpen(document.getElementById("item-modal")) || clickOpen(document.querySelector(".ctx-menu")) || clickOpen(document);
+      if (!how) {
+        cell.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+        await sleep(100);
+        how = clickOpen(document.querySelector(".ctx-menu")) || clickOpen(document);
+      }
+      if (!how) {
+        events.push("bag visivel mas sem Abrir");
+        break;
+      }
+      opened += 1;
+      events.push(how + " glooth bag");
+      await sleep(150);
       closeItem();
-      break;
+      await sleep(80);
     }
-    opened += 1;
-    events.push(how + " glooth bag");
-    await sleep(420);
+  } finally {
     closeItem();
-    await sleep(180);
   }
 
   if (!opened && !findBags().length) {

@@ -681,13 +681,22 @@ body { overflow-x: hidden; }
 </main>
 
 <script>
+const PRIMARY_TUNNEL = 'https://envelope-advisory-classification-laboratory.trycloudflare.com';
+let savedApi = '';
+try {
+  savedApi = localStorage.getItem('baiak-live-api') || '';
+  if (savedApi.includes('ngrok-free.dev') || savedApi.includes('disfigure-tribune-silo')) {
+    savedApi = '';
+    localStorage.removeItem('baiak-live-api');
+  }
+} catch (_) {}
 const PARAM_API = new URLSearchParams(location.search).get('api');
-const LIVE_API = (PARAM_API || localStorage.getItem('baiak-live-api') || 'https://disfigure-tribune-silo.ngrok-free.dev').replace(/\/$/, '');
+const LIVE_API = (PARAM_API || savedApi || PRIMARY_TUNNEL).replace(/\/$/, '');
 const API = LIVE_API;
 const PUBLIC_MODE = false;
 const OVERVIEW_PATH = '/api/overview';
-// No painel servido pela VPS, mesma-origem primeiro; ngrok como fallback remoto.
-const API_ENDPOINTS = [OVERVIEW_PATH, LIVE_API + OVERVIEW_PATH];
+// No painel servido pela VPS, mesma-origem primeiro; túnel Cloudflare como fallback remoto.
+const API_ENDPOINTS = [OVERVIEW_PATH, LIVE_API + OVERVIEW_PATH, PRIMARY_TUNNEL + OVERVIEW_PATH];
 try { localStorage.setItem('baiak-live-api', LIVE_API); } catch (_) {}
 const levelHistory = {};
 const maxObservedLevels = {};

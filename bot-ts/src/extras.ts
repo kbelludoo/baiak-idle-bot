@@ -233,27 +233,175 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
     const logs: string[] = [];
     let busy = false;
 
+    // Leilão gerenciado via JEV (sem usar outra IA):
+    // 1. Escaneia dados do mercado via tRPC rápido (nativo Bun com fallback seguro)
+    // 2. Consulta o motor JEV para venda (decideGoldSellListing) e/ou compra (decideGoldAuction)
+    // 3. Executa a ação na página via auction_execute
+    if (config.auctionEnabled && this.due('auction', now, 60)) {
+      this.lastTimes['auction'] = now;
+      try {
+        let scanRes: any = null;
+        try {
+          const [browseRes, historyRes] = await Promise.all([
+            fetch("https://baiakidle.com/api/trpc/auction.browse?batch=1&input=%7B%220%22%3A%7B%22page%22%3A1%2C%22perPage%22%3A50%2C%22type%22%3A%22gold%22%7D%7D", {
+              headers: { "User-Agent": "Mozilla/5.0" },
+              signal: AbortSignal.timeout(6000),
+            }).then(r => r.json()).catch(() => null),
+            fetch("https://baiakidle.com/api/trpc/auction.history?batch=1&input=%7B%220%22%3A%7B%22page%22%3A1%2C%22perPage%22%3A25%2C%22type%22%3A%22gold%22%7D%7D", {
+              headers: { "User-Agent": "Mozilla/5.0" },
+              signal: AbortSignal.timeout(6000),
+            }).then(r => r.json()).catch(() => null),
+          ]);
+
+          const browseItem = Array.isArray(browseRes) ? browseRes[0] : browseRes;
+          const browseData = browseItem?.result?.data ?? browseItem?.data ?? browseItem;
+          const browseRows = Array.isArray(browseData?.rows) ? browseData.rows : [];
+
+          if (browseRows.length > 0) {
+            const nowTs = Date.now();
+            const listings = browseRows
+              .filter((r: any) => r.type === "gold" && Number(r.goldAmount) > 0 && Number(r.currentPrice) > 0 && !r.isOwn && !r.isLeading)
+              .map((r: any) => ({
+                id: String(r.id),
+                goldAmount: Number(r.goldAmount),
+                priceCoins: Number(r.currentPrice),
+                bids: Number(r.bidCount) || 0,
+                minutesRemaining: Number.isFinite(Number(r.endsAt)) ? Math.max(0, Math.round((Number(r.endsAt) - nowTs) / 60000)) : null,
+              }));
+
+            const histItem = Array.isArray(historyRes) ? historyRes[0] : historyRes;
+            const histData = histItem?.result?.data ?? histItem?.data ?? histItem;
+            const histRows = Array.isArray(histData?.rows) ? histData.rows : [];
+            const historyRates = histRows
+              .filter((r: any) => r.type === "gold" && Number(r.goldAmount) > 0 && Number(r.currentPrice) > 0)
+              .map((r: any) => Number(r.goldAmount) / Number(r.currentPrice));
+
+            const listingRates = listings.map((item: any) => item.goldAmount / item.priceCoins);
+            const referenceRates = historyRates.length >= 2 ? historyRates : (listingRates.length >= 3 ? listingRates : []);
+            const referenceRate = referenceRates.length
+              ? referenceRates.slice().sort((a: number, b: number) => a - b)[Math.floor(referenceRates.length / 2)]
+              : 5500000;
+
+            const hasOwnActiveGold = browseRows.some((r: any) =>
+              (r.type === "gold" || /\bgold\b|ouro|kk\b/i.test(r.name || "")) &&
+              (r.isOwn === true || r.isOwner === true) &&
+              (r.status === "active" || Number(r.endsAt) > Date.now())
+            );
+
+            const currentGold = Number(telemetryGold || 0);
+            const feeGold = 5000000;
+            const minGoldAmount = 25000000;
+            const maxToSell = Math.max(0, Number(config.auctionSellGoldAmount) || 800000000);
+            const goldToSell = Math.min(maxToSell, Math.max(0, Math.floor(currentGold - feeGold)));
+
+            scanRes = {
+              ok: true,
+              listings,
+              historyRates,
+              listingRates,
+              referenceRate,
+              coinsAvailable: coinsAvailable ?? 0,
+              hasOwnActiveGold,
+              currentGold,
+              feeGold,
+              minGoldAmount,
+              goldToSell,
+            };
+          }
+        } catch (_) {}
+
+        if (!scanRes || !scanRes.ok) {
+          scanRes = await safeEval<any>(page, 'extra', {
+            job: 'auction_scan',
+            sellGoldAmount: config.auctionSellGoldAmount,
+            currentGold: telemetryGold,
+            coinsAvailable: coinsAvailable ?? 0,
+          }, 15000);
+        }
+
+        if (!scanRes || !scanRes.ok) {
+          this.lastTimes['auction'] = now - 45000; // Tenta novamente em 15s se o scan falhou
+          logs.push(`[AUCTION] Scan de leilão falhou: ${scanRes?.error || (scanRes === null ? 'safeEval nulo/ocupado' : 'retornou falso')}`);
+        } else {
+          logs.push(`[AUCTION] Scan mercado: saldo=${Math.floor((scanRes.currentGold || 0) / 1e6)}kk | venda_alvo=${Math.floor((scanRes.goldToSell || 0) / 1e6)}kk | anuncio_ativo=${scanRes.hasOwnActiveGold} | lotes_abertos=${scanRes.listings?.length || 0}`);
+          let sellDecision: any = null;
+          let buyDecision: any = null;
+
+          // Venda de Gold: JEV calcula preço ideal em coins para maximizar lucro
+          const canSell = config.auctionSellEnabled && !scanRes.hasOwnActiveGold && scanRes.goldToSell >= scanRes.minGoldAmount;
+          if (canSell) {
+            if (jev && config.jevEnabled) {
+              const rates = (scanRes.historyRates && scanRes.historyRates.length) ? scanRes.historyRates : (scanRes.listingRates || []);
+              sellDecision = await jev.decideGoldSellListing({
+                goldToSell: scanRes.goldToSell,
+                currentMarketRates: rates,
+              });
+              logs.push(`[JEV-AUCTION] Decisão venda: shouldList=${sellDecision.shouldList}, ${Math.floor(scanRes.goldToSell / 1e6)}kk por ${sellDecision.targetPriceCoins} coins (${sellDecision.reason})`);
+            } else {
+              const ref = scanRes.referenceRate || 5_500_000;
+              const targetCoins = Math.max(25, Math.round(scanRes.goldToSell / (ref * 0.85)));
+              sellDecision = {
+                shouldList: true,
+                targetPriceCoins: targetCoins,
+                reason: 'Heurística sem JEV',
+                source: 'fallback',
+              };
+              logs.push(`[AUCTION] Venda heurística: targetPriceCoins=${targetCoins}`);
+            }
+          } else if (scanRes.hasOwnActiveGold) {
+            logs.push('[AUCTION] Anúncio próprio de gold já ativo no leilão');
+          } else if (scanRes.currentGold > 0 && scanRes.goldToSell < scanRes.minGoldAmount) {
+            logs.push(`[AUCTION] Saldo insuficiente para venda (${Math.floor(scanRes.goldToSell / 1e6)}kk < mínimo ${Math.floor(scanRes.minGoldAmount / 1e6)}kk)`);
+          }
+
+          // Compra / Sniper de Gold: JEV avalia lotes encerrando
+          if (config.auctionLive && scanRes.listings && scanRes.listings.length > 0 && scanRes.coinsAvailable > 0) {
+            if (jev && config.jevEnabled) {
+              buyDecision = await jev.decideGoldAuction({
+                coinsAvailable: scanRes.coinsAvailable,
+                budget: config.auctionBudget,
+                minMarginPct: config.auctionMinMarginPct,
+                maxMinutesRemaining: config.auctionSniperMaxMinutes,
+                listings: scanRes.listings,
+              });
+              if (buyDecision?.selectedListingId) {
+                logs.push(`[JEV-AUCTION] Decisão sniper: arrematar lote #${buyDecision.selectedListingId} (${buyDecision.reason})`);
+              }
+            }
+          }
+
+          // Executa a ação se houver decisão
+          if (sellDecision?.shouldList || buyDecision?.selectedListingId) {
+            const execRes = await safeEval<any>(page, 'extra', {
+              job: 'auction_execute',
+              sellDecision,
+              buyDecision,
+              goldToSell: scanRes.goldToSell,
+              live: config.auctionLive,
+            }, 30000);
+            if (execRes?.events && Array.isArray(execRes.events)) {
+              for (const ev of execRes.events) logs.push(`[AUCTION] ${ev}`);
+            }
+          }
+          busy = true;
+        }
+      } catch (err: any) {
+        logs.push(`[AUCTION] Erro: ${err?.message || String(err)}`);
+      }
+    }
+
     // VFX
-    if (config.reduceVfx) {
+    if (!busy && config.reduceVfx) {
       const v = await this.run(page, 'vfx', now, 45, 'extra', { job: 'vfx' }, true);
       logs.push(...v.logs);
     }
 
-    // Glooth Bags / Pouch
+    // Glooth Bags / Pouch (apenas se autoBags estiver ativo, intervalo 90s)
     if (config.autoBags) {
-      const b = await this.run(page, 'bags', now, 18, 'bags', null, true);
+      const b = await this.run(page, 'bags', now, 90, 'bags', null, true);
       if (b.ran) {
         busy = true;
         logs.push(...b.logs);
-      }
-    }
-
-    // Auto Equip (a cada 90s no ciclo de extras; no loop rápido é checado a cada 30s)
-    if (!busy && config.autoEquip) {
-      const eq = await this.run(page, 'equip', now, 90, 'equip', null, true);
-      if (eq.ran) {
-        busy = true;
-        logs.push(...eq.logs);
       }
     }
 
@@ -298,20 +446,6 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
       ['merchant', 240, { job: 'merchant' }],
       ['boosts', 180, { job: 'boosts' }],
       ['market', 200, { job: 'market' }],
-      ['auction', 60, {
-        job: 'auction',
-        enabled: config.auctionEnabled,
-        live: config.auctionLive,
-        budget: config.auctionBudget,
-        minMarginPct: config.auctionMinMarginPct,
-        maxItems: config.auctionMaxItems,
-        maxMinutesRemaining: config.auctionSniperMaxMinutes,
-        sellGoldAmount: config.auctionSellGoldAmount,
-        sellEnabled: config.auctionSellEnabled,
-        currentGold: telemetryGold ?? 0,
-        coinsAvailable: coinsAvailable ?? config.auctionBudget,
-        useJev: config.jevEnabled,
-      }],
       ['supply', 300, { job: 'supply' }],
       ['loopcfg', 600, { job: 'loopcfg' }],
       ['manageloot', 600, { job: 'manageloot' }],

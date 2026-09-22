@@ -52,68 +52,63 @@
   };
 
   let maxLvl = 0;
+  try {
+    const ml = window.__baiak_telemetry?.level || window.__baiak_engine?.state?.level || window.__baiak_state?.level;
+    if (typeof ml === "number" && ml > 0 && ml <= 800) maxLvl = Math.floor(ml);
+  } catch (_) {}
+
   const lvlRe = /(?:lvl|n[ií]vel|level)\s*[:·.]?\s*(\d{1,4})/i;
-  // Busca nível apenas em seletores específicos de personagem/HUD (evita pegar requisitos de hunt como 1500)
-  const lvlEls = document.querySelectorAll(
-    "#bar-shooters .bar-member, .cyc-char-lvl, .pm-pc-meta, .pm-char-meta, .hd-lvl, .hud-lvl, .bar-char-lvl"
-  );
-  for (const el of lvlEls) {
-    const t = (el.textContent || "").trim();
-    const m = t.match(lvlRe);
-    if (m) {
-      const n = parseInt(m[1], 10);
-      if (n > maxLvl && n <= 800) maxLvl = n;
+  if (maxLvl === 0) {
+    const lvlEls = document.querySelectorAll(
+      "#bar-shooters .bar-member, .cyc-char-lvl, .pm-pc-meta, .pm-char-meta, .hd-lvl, .hud-lvl, .bar-char-lvl"
+    );
+    for (const el of lvlEls) {
+      const t = (el.textContent || "").trim();
+      const m = t.match(lvlRe);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (n > maxLvl && n <= 800) maxLvl = n;
+      }
     }
   }
   if (maxLvl === 0) {
-    const allEls = document.querySelectorAll("#header *, #m-dock *, .hud-top *, .player-info *");
-    for (const el of allEls) {
-      if (el.children.length === 0) {
-        const m = (el.textContent || "").match(lvlRe);
-        if (m) {
-          const n = parseInt(m[1], 10);
-          if (n > maxLvl && n <= 800) maxLvl = n;
-        }
+    const headerSpans = document.querySelectorAll("#header span, .hud-top span, .player-info span");
+    for (const el of headerSpans) {
+      const m = (el.textContent || "").match(lvlRe);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (n > maxLvl && n <= 800) maxLvl = n;
       }
     }
   }
   res.level = maxLvl > 0 ? maxLvl : null;
 
-  const goldCandidates = [
-    document.getElementById("hud-gold"),
-    document.querySelector(".hud-money, .mk-goldamt, .ac-wallet-val, .wallet-gold, #gold-count, [data-gold]"),
-    document.getElementById("gold-count"),
-    document.querySelector("[title*='Gold' i], [aria-label*='Gold' i], [title*='gold' i], [data-tip*='gold' i]"),
-  ].filter(Boolean);
-  for (const goldEl of goldCandidates) {
-    const rawAttr = goldEl.getAttribute("data-gold") || goldEl.getAttribute("data-value") || goldEl.getAttribute("title") || "";
-    const rawTxt = goldEl.textContent || "";
-    const g = parseGoldAmount(rawAttr) ?? parseGoldAmount(rawTxt);
-    if (g != null && g > 0) { res.gold = g; break; }
-    if (g != null && res.gold == null) res.gold = g;
+  // Gold do personagem
+  try {
+    const mg = window.__baiak_telemetry?.gold ?? window.__baiak_engine?.state?.gold ?? window.__baiak_state?.gold;
+    if (typeof mg === "number" && Number.isFinite(mg) && mg >= 0) res.gold = Math.floor(mg);
+  } catch (_) {}
+
+  if (res.gold == null) {
+    const goldCandidates = [
+      document.getElementById("hud-gold"),
+      document.querySelector(".hud-money, .mk-goldamt, .ac-wallet-val, .wallet-gold, #gold-count, [data-gold]"),
+      document.getElementById("gold-count"),
+      document.querySelector("[title*='Gold' i], [aria-label*='Gold' i], [title*='gold' i], [data-tip*='gold' i]"),
+    ].filter(Boolean);
+    for (const goldEl of goldCandidates) {
+      const rawAttr = goldEl.getAttribute("data-gold") || goldEl.getAttribute("data-value") || goldEl.getAttribute("title") || "";
+      const rawTxt = goldEl.textContent || "";
+      const g = parseGoldAmount(rawAttr) ?? parseGoldAmount(rawTxt);
+      if (g != null && g > 0) { res.gold = g; break; }
+      if (g != null && res.gold == null) res.gold = g;
+    }
   }
   if (res.gold == null) {
     const wallet = document.querySelector(".wallet, .hud-wallet, #wallet, .coins, .gold-wrap");
     if (wallet) {
       const g = parseGoldAmount(wallet.textContent);
       if (g != null) res.gold = g;
-    }
-  }
-  // Espelhos do kernel (ROOM_DATA/battery-save) quando o DOM mudou de ID.
-  if (res.gold == null) {
-    try {
-      const mg = window.__baiak_telemetry?.gold ?? window.__baiak_engine?.state?.gold;
-      if (typeof mg === "number" && Number.isFinite(mg) && mg >= 0) res.gold = Math.floor(mg);
-    } catch (_) {}
-  }
-  if (res.gold == null) {
-    const generic = document.querySelectorAll("[class*='gold' i], [id*='gold' i], [class*='wallet' i], [id*='wallet' i], [class*='coin' i], [class*='money' i]");
-    for (const gEl of Array.from(generic).slice(0, 20)) {
-      if (gEl.closest && gEl.closest("#picker-modal, #confirm-modal, .modal")) continue;
-      const t = (gEl.textContent || "").trim().slice(0, 40);
-      if (!t || t.length > 30) continue;
-      const g = parseGoldAmount(t);
-      if (g != null && g >= 0) { res.gold = g; break; }
     }
   }
 
@@ -211,11 +206,19 @@
   };
   let staminaFound = null;
   let staminaPctFound = null;
+
+  try {
+    const ms = window.__baiak_telemetry?.stamina || window.__baiak_engine?.state?.stamina;
+    const cand = normStam(ms || "");
+    if (cand) staminaFound = cand;
+  } catch (_) {}
+
   const stamDirect = document.querySelector("#stamina-time, .stamina-time, .stamina-val, #stamina-val, [data-stamina], #stamina-panel, .stamina-panel");
-  if (stamDirect) staminaFound = normStam(stamDirect.textContent) || normStam(stamDirect.getAttribute("title") || "");
+  if (stamDirect) staminaFound = normStam(stamDirect.textContent) || normStam(stamDirect.getAttribute("title") || "") || staminaFound;
+
   if (!staminaFound) {
     const batteryEls = document.querySelectorAll(
-      "button[title*='stamina' i], [data-tip*='stamina' i], [data-tooltip*='stamina' i], [aria-label*='stamina' i], .hud-stamina, .top-stamina, #btn-stamina, #stamina-btn, #stamina-panel, [title*='Stamina' i]"
+      "button[title*='stamina' i], [data-tip*='stamina' i], [data-tooltip*='stamina' i], [aria-label*='stamina' i], .hud-stamina, .top-stamina, #btn-stamina, #stamina-btn"
     );
     for (const b of batteryEls) {
       const tip = b.getAttribute("title") || b.getAttribute("data-tip") || b.getAttribute("data-tooltip") || b.getAttribute("aria-label") || b.textContent || "";
@@ -225,29 +228,7 @@
       if (staminaFound) break;
     }
   }
-  if (!staminaFound) {
-    const headerClocks = document.querySelectorAll("#header *, header *, .hud-top *, .top-bar *, nav *");
-    for (const el of headerClocks) {
-      if (el.children.length === 0 && !el.closest("#wave-title, .wave-box, .stage-info")) {
-        staminaFound = normStam(el.textContent);
-        if (staminaFound) break;
-      }
-    }
-  }
-  if (!staminaFound && !staminaPctFound) {
-    try {
-      const ms = window.__baiak_telemetry?.stamina || window.__baiak_engine?.state?.stamina;
-      const cand = normStam(ms || "");
-      if (cand) staminaFound = cand;
-    } catch (_) {}
-  }
-  if (!staminaFound && !staminaPctFound) {
-    const genericS = document.querySelectorAll("[class*='stamina' i], [id*='stamina' i]");
-    for (const sEl of Array.from(genericS).slice(0, 10)) {
-      const cand = normStam(sEl.textContent) || normStam(sEl.getAttribute && (sEl.getAttribute("title") || ""));
-      if (cand) { staminaFound = cand; break; }
-    }
-  }
+
   const pctEl = document.getElementById("stamina-pct") || document.querySelector(".stamina-pct, .stamina-pct-val, [data-stamina-pct]");
   if (pctEl) {
     const pt = (pctEl.textContent || "").trim();
@@ -276,7 +257,7 @@
         if (!card.parentElement || card.parentElement === document.body) break;
         card = card.parentElement;
         const cardText = card.textContent || "";
-        if (roleRegex.test(cardText) || card.querySelectorAll("[class*='bar'], [class*='hp'], [class*='mp'], [class*='xp']").length > 0) {
+        if (roleRegex.test(cardText) || card.querySelector("[class*='bar'], [class*='hp'], [class*='mp'], [class*='xp']")) {
           break;
         }
       }

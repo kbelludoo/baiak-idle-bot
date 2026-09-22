@@ -88,4 +88,100 @@ describe('Extras Scheduler & All Subsystems', () => {
     expect(parseStaminaMinutes('42:00')).toBeNull();
     expect(parseStaminaMinutes('—')).toBeNull();
   });
+
+  it('executa ciclo de leilão chamando JEV para decisão de venda e compra', async () => {
+    const scheduler = new DefaultExtrasScheduler();
+    let jevSellCalled = false;
+    let jevBuyCalled = false;
+
+    const mockJev = {
+      decideGoldSellListing: async (state: any) => {
+        jevSellCalled = true;
+        return {
+          shouldList: true,
+          targetPriceCoins: 160,
+          reason: 'Lucro otimizado JEV',
+          source: 'jev_api',
+        };
+      },
+      decideGoldAuction: async (state: any) => {
+        jevBuyCalled = true;
+        return {
+          selectedListingId: '999',
+          isProfitable: true,
+          reason: 'Sniper oportuno JEV',
+          source: 'jev_api',
+        };
+      },
+    };
+
+    const dummyConfig: BotConfig = {
+      headless: true,
+      port: 8080,
+      host: '0.0.0.0',
+      stream: false,
+      streamFps: 12,
+      streamQuality: 70,
+      streamWidth: 854,
+      streamHeight: 480,
+      autoHunt: true,
+      forceHunt: false,
+      huntId: '',
+      huntMode: 'last',
+      exploreSampleSec: 120,
+      exploreMaxDeaths: 0,
+      exploreMaxDamageTakenPct: 35,
+      exploreCooldownSec: 1200,
+      autoHeal: true,
+      healBelowPct: 75,
+      hpPotionBelowPct: 60,
+      manaPotionBelowPct: 65,
+      autoSell: true,
+      sellThresholdPct: 70,
+      autoTreino: true,
+      autoBoss: true,
+      autoEquip: true,
+      autoBags: true,
+      autoPrey: true,
+      autoExtras: true,
+      screenshot: false,
+      userDataDir: '',
+      chromePath: '',
+      targetUrl: '',
+      token: '',
+      reduceVfx: true,
+      chromeGl: 'swiftshader',
+      auctionEnabled: true,
+      auctionLive: true,
+      auctionSellEnabled: true,
+      auctionSellGoldAmount: 800_000_000,
+      auctionBudget: 100,
+      auctionMinMarginPct: 25,
+      auctionMaxItems: 2,
+      jevEnabled: true,
+    };
+
+    // Mock page que simula safeEval retornando dados de scan
+    const mockPage: any = {
+      evaluate: async () => ({
+        ok: true,
+        listings: [{ id: '999', goldAmount: 100_000_000, priceCoins: 20, bids: 1, minutesRemaining: 2 }],
+        historyRates: [5_000_000],
+        listingRates: [5_000_000],
+        referenceRate: 5_000_000,
+        coinsAvailable: 50,
+        hasOwnActiveGold: false,
+        currentGold: 840_000_000,
+        feeGold: 5_000_000,
+        minGoldAmount: 25_000_000,
+        goldToSell: 800_000_000,
+      }),
+    };
+
+    const logs = await scheduler.tick(mockPage, dummyConfig, Date.now(), false, mockJev, 840_000_000, 50);
+    expect(jevSellCalled).toBe(true);
+    expect(jevBuyCalled).toBe(true);
+    expect(logs.some(l => l.includes('Decisão venda: shouldList=true'))).toBe(true);
+  });
 });
+

@@ -180,6 +180,11 @@ export function staminaIsBelow15Pct(staminaStr: string): boolean {
 }
 
 export function staminaIsAbove85Pct(staminaStr: string): boolean {
+  // O jogo representa a stamina cheia como 42:00 (2520 min) ou a fração
+  // 1.0. Esse valor é ambíguo durante o carregamento inicial, mas quando o
+  // personagem já está confirmado no Treino Online ele é a leitura de 100%
+  // e precisa liberar o retorno à hunt.
+  if (/^42\s*:\s*00(?::00)?$/.test(String(staminaStr).trim())) return true;
   const mins = staminaToMinutes(staminaStr);
   if (mins === null) return false;
   // 85% de 2520 min = 2142 min (35h42m)
