@@ -695,6 +695,7 @@ const maxObservedLevels = {};
 const pendingHuntSelections = {};
 const huntCategorySelections = {};
 const huntSessionState = {};
+let latestDataSource = 'unknown';
 let historyWindowHours = 1;
 let benchmarkFilter = '';
 let benchmarkSort = 'gold';
@@ -1413,6 +1414,14 @@ async function changeHunt(botId) {
   const msg = document.getElementById('hunt-msg-' + botId);
   if (!sel || !btn) return;
 
+  if (latestDataSource !== 'live') {
+    if (msg) {
+      msg.className = 'hunt-msg err';
+      msg.textContent = '⚠️ Painel em modo snapshot: o túnel ao vivo está indisponível. A troca não foi enviada.';
+    }
+    return;
+  }
+
   let operatorToken = sessionStorage.getItem('baiak-operator-token') || '';
 
   const huntId = sel.value;
@@ -1504,6 +1513,7 @@ async function update() {
     const { data: d, source } = await fetchFirstOk();
     rates(d);
     window.latestFleetData = d;
+    latestDataSource = source;
 
     const summaryEl = document.getElementById('summary');
     const fleetEl = document.getElementById('fleet');
@@ -1515,9 +1525,12 @@ async function update() {
     document.getElementById('charts').innerHTML = charts(d.history || {});
     benchEl.innerHTML = bench(d.bots);
     const when = new Date(d.generatedAt).toLocaleTimeString('pt-BR');
-    updatedEl.textContent = source === 'live' ? `${when} · AO VIVO` : `${when} · snapshot ${ageLabel(d.generatedAt)}`;
+    updatedEl.textContent = source === 'live'
+      ? `${when} · AO VIVO`
+      : `${when} · snapshot ${ageLabel(d.generatedAt)} · somente leitura`;
     updatedEl.style.color = source === 'live' ? '' : 'var(--orange)';
   } catch (e) {
+    latestDataSource = 'unknown';
     const updatedEl = document.getElementById('updated');
     const fleetEl = document.getElementById('fleet');
     if (updatedEl) updatedEl.textContent = 'erro: ' + e.message;

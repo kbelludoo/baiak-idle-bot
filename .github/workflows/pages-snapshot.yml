@@ -1,6 +1,10 @@
 name: Publish fleet snapshot to Pages
 
 on:
+  push:
+    paths:
+      - 'docs/index.html'
+      - '.github/workflows/pages-snapshot.yml'
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
@@ -13,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Fetch public overview (live, fallback keeps previous snapshot)
+      - name: Fetch public overview (live, direct VPS fallback)
         run: |
           set +e
           URL="https://disfigure-tribune-silo.ngrok-free.dev/api/public/overview"
@@ -25,9 +29,9 @@ jobs:
             mv "$TMP" "$OUT"
             echo "snapshot atualizado: $(python3 -c "import json; print(json.load(open('$OUT'))['generatedAt'])")"
           else
-            echo "mantendo snapshot anterior (túnel fora do ar?)"
-            head -c 500 "$TMP" || true
+            echo "túnel indisponível; tentando consultar as APIs das VPS diretamente"
             rm -f "$TMP"
+            python3 scripts/update_pages_snapshot.py "$OUT"
           fi
       - name: Commit snapshot if changed
         run: |
