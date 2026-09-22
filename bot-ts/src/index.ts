@@ -521,7 +521,15 @@ async function main() {
     if (dots > 1 && commas === 0) n = Number(numberText.replace(/\./g, ''));
     else if (dots === 1 && commas === 1) n = Number(numberText.replace(/\./g, '').replace(',', '.'));
     else if (commas === 1) n = Number(numberText.replace(',', '.'));
-    else if (dots === 1) n = unit ? Number(numberText) : Number(numberText.replace('.', ''));
+    else if (dots === 1) {
+      const fraction = numberText.split('.')[1] || '';
+      // A matriz antiga pode guardar uma taxa como decimal cru
+      // (1336807.6463699893). Não remova esse ponto como se fosse o formato
+      // pt-BR "1.336.807"; isso criava valores na casa dos quadrilhões.
+      n = unit || fraction.length !== 3 || numberText.split('.')[0].length > 3
+        ? Number(numberText)
+        : Number(numberText.replace('.', ''));
+    }
     else n = Number(numberText);
     if (!Number.isFinite(n)) return 0;
     if (unit === 'kk' || unit === 'm' || unit === 'mi' || unit.startsWith('milh')) n *= 1_000_000;
@@ -598,8 +606,8 @@ async function main() {
     const xpPerHour = firstPositive(
       currentAnalyzer.xp_per_hour,
       currentScore.xpPerHour,
-      historicalMatrix.xp_h_display,
       historicalMatrix.avg_xp_h,
+      historicalMatrix.xp_h_display,
     );
     const lootPerHour = firstPositive(
       currentAnalyzer.loot_per_hour,
