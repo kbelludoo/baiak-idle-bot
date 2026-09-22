@@ -674,6 +674,11 @@ async function main() {
       const normTarget = normalizeHuntId(targetId);
       const normAuth = normalizeHuntId(authoritativeHuntId || '');
       if (authoritativeHuntId === targetId || (normAuth && normTarget && normAuth === normTarget)) return true;
+      // Não use uma atualização otimista feita depois do envio como confirmação
+      // do servidor. O HUD só é uma confirmação válida quando ele próprio já
+      // refletiu o alvo; frames websocket precisam passar por authoritativeHuntId.
+      const huntSource = telemetry.getSources().hunt;
+      if (huntSource !== 'dom' && huntSource !== 'battery-save') return false;
       const live = matchHunt(telemetry.hunt)?.id || telemetry.hunt || '';
       const normLive = normalizeHuntId(live);
       return matchHunt(telemetry.hunt)?.id === targetId || Boolean(normLive && normTarget && normLive === normTarget);
@@ -1449,8 +1454,17 @@ async function main() {
                 } catch { return null; }
               }).catch(() => null);
               if (rs) {
-                if (typeof rs.huntId === 'string' && rs.huntId) telemetry.updateHunt(rs.huntId, 'websocket');
-                else if (typeof rs.hunt === 'string' && rs.hunt && rs.hunt !== 'Conectando...') telemetry.updateHunt(rs.hunt, 'websocket');
+                const roomHuntId = typeof rs.huntId === 'string' && rs.huntId
+                  ? rs.huntId
+                  : (typeof rs.hunt === 'string' && rs.hunt && rs.hunt !== 'Conectando...' ? rs.hunt : null);
+                if (roomHuntId) {
+                  authoritativeHuntId = roomHuntId;
+                  telemetry.updateHunt(roomHuntId, 'websocket');
+                  if (manualHuntId && roomHuntId !== manualHuntId) {
+                    console.warn(`[${new Date().toLocaleTimeString()}] 🛡️ [TRAVA HUNT] Estado da sala (${roomHuntId}) diverge da hunt manual (${manualHuntId}) — agendando re-entrada`);
+                    needsHuntEntry = true;
+                  }
+                }
                 if (rs.queue?.admitToken) { queueFlow.admitToken = String(rs.queue.admitToken); }
                 if (rs.queue?.pos !== null && rs.queue?.pos !== undefined) { queueFlow.pos = rs.queue.pos; }
                 if (Array.isArray(rs.players) && rs.players.length > 0) {
@@ -1922,7 +1936,12 @@ async function main() {
                 needsHuntEntry = false;
                 telemetry.inTreino = false;
                 subsystems.auto_treino = { status: "FUNCIONAL", detail: "Caçando normalmente" };
-                telemetry.updateHunt(huntRes.hunt || target.name || target.id, huntRes.method === 'room-send' ? 'websocket' : 'dom');
+                // O caminho room-send já foi confirmado por authoritativeHuntId;
+                // não escreva o alvo localmente, pois isso mascararia uma troca
+                // que o servidor ainda não aplicou.
+                if (huntRes.method !== 'room-send') {
+                  telemetry.updateHunt(huntRes.hunt || target.name || target.id, 'dom');
+                }
                 huntRetryDelayMs = 8000 + Math.random() * 6000;
               } else if (queuedRevision === huntSelectionRevision && queuedTargetId === manualHuntId) {
                 huntRetryDelayMs = 14000 + Math.random() * 12000;
