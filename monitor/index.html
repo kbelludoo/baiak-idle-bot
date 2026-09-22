@@ -1201,6 +1201,7 @@ function card(id, b) {
   const rawKills = Number(s.kills) || 0;
   const rawWaves = Number(s.waves) || 0;
   const rawSessionXp = Number(s.session_xp ?? an.session_xp ?? an.raw_xp ?? 0) || 0;
+  const rawGold = Number(s.gold) || 0;
   const rawLevel = level;
 
   if (!huntSessionState[id] || huntSessionState[id].huntKey !== currentHuntKey) {
@@ -1210,10 +1211,21 @@ function card(id, b) {
       baseKills: rawKills,
       baseWaves: rawWaves,
       baseXp: rawSessionXp,
+      baseGold: rawGold,
       baseLevel: rawLevel,
     };
   }
   const hState = huntSessionState[id];
+  // Re-sincronização de saldo no meio da hunt (primeiro tRPC, troca de char):
+  // salto que implica gold/h absurdo (>20kk/h) re-baselina em vez de virar
+  // "+1.3B nesta hunt".
+  const MAX_GOLD_H = 20000000;
+  let huntGold = rawGold - (Number(hState.baseGold) || 0);
+  const huntElapsedSecPre = Math.max(0, Math.floor((Date.now() - hState.startedAt) / 1000));
+  if (huntElapsedSecPre > 5 && Math.abs(huntGold) / Math.max(1, huntElapsedSecPre) * 3600 > MAX_GOLD_H) {
+    hState.baseGold = rawGold;
+    huntGold = 0;
+  }
   const huntKills = Math.max(0, rawKills - hState.baseKills);
   const huntWaves = Math.max(0, rawWaves - hState.baseWaves);
   const huntXp = Math.max(0, rawSessionXp - hState.baseXp);
@@ -1314,8 +1326,9 @@ function card(id, b) {
             <b>${num(level)}</b>
           </div>
           <div class="metric gold">
-            <span>Gold Total</span>
-            <b title="${num(s.gold)} gold">${formatGold(s.gold)}</b>
+            <span>Gold nesta Hunt</span>
+            <b title="Saldo da conta: ${num(s.gold)} gold">+${formatGold(Math.max(0, huntGold))}</b>
+            <small style="display:block;font-size:10px;color:var(--muted);margin-top:2px;">Total: ${formatGold(rawGold)}</small>
           </div>
           <div class="metric accent">
             <span>Coins (Mercado)</span>
