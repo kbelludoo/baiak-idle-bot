@@ -38,10 +38,14 @@ async ({ job, ...auctionCfg }) => {
         signal: controller.signal
       });
       clearTimeout(tid);
-      const raw = await response.json().catch(() => null);
+      const rawText = await response.text().catch(() => "");
+      let raw = null;
+      try { raw = rawText ? JSON.parse(rawText) : null; } catch (_) {}
       const item = Array.isArray(raw) ? raw[0] : raw;
-      const error = item?.error?.json?.message || item?.error?.message || null;
-      return { data: response.ok && !error ? unwrapTrpc(raw) : null, error };
+      const error = item?.error?.json?.message || item?.error?.json?.data?.message ||
+        item?.error?.message || item?.error?.data?.message ||
+        (!response.ok ? rawText.slice(0, 240) : null);
+      return { data: response.ok && !error ? unwrapTrpc(raw) : null, error, status: response.status };
     } catch (error) {
       return { data: null, error: String(error) };
     }
@@ -607,7 +611,7 @@ async ({ job, ...auctionCfg }) => {
             events.push("ANÚNCIO DE VENDA CRIADO (JEV): " + sellMsg);
           } else {
             const err = createRes?.error || "falha";
-            events.push(`VENDA RECUSADA (${err}): ` + sellMsg);
+            events.push(`VENDA RECUSADA [HTTP ${createRes?.status || "?"}] (${err}): ` + sellMsg);
           }
         } catch (e) {
           events.push(`ERRO VENDA (${String(e)}): ` + sellMsg);
@@ -820,7 +824,7 @@ async ({ job, ...auctionCfg }) => {
               events.push("ANÚNCIO DE VENDA CRIADO: " + sellMsg);
             } else {
               const err = createRes?.error || "falha";
-              events.push(`VENDA RECUSADA (${err}): ` + sellMsg);
+              events.push(`VENDA RECUSADA [HTTP ${createRes?.status || "?"}] (${err}): ` + sellMsg);
             }
           } catch (e) {
             events.push(`ERRO VENDA (${String(e)}): ` + sellMsg);
