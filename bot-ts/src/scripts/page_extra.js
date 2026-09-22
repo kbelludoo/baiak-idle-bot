@@ -603,7 +603,6 @@ async ({ job, ...auctionCfg }) => {
             password: "",
             twofaCode: "",
             smsCode: "",
-            pushProof: "",
             confirmText: "CONFIRMAR",
             captchaToken: token || ""
           });
@@ -816,7 +815,6 @@ async ({ job, ...auctionCfg }) => {
               password: "",
               twofaCode: "",
               smsCode: "",
-              pushProof: "",
               confirmText: "CONFIRMAR",
               captchaToken: token || ""
             });
