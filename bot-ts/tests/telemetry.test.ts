@@ -83,6 +83,14 @@ describe('TelemetryStore (Proteção contra Regressão e Rastreamento de Origem)
     expect(store.getSources().stamina).toBe('trpc');
   });
 
+  it('mantém a stamina autoritativa mesmo depois de uma leitura DOM tardia', () => {
+    const store = new TelemetryStore();
+    store.updateStamina('38:30', 'trpc');
+    store.updateStamina('100%', 'dom');
+    expect(store.stamina).toBe('38:30');
+    expect(store.getSources().stamina).toBe('trpc');
+  });
+
   it('protege hunt válida de ser sobrescrita por "Conectando..." ou "—"', () => {
     const store = new TelemetryStore();
     store.updateHunt('Asuras', 'battery-save');

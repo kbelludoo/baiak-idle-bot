@@ -482,12 +482,12 @@ export class TelemetryStore {
     const norm = normalizeStamina(val);
     if (!norm) return false;
     // O HUD pode exibir 100%/um valor padrão enquanto a conta ainda está
-    // carregando. Não permita que essa leitura DOM substitua por até uma
-    // janela a stamina autoritativa recebida pelo tRPC ou pelo WebSocket;
-    // caso contrário 5:20 vira 100% e o bot retorna à hunt sem treinar.
+    // carregando. Não permita que essa leitura DOM substitua a stamina
+    // autoritativa recebida pelo tRPC ou pelo WebSocket; o tRPC sincroniza a
+    // conta periodicamente e o HUD não pode transformar 38:30 em 100%.
     if (source === 'dom' || source === 'battery-save') {
       const authoritative = this._stamina.source === 'trpc' || this._stamina.source === 'websocket';
-      if (authoritative && Date.now() - this._stamina.updatedAt < 70_000) return false;
+      if (authoritative) return false;
     }
     this._stamina = { value: norm, source, updatedAt: Date.now() };
     return true;
