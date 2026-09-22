@@ -628,7 +628,17 @@ async function main() {
       : 0;
     const mappedSessionXp = typeof (protocolMapper as any).sessionXp === 'function'
       ? Number((protocolMapper as any).sessionXp()) || 0 : 0;
-    const sessionXp = Math.floor(Math.max(mappedSessionXp, hudXpAccumulated));
+    // Em algumas sessões o Hunt Analyzer congela o "XP Stack", embora os
+    // kills continuem chegando. Usa a razão XP/kill da matriz observada como
+    // fallback explícito de progresso; não altera o nível autoritativo vindo
+    // do servidor e deixa o valor real prevalecer quando voltar.
+    const matrixXpPerKill = Number(selectedMatrix?.avg_kills_h || 0) > 0
+      ? Number(selectedMatrix?.avg_xp_h || 0) / Number(selectedMatrix.avg_kills_h)
+      : 0;
+    const estimatedSessionXp = matrixObserved && matrixXpPerKill > 0
+      ? Math.floor(Math.max(0, telemetry.kills) * matrixXpPerKill)
+      : 0;
+    const sessionXp = Math.floor(Math.max(mappedSessionXp, hudXpAccumulated, estimatedSessionXp));
     return {
       elapsedSeconds,
       selectedHuntId,
