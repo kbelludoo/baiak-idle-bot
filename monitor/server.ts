@@ -247,6 +247,15 @@ function publicStatus(status: JsonRecord): JsonRecord {
     || (status.online ? formatUptimeStr(uptimeSec) : null);
   const sessionXpStr = status.session_xp_str
     || (sessionXp ? formatXpStr(sessionXp) : '0 XP');
+  const huntControl = status.hunt_control || 'manual';
+  const forceHuntId = status.force_hunt_id || null;
+  // Durante uma reconexão o servidor pode reportar por alguns segundos a sala
+  // antiga (ex.: Wyrm), mesmo com a hunt manual fixada em outra sala. O painel
+  // deve refletir o alvo do operador, preservando o valor observado separadamente.
+  const observedHunt = status.hunt || status.last_hunt || null;
+  const displayedHunt = huntControl === 'manual' && forceHuntId
+    ? (status.selected_hunt_name || status.last_hunt || observedHunt)
+    : observedHunt;
   return {
     online: Boolean(status.online),
     connected: Boolean(status.connected ?? status.online),
@@ -265,7 +274,8 @@ function publicStatus(status: JsonRecord): JsonRecord {
     magic_level: asNumber(status.magic_level),
     skills_summary: status.skills_summary || '',
     stamina: status.stamina || null,
-    hunt: status.hunt || status.last_hunt || null,
+    hunt: displayedHunt,
+    observed_hunt: observedHunt,
     hunt_stage: status.hunt_stage ?? null,
     hunt_stage_total: status.hunt_stage_total ?? null,
     hunt_stage_label: status.hunt_stage_label || null,
@@ -273,8 +283,8 @@ function publicStatus(status: JsonRecord): JsonRecord {
     last_hunt: status.last_hunt || null,
     last_hunt_id: status.last_hunt_id || null,
     force_hunt: Boolean(status.force_hunt),
-    force_hunt_id: status.force_hunt_id || null,
-    hunt_control: status.hunt_control || 'manual',
+    force_hunt_id: forceHuntId,
+    hunt_control: huntControl,
     pending_hunt_id: status.pending_hunt_id || null,
     pending_hunt_name: status.pending_hunt_name || null,
     pending_hunt_requested_at: status.pending_hunt_requested_at || null,

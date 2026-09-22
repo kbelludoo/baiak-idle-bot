@@ -1036,7 +1036,10 @@ function huntMetricLabel(value, category) {
 }
 
 function huntStageInfo(status) {
-  const raw = String(status?.hunt || status?.last_hunt || '');
+  const manualTarget = status?.hunt_control === 'manual' && status?.force_hunt_id;
+  const raw = String(manualTarget
+    ? (status?.selected_hunt_name || status?.last_hunt || status?.hunt || '')
+    : (status?.hunt || status?.last_hunt || ''));
   const label = status?.hunt_stage_label || raw.match(/(\d+)\s*\/\s*(\d+)\s*$/)?.slice(1).join('/') || '';
   const match = label.match(/^(\d+)\s*\/\s*(\d+)$/);
   return { raw, label: match ? `${match[1]}/${match[2]}` : '' };
