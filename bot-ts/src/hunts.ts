@@ -110,56 +110,65 @@ export interface HuntElementProfile {
 export const ELEMENTAL_SPELLS: Record<ElementType, { aoe: string[]; single: string[] }> = {
   energy: {
     aoe: [
-      'exevo gran mas vis', 'rage of the skies',
+      'mas vis', 'exevo gran mas vis', 'rage of the skies',
       'exevo gran vis lux', 'great energy beam',
       'exevo vis hur', 'energy wave',
       'exevo vis lux', 'energy beam',
+      'adori mas vis', 'thunderstorm',
     ],
     single: [
       'exori vis', 'energy strike',
       'exori amp vis', 'lightning',
+      'adori vis', 'heavy magic missile', 'adori min vis', 'adori infir vis',
     ],
   },
   ice: {
     aoe: [
-      'exevo gran mas frigo', 'eternal winter',
+      'mas frigo', 'exevo gran mas frigo', 'eternal winter',
       'exevo gran frigo hur', 'strong ice wave',
       'exevo infir frigo hur', 'chill out',
       'exevo frigo hur', 'ice wave',
+      'adori mas frigo', 'avalanche',
     ],
     single: [
       'exori frigo', 'ice strike',
-      'icicle',
+      'icicle', 'adori frigo',
     ],
   },
   fire: {
     aoe: [
-      'exevo gran mas flam', "hell's core",
+      'mas flam', 'exevo gran mas flam', "hell's core",
       'exevo gran flam hur', 'great fire wave',
       'exevo flam hur', 'fire wave',
+      'adori mas flam', 'great fireball',
     ],
     single: [
       'exori flam', 'flame strike',
-      'exori mas flam', 'fireball',
+      'fireball', 'adori flam',
     ],
   },
   earth: {
     aoe: [
-      'exevo gran mas tera', 'wrath of nature',
+      'mas tera', 'exevo gran mas tera', 'wrath of nature',
       'exevo gran mas pox', 'poison storm',
       'exevo tera hur', 'terra wave',
+      'adori mas tera', 'stone shower', 'adori infir mas tera',
     ],
     single: [
       'exori tera', 'terra strike',
-      'mud strike',
+      'mud strike', 'adori tera', 'stalagmite',
     ],
   },
   holy: {
     aoe: [
       'exevo mas san', 'divine caldera',
+      'exori dir san', 'divine barrage',
+      'exevo tempo mas san', 'divine grenade',
     ],
     single: [
       'exori san', 'divine missile',
+      'adori san', 'holy missile',
+      'utori san', 'holy flash',
     ],
   },
   death: {
@@ -168,7 +177,7 @@ export const ELEMENTAL_SPELLS: Record<ElementType, { aoe: string[]; single: stri
     ],
     single: [
       'exori mort', 'death strike',
-      'sudden death',
+      'sudden death', 'adori gran mort',
     ],
   },
   physical: {
@@ -177,6 +186,7 @@ export const ELEMENTAL_SPELLS: Record<ElementType, { aoe: string[]; single: stri
       'exori mas', 'groundshaker',
       'exori dir moe', 'ethereal barrage',
       'exori mas pug', 'flurry of blows',
+      'exori gran mas pug', 'greater flurry of blows',
       'exori', 'berserk',
     ],
     single: [

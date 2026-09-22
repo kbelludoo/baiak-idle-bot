@@ -1085,6 +1085,9 @@ async function main() {
   let needsHuntEntry = false;
   let lastHuntAttempt = 0;
   let lastSpellGear = 0;
+  let needsSpellSync = true;
+  let lastSpellSyncHunt = "";
+  let lastSpellSyncAttempt = 0;
   const spellSlotCooldown = new Map<number, number>();
   type PendingHuntChange = {
     id: string;
@@ -1135,6 +1138,8 @@ async function main() {
     }
     spellSlotCooldown.clear();
     lastSpellGear = 0;
+    needsSpellSync = true;
+    lastSpellSyncHunt = target.id;
     const optimal = getOptimalSpellRotation(target.id);
     (magicState as any).recommended_element = optimal.preferredElement;
     (magicState as any).hunt_weaknesses = optimal.weaknesses;
@@ -2093,6 +2098,11 @@ async function main() {
         const pickerKind = hud.pickerKind;
         const pickerOpenEv = (domState.events || []).some((e: string) => String(e).includes("PICKER_SPELL_ABERTO"));
         const currentHuntTarget = authoritativeHuntId || manualHuntId || telemetry.hunt;
+        const normTarget = matchHunt(currentHuntTarget)?.id || currentHuntTarget || '';
+        if (normTarget && normTarget !== 'Conectando...' && normTarget !== '—' && normTarget !== lastSpellSyncHunt) {
+          needsSpellSync = true;
+          lastSpellSyncHunt = normTarget;
+        }
         const optimal = getOptimalSpellRotation(currentHuntTarget);
 
         // JEV: Decisão de elemento e estilo de rotação por IA System One
@@ -2141,6 +2151,49 @@ async function main() {
             magicState = classifyMagicPreservingFacts(lastSpellList, Object.keys(helperBySlot).sort().map((k) => helperBySlot[Number(k)]));
           }
         };
+
+        // Fila de Ação: Sincronização Elemental de Magias conforme a Hunt
+        if (needsSpellSync && domAutomationReady && !telemetry.inTreino && !pickerOpen && !pickerOpenEv &&
+            actionQueue.pendingByLane.spell === 0 && now - lastSpellSyncAttempt >= 8000) {
+          lastSpellSyncAttempt = now;
+          actionQueue.enqueue({
+            id: "spell_element_sync",
+            name: "spell",
+            priority: 4,
+            timeoutMs: 30000,
+            run: async () => {
+              try {
+                console.log(`[${new Date().toLocaleTimeString()}] 🔮 [SPELL SYNC] Sincronizando magias para elemento ${optimal.preferredElement.toUpperCase()} (Hunt: ${currentHuntTarget})`);
+                const partySlots = [0, 1, 2];
+                let anyChanged = false;
+                for (const sid of partySlots) {
+                  const res = await safeEval<any>(pageRef, "spell", {
+                    metaAoe: optimal.metaAoe,
+                    metaStrike: optimal.metaStrike,
+                    weaknesses: optimal.weaknesses,
+                    resistances: optimal.resistances,
+                    preferredElement: optimal.preferredElement,
+                    job: "sync-element",
+                    slot: sid,
+                  }, 15000);
+                  if (res?.changed > 0) anyChanged = true;
+                  if (res?.events?.length) {
+                    console.log(`[${new Date().toLocaleTimeString()}] 🔮 [SPELL SYNC slot${sid}] ${JSON.stringify(res.events)}`);
+                  }
+                  if (Array.isArray(res?.spells) && res.spells.length > 0) {
+                    magicState = classifyMagicPreservingFacts(res.spells, Object.keys(helperBySlot).sort().map((k) => helperBySlot[Number(k)]));
+                  }
+                  await new Promise(r => setTimeout(r, 200));
+                }
+                needsSpellSync = false;
+                console.log(`[${new Date().toLocaleTimeString()}] 🔮 [SPELL SYNC] Concluído. Alterações realizadas: ${anyChanged ? 'sim' : 'nenhuma necessária'}`);
+              } finally {
+                lastSpellGear = Date.now();
+                await closeStuckModals();
+              }
+            }
+          });
+        }
         // O jogo só cria os elementos rot-* enquanto a janela de rotação está
         // aberta. A sonda independente também roda quando a fila de ações está
         // ocupada, evitando que equip/potion impeçam a leitura da magia.

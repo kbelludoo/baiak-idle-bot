@@ -1,4 +1,4 @@
-async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
+async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot, weaknesses, resistances, preferredElement }) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // offsetParent é nulo para controles position:fixed (justamente o dock
   // usado na viewport móvel/headless). Use a geometria/estilo real para não
@@ -246,6 +246,101 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot }) => {
     }
     closePicker();
     return { ok: false, reason: "no-use", kind, slot: wantSlot, events };
+  }
+
+  if (job === "sync-element") {
+    const s = wantSlot != null ? wantSlot : 0;
+    const resistSet = new Set((resistances || []).map((r) => String(r).toLowerCase()));
+    const weakList = (weaknesses || []).map((w) => String(w).toLowerCase());
+    const detectElem = (str) => {
+      const low = String(str || "").toLowerCase();
+      if (/flam|fogo|fire|caldera|hell'?s core/i.test(low)) return "fire";
+      if (/frigo|gelo|ice|winter|icicle/i.test(low)) return "ice";
+      if (/tera|terra|earth|pox|poison|stalagmite/i.test(low)) return "earth";
+      if (/vis|energia|energy|lightning|thunder/i.test(low)) return "energy";
+      if (/san|sagrado|holy|divine/i.test(low)) return "holy";
+      if (/mort|morte|death|sudden/i.test(low)) return "death";
+      if (/ico|hur|mas pug|pug|berserk|fierce|slam|scu|con|barrage|jab/i.test(low)) return "physical";
+      return null;
+    };
+
+    let totalChanged = 0;
+    for (let u = 0; u < 6; u++) {
+      const el = document.getElementById(`rot-${s}-${u}`);
+      if (!el) continue;
+      const title = String(el.getAttribute("title") || el.getAttribute("aria-label") || el.textContent || "").trim();
+      const isEmpty = !title || !!el.querySelector("small") || /slot \d+ \+|escolher magia|choose spell/i.test(title);
+      const curElem = detectElem(title);
+      const isResistant = curElem && resistSet.has(curElem);
+      const isWeakness = curElem && weakList.includes(curElem);
+
+      // Sincroniza se:
+      // 1. O slot está vazio; OU
+      // 2. A magia atual bate no elemento resistente da criatura; OU
+      // 3. É o slot principal (u=0) e não é do elemento de fraqueza recomendado
+      const needChange = isEmpty || isResistant || (u === 0 && !isWeakness && weakList.length > 0);
+      if (!needChange) continue;
+
+      el.click();
+      events.push(`SYNC_ABRIU_SLOT_${s}_${u}: ${title.slice(0, 30)}`);
+      await sleep(200);
+      picker = document.getElementById("picker-modal");
+      if (!picker || picker.classList.contains("hidden")) continue;
+
+      const onlyUnlockedCheck = picker.querySelector("input[type='checkbox']");
+      if (onlyUnlockedCheck && !onlyUnlockedCheck.checked) {
+        onlyUnlockedCheck.click();
+        await sleep(100);
+      }
+
+      const isAoePreferred = u === 0 || u % 2 === 0;
+      let hit = null;
+
+      if (isAoePreferred) {
+        clickTab(/^(área|area)$/i);
+        await sleep(100);
+        hit = pickByWords(metaAoe || [], "sync-aoe");
+        if (!hit) {
+          clickTab(/^(ataque|strike)$/i);
+          await sleep(100);
+          hit = pickByWords(metaStrike || [], "sync-strike");
+        }
+      } else {
+        clickTab(/^(ataque|strike)$/i);
+        await sleep(100);
+        hit = pickByWords(metaStrike || [], "sync-strike");
+        if (!hit) {
+          clickTab(/^(área|area)$/i);
+          await sleep(100);
+          hit = pickByWords(metaAoe || [], "sync-aoe");
+        }
+      }
+
+      if (!hit) {
+        clickTab(/^(todas|all)$/i);
+        await sleep(100);
+        hit = pickByWords([...(metaAoe || []), ...(metaStrike || [])], "sync-all");
+      }
+
+      if (hit) {
+        events.push(`SYNC_EQUIPOU_SLOT_${s}_${u}: ${hit.picked}`);
+        totalChanged++;
+      } else if (isResistant) {
+        const clearBtn = Array.from(picker.querySelectorAll("button, .btn")).find((b) =>
+          /^(limpar|remover|clear|remove)$/i.test((b.textContent || "").trim())
+        );
+        if (clearBtn && vis(clearBtn)) {
+          clearBtn.click();
+          events.push(`SYNC_REMOVEU_RESISTENTE_SLOT_${s}_${u}`);
+          totalChanged++;
+        }
+      }
+
+      closePicker();
+      await sleep(150);
+    }
+
+    return { ok: true, changed: totalChanged, spells: readRotation(), events };
   }
 
   if (job === "fill" || job === "open-slot" || (!job && !pickerOpen)) {
