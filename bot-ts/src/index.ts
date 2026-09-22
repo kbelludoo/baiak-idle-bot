@@ -579,7 +579,15 @@ async function main() {
     const currentScore = scoreSampleReady ? selectedScore : {};
     const currentAnalyzer = scoreSampleReady && analyzerBelongsToSelected ? analyzer : {};
     const currentHuntIsActive = analyzerBelongsToSelected || profilerActive;
-    const historicalMatrix = currentHuntIsActive ? {} : selectedMatrix;
+    // A janela ao vivo precisa amadurecer antes de ser publicada, mas não
+    // devemos mostrar XP/h = 0 enquanto o personagem está claramente matando.
+    // Quando há uma matriz observada robusta (>=30 amostras, sem mortes), ela
+    // funciona como taxa provisória até a primeira amostra desta execução.
+    const matrixObserved = Number(selectedMatrix?.samples || 0) >= 30
+      && Number(selectedMatrix?.deaths || 0) <= 0;
+    const historicalMatrix = currentHuntIsActive
+      ? (matrixObserved ? selectedMatrix : {})
+      : selectedMatrix;
     const firstPositive = (...values: any[]): number => {
       for (const value of values) {
         const n = parseMetricValue(value);
@@ -626,7 +634,8 @@ async function main() {
         source: profilerGoldReady
           ? 'profiler-live'
           : (scoreSampleReady && analyzerBelongsToSelected && parseMetricValue(currentAnalyzer.xp_per_hour) > 0
-            ? 'hunt-analyzer' : (scoreSampleReady ? 'selected-hunt-live' : 'selected-hunt-measuring')),
+            ? 'hunt-analyzer' : (scoreSampleReady ? 'selected-hunt-live'
+              : (matrixObserved ? 'matrix-observed' : 'selected-hunt-measuring'))),
         window_seconds: Math.max(Number(selectedScore.sampleSeconds || 0) || 0, profilerElapsed),
         historical_gold_per_hour: Number((selectedHuntId ? ((profiler as any).benchmarks || {})[selectedHuntId] : {})?.gold_per_hour || 0) || 0,
       },
@@ -1014,6 +1023,7 @@ async function main() {
       const pay = fr.payload;
 
       protocolMapper.ingest(typ, pay, buf.byteLength);
+      notePouchSignal(typ, pay);
 
       telemetry.ingestWebSocketFrame(typ, pay);
       const mappedHunt = pay && typeof pay === 'object'
@@ -1321,6 +1331,10 @@ async function main() {
   let lastProgressGold = 0;
   let lastProgressTime = Date.now();
   let lastStallCheck = 0;
+  // Algumas builds avisam "Loot Pouch cheia" pelo notify/log, mas deixam o
+  // contador DOM em 0/8. Guarda esse sinal curto para o auto-sell não depender
+  // de uma leitura visual incorreta da pouch.
+  let pouchFullUntil = 0;
   // Dreno de eventos do kernel hook (cobre Blob/fragmentado que o CDP perde).
   let lastRoomDrain = 0;
   let lastReadySend = 0;
@@ -1342,6 +1356,16 @@ async function main() {
       return true;
     }
     return false;
+  };
+
+  const notePouchSignal = (type: unknown, payload: any): void => {
+    const kind = String(type || '').toLowerCase();
+    if (!['log', 'notify', 'autosellfull', 'bpstatus'].includes(kind)) return;
+    let raw = '';
+    try { raw = typeof payload === 'string' ? payload : JSON.stringify(payload); } catch (_) { raw = ''; }
+    if (/loot\s*pouch.*(cheia|full)|pouch.*(cheia|full)|invent[aá]rio.*(cheio|full)/i.test(raw)) {
+      pouchFullUntil = Date.now() + 180_000;
+    }
   };
 
   // Leitura independente da fila de ações. O renderer pode manter uma ação
@@ -1442,6 +1466,7 @@ async function main() {
             try {
               protocolMapper.ingest(ev.type, ev.payload, 0);
               telemetry.ingestWebSocketFrame(ev.type, ev.payload);
+              notePouchSignal(ev.type, ev.payload);
               if (ev.type === 'go' && ev.payload && typeof ev.payload === 'object' && ev.payload.token) {
                 queueFlow.admitToken = String(ev.payload.token);
                 queueFlow.lastGoAt = Date.now();
@@ -2150,12 +2175,13 @@ async function main() {
 
         // Fila de Ação: Anti-encher (lootfilter 50% + sell-all no limiar).
         // Política: guarda SOMENTE épico(3)/lendário(4)/mítico(5). Todo o resto é lixo vendável.
-        if (config.autoSell && telemetry.bagSlots) {
+        const pouchFullSignal = now < pouchFullUntil;
+        if (config.autoSell && (telemetry.bagSlots || pouchFullSignal)) {
           const m = telemetry.bagSlots.match(/(\d+)\s*\/\s*(\d+)/);
-          if (m) {
-            const cur = parseInt(m[1], 10);
-            const max = parseInt(m[2], 10);
-            const pct = max > 0 ? (cur / max) * 100 : 0;
+          if (m || pouchFullSignal) {
+            const cur = m ? parseInt(m[1], 10) : 0;
+            const max = m ? parseInt(m[2], 10) : 0;
+            const pct = max > 0 ? (cur / max) * 100 : (pouchFullSignal ? 100 : 0);
             // 1) Varredura precoce: vende lixo individual (mantém épico+) a partir de 50%
             const lastSellSecAgo = Math.floor((now - lastSellTime) / 1000);
             let jevAgreedSell = pct >= 50;
@@ -2170,7 +2196,10 @@ async function main() {
               }).catch(() => null);
             }
 
-            if (max > 0 && (pct >= 50 || jevAgreedSell) && (now - lastSellTime) >= 60000) {
+            const sellCooldownReady = (now - lastSellTime) >= 60000;
+            const emergencySell = ((max > 0 && pct >= config.sellThresholdPct) || pouchFullSignal) && sellAllowed;
+            const earlySell = !emergencySell && ((max > 0 && (pct >= 50 || jevAgreedSell)) || (pouchFullSignal && sellCooldownReady));
+            if (earlySell) {
               actionQueue.enqueue({
                 id: "lootfilter",
                 name: "lootfilter",
@@ -2201,7 +2230,7 @@ async function main() {
               });
             }
             // 2) Sell-all de emergência no limiar configurado (após proteger épicos)
-            if (max > 0 && pct >= config.sellThresholdPct && sellAllowed) {
+            if (emergencySell) {
               actionQueue.enqueue({
                 id: "autosell",
                 name: "autosell",
