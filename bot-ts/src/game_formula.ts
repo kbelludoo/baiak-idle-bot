@@ -9,6 +9,12 @@
 
 export const GAME_FORMULA_SOURCE = 'Baiak Idle client bundle: K0e/Z0e/X0e (ECR, loot esperado e nível estimado)';
 export const GAME_FORMULA_REFERENCE = 'https://baiakidle.com/jogar/';
+export const GAME_FORMULA_DESCRIPTION = [
+  'K0e: dano esperado=(media(dmgMin,dmgMax)+soma(media(abilityMin,abilityMax)*chance/100))/(2000/1000)',
+  'K0e: cura esperada=soma(cura media*chance/100)/(2000/1000); eHP=hp*(1+min(0.8,cura/dano))',
+  'K0e: ECR=eHP^0.4*dano^0.6; loot esperado=soma(chance/100000*((1+max)/2)*valor)',
+  'X0e: level estimado=0.12296*ECR^1.1494',
+].join(' | ');
 
 export interface GameAbility {
   min?: number;
@@ -62,4 +68,3 @@ export function gameMonsterFormula(monster: GameMonsterFacts) {
 export function gameEstimatedLevel(ecr: number): number {
   return 0.12296 * Math.pow(Math.max(0, Number(ecr) || 0), 1.1494);
 }
-

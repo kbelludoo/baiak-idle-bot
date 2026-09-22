@@ -11,7 +11,7 @@
  * Chave de ambiente: EXPERIENTIAL_API_KEY || TYPESAFE_API_KEY || JEV_API_KEY
  */
 
-import { GAME_FORMULA_SOURCE } from './game_formula';
+import { GAME_FORMULA_DESCRIPTION, GAME_FORMULA_SOURCE } from './game_formula';
 
 export type JevQuestionType = 'choice' | 'score' | 'noul';
 
@@ -686,6 +686,7 @@ export class JevEngine {
         current_hunt: state.currentHuntId,
         recent_deaths: state.recentDeaths,
         game_formula_source: GAME_FORMULA_SOURCE,
+        game_formula_exact: GAME_FORMULA_DESCRIPTION,
         candidates: scored.slice(0, 12).map(({ candidate, facts, utility }) => ({
           id: candidate.id,
           name: candidate.name,
