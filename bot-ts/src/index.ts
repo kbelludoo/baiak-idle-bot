@@ -1879,6 +1879,13 @@ async function main() {
             const benchmark = ((profiler as any).benchmarks || {})[hunt.id]
               || Object.entries((profiler as any).benchmarks || {}).find(([id]) => canonical(id) === key)?.[1]
               || {};
+            const matrix: any = (huntMatrix as any).matrix?.[hunt.id]
+              || Object.entries((huntMatrix as any).matrix || {}).find(([id]) => canonical(id) === key)?.[1]
+              || {};
+            const matrixSamples = Number(matrix.samples || 0) || 0;
+            const matrixDeaths = Number(matrix.deaths || 0) || 0;
+            const matrixReliable = matrixSamples >= 30 && matrixDeaths <= 0;
+            const scoreUsable = score.sampleReady === true || score.source === 'server-preview';
             const isCurrent = key === canonical(currentHId);
             const selected: any = isCurrent ? (currentMetrics.selectedHuntMetrics || {}) : {};
             const has = (obj: any, field: string) => obj && Object.prototype.hasOwnProperty.call(obj, field);
@@ -1887,25 +1894,30 @@ async function main() {
               return 0;
             };
             const xp = firstPresent(
-              [preview, 'xpPerHour'], [score, 'xpPerHour'],
-              ...(isCurrent ? [[selected, 'xp_per_hour'] as [any, string]] : []),
+              [preview, 'xpPerHour'], ...(scoreUsable ? [[score, 'xpPerHour'] as [any, string]] : []),
+              ...(matrixReliable ? [[matrix, 'avg_xp_h'] as [any, string]] : []),
+              ...(isCurrent && selected.sample_ready === true ? [[selected, 'xp_per_hour'] as [any, string]] : []),
             );
             const loot = firstPresent(
-              [preview, 'lootGoldPerHour'], [score, 'lootGoldPerHour'],
-              ...(isCurrent ? [[selected, 'loot_per_hour'] as [any, string]] : []),
+              [preview, 'lootGoldPerHour'], ...(scoreUsable ? [[score, 'lootGoldPerHour'] as [any, string]] : []),
+              ...(matrixReliable ? [[matrix, 'avg_loot_h'] as [any, string]] : []),
+              ...(isCurrent && selected.sample_ready === true ? [[selected, 'loot_per_hour'] as [any, string]] : []),
             );
             const supply = firstPresent([preview, 'supplyGoldPerHour'], [score, 'supplyGoldPerHour']);
             const previewHasNet = has(preview, 'netGoldPerHour');
-            const scoreHasNet = has(score, 'netGoldPerHour');
+            const scoreHasNet = scoreUsable && has(score, 'netGoldPerHour');
             const net = previewHasNet ? Number(preview.netGoldPerHour) || 0
               : (scoreHasNet ? Number(score.netGoldPerHour) || 0
                 : (isCurrent && selected.gold_sample_ready === true
                   ? Number(selected.gold_per_hour) || 0
-                  : (Number(benchmark.gold_per_hour) || 0)));
+                  : (matrixReliable && Number(matrix.avg_gold_h) > 0
+                    ? Number(matrix.avg_gold_h) || 0
+                    : (Number(benchmark.gold_per_hour) || 0))));
             const source = preview ? 'server-preview'
-              : score.sampleReady === true ? 'live-observed'
-                : (isCurrent && selected.gold_sample_ready === true ? 'live-observed'
-                  : (Number(benchmark.gold_per_hour) > 0 ? 'historical-observed' : 'unknown'));
+              : scoreUsable ? 'live-observed'
+                : (matrixReliable ? 'matrix-observed'
+                  : (isCurrent && selected.gold_sample_ready === true ? 'live-observed'
+                    : (Number(benchmark.gold_per_hour) > 0 ? 'historical-observed' : 'unknown')));
             return {
               id: hunt.id,
               name: hunt.name,
@@ -1916,7 +1928,7 @@ async function main() {
               netGoldPerHour: net,
               risk: preview?.risk || '',
               wipeMs: Number(preview?.msToWipe || score.wipeMs || 0) || 0,
-              sampleReady: Boolean(preview || score.sampleReady === true || (isCurrent && selected.gold_sample_ready === true)),
+              sampleReady: Boolean(preview || scoreUsable || matrixReliable || (isCurrent && (selected.sample_ready === true || selected.gold_sample_ready === true))),
               source,
             };
           });

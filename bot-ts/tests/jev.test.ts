@@ -178,6 +178,26 @@ describe('JEV (TypeSafe AI Decision Engine)', () => {
     expect(rec.advisoryOnly).toBe(true);
   });
 
+  it('prefere matriz histórica robusta de Asuras a uma amostra curta de Hero', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const rec = await offlineEngine.evaluateHuntRecommendation({
+      level: 334,
+      vocation: 'Knight',
+      currentHuntId: 'vexclaw-lair',
+      unlockedHunts: [
+        { id: 'hero-cave', name: 'Hero', minLevel: 60 },
+        { id: 'asura-lair', name: 'Asuras', minLevel: 150 },
+      ],
+      recentDeaths: 0,
+      candidates: [
+        { id: 'hero-cave', name: 'Hero', minLevel: 60, xpPerHour: 7_569_045, netGoldPerHour: 763_890, sampleReady: true, source: 'live-observed' },
+        { id: 'asura-lair', name: 'Asuras', minLevel: 150, xpPerHour: 9_522_583, netGoldPerHour: 2_252_227, sampleReady: true, source: 'matrix-observed' },
+      ],
+    });
+    expect(rec.recommendedHuntId).toBe('asura-lair');
+    expect(rec.rationale).toContain('9.522.583');
+  });
+
   it('discoverDamageFormula retorna coeficientes calibrados no soak (fallback offline)', async () => {
     const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
     const res = await offlineEngine.discoverDamageFormula([

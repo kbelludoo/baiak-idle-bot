@@ -624,7 +624,7 @@ export class JevEngine {
         : (supplyProvided && loot > 0 ? loot - Number(candidate.supplyGoldPerHour || 0) : 0);
       const source = String(candidate.source || 'unknown').toLowerCase();
       const authoritative = candidate.sampleReady === true
-        || /server|offline|live-observed|historical-observed|report|preview/.test(source);
+        || /server|offline|live-observed|historical-observed|matrix-observed|report|preview/.test(source);
       const risk = String(candidate.risk || '').toLowerCase();
       const wipeMs = Number(candidate.wipeMs || 0) || 0;
       const lethal = wipeMs > 0 || /lethal|critical|critico|mortal|wipe|fatal/.test(risk);
