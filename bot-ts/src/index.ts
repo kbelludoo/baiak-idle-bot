@@ -1084,8 +1084,7 @@ async function main() {
           telemetry.updateHunt(hid, 'websocket');
           protocolMapper.setActiveHunt(hid);
           if (manualHuntId && hid !== manualHuntId) {
-            console.warn(`[${new Date().toLocaleTimeString()}] 🛡️ [TRAVA HUNT] Sala conectada (${hid}) diverge da hunt manual (${manualHuntId}) — agendando re-entrada`);
-            needsHuntEntry = true;
+            enforceManualHunt(hid, 'Sala conectada');
           }
         }
         (telemetry as any).lastJoined = pay;
@@ -1098,8 +1097,7 @@ async function main() {
           authoritativeHuntId = hid;
           telemetry.updateHunt(hid, 'websocket');
           if (manualHuntId && hid !== manualHuntId) {
-            console.warn(`[${new Date().toLocaleTimeString()}] 🛡️ [TRAVA HUNT] Servidor retomou (${hid}) mas hunt manual é (${manualHuntId}) — agendando re-entrada`);
-            needsHuntEntry = true;
+            enforceManualHunt(hid, 'Retomada do servidor');
           }
         }
         console.log(`[${new Date().toLocaleTimeString()}] 🔄 [${typ.toUpperCase()}] ${typeof hid === 'string' ? hid : ''}`);
@@ -1133,8 +1131,24 @@ async function main() {
   let pageRef: any = null;
   let cdpRef: any = null;
   let getFrameRef: (() => Buffer | null) = () => null;
-
   let needsHuntEntry = false;
+  let lastManualReapplyAt = 0;
+
+  // A sala pode retomar a última hunt do jogo durante o reconnect antes de
+  // receber a ordem manual persistida. Reaplica o alvo imediatamente e com
+  // intervalo curto, sem permitir que JEV ou o resume antigo troquem a hunt.
+  const enforceManualHunt = (observedId: string, source: string): void => {
+    if (!manualHuntId || observedId === manualHuntId) return;
+    needsHuntEntry = true;
+    const now = Date.now();
+    if (now - lastManualReapplyAt < 12_000 || !pageRef) return;
+    lastManualReapplyAt = now;
+    console.warn(`[${new Date().toLocaleTimeString()}] 🛡️ [TRAVA HUNT] ${source}: ${observedId} diverge de ${manualHuntId}; reaplicando alvo manual imediatamente`);
+    sendStage(pageRef, manualHuntId).then((sent) => {
+      if (sent) console.log(`[${new Date().toLocaleTimeString()}] 🏹 [TRAVA HUNT] stage manual enviado: ${manualHuntId}`);
+    }).catch(() => null);
+  };
+
   let lastHuntAttempt = 0;
   let lastSpellGear = 0;
   let needsSpellSync = true;
@@ -1495,8 +1509,7 @@ async function main() {
                 authoritativeHuntId = hid;
                 telemetry.updateHunt(hid, 'websocket');
                 if (manualHuntId && hid !== manualHuntId) {
-                  console.warn(`[${new Date().toLocaleTimeString()}] 🛡️ [TRAVA HUNT] Drain: Sala (${hid}) != hunt manual (${manualHuntId}) — agendando re-entrada`);
-                  needsHuntEntry = true;
+                  enforceManualHunt(hid, 'Drain sala');
                 }
               } else if ((ev.type === 'toHunt' || ev.type === 'resume') && ev.payload) {
                 const hid = typeof ev.payload === 'string' ? ev.payload : (ev.payload.huntId || null);
@@ -1504,8 +1517,7 @@ async function main() {
                   authoritativeHuntId = hid;
                   telemetry.updateHunt(hid, 'websocket');
                   if (manualHuntId && hid !== manualHuntId) {
-                    console.warn(`[${new Date().toLocaleTimeString()}] 🛡️ [TRAVA HUNT] Drain: Retomou (${hid}) != hunt manual (${manualHuntId}) — agendando re-entrada`);
-                    needsHuntEntry = true;
+                    enforceManualHunt(hid, 'Drain retomada');
                   }
                 }
               } else if (ev.type === 'toCity') {
@@ -1533,8 +1545,7 @@ async function main() {
                   authoritativeHuntId = roomHuntId;
                   telemetry.updateHunt(roomHuntId, 'websocket');
                   if (manualHuntId && roomHuntId !== manualHuntId) {
-                    console.warn(`[${new Date().toLocaleTimeString()}] 🛡️ [TRAVA HUNT] Estado da sala (${roomHuntId}) diverge da hunt manual (${manualHuntId}) — agendando re-entrada`);
-                    needsHuntEntry = true;
+                    enforceManualHunt(roomHuntId, 'Estado da sala');
                   }
                 }
                 if (rs.queue?.admitToken) { queueFlow.admitToken = String(rs.queue.admitToken); }
