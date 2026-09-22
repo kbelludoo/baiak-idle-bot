@@ -357,19 +357,27 @@ async ({ job, ...auctionCfg }) => {
   }
 
   if (job === "boosts") {
+    // XP boost custa coins -> NUNCA usar. Só boosts free/owned, sem custo.
+    const xpRe = /xp|experi[eê]ncia|experience/i;
+    const coinRe = /coins?|loja|store|comprar|buy|custo|cost|pre[cç]o|price|assinatura|vip|gold|kk\b/i;
     const roots = [document.getElementById("boosts-overlay"), document.getElementById("panel-boosts"), document.getElementById("boosts-panel-body")].filter(Boolean);
-    let used = 0;
+    let used = 0, skippedXp = 0, skippedCoin = 0;
     for (const root of roots) {
       const btns = Array.from(root.querySelectorAll("button")).filter((b) => vis(b) && !b.disabled && /^usar 1x$/i.test(txt(b)));
       for (const b of btns.slice(0, 3)) {
-        if (buyish.test(txt(b.parentElement))) continue;
+        const card = b.closest("[data-boost], .boost-card, .boost-item, .store-card, li, div") || b.parentElement;
+        const cardTxt = txt(card) + " | " + txt(card?.parentElement) + " | " + txt(b.parentElement);
+        if (xpRe.test(cardTxt)) { skippedXp += 1; continue; }
+        if (coinRe.test(cardTxt) || buyish.test(txt(b.parentElement))) { skippedCoin += 1; continue; }
         b.click();
         used += 1;
-        events.push("Usar 1x");
+        events.push("Usar 1x (free, sem XP)");
         await sleep(250);
       }
     }
-    if (!used) events.push("sem boost owned com Usar 1x");
+    if (skippedXp) events.push("xp boost ignorado (custa coins) x" + skippedXp);
+    if (skippedCoin) events.push("boost pago ignorado x" + skippedCoin);
+    if (!used && !skippedXp && !skippedCoin) events.push("sem boost owned com Usar 1x");
     return { ok: true, events };
   }
 

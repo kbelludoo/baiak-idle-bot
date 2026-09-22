@@ -1814,7 +1814,10 @@ async function main() {
           const current = String(wave || '').toLowerCase().replace(/[-\s]/g, '');
           const target = String(forceId).toLowerCase().replace(/[-\s]/g, '');
           const currentHunt = matchHunt(wave) || matchHunt(telemetry.hunt);
-          const atTarget = !isCity && !trainingActive && ((current && (current.includes(target) || target.includes(current))) || currentHunt?.id === forceId);
+          // Comparação EXATA: includes() confundia "dragon-lair" com
+          // "undeadragon-lair"/"megadragon-cave" ("dragon" ⊂ "undeadragon").
+          // matchHunt (longest-first) já resolve títulos com sufixo de wave.
+          const atTarget = !isCity && !trainingActive && ((current && target && current === target) || currentHunt?.id === forceId);
           if (!atTarget || trainingActive) {
             shouldEnter = true;
             needsHuntEntry = true;
@@ -1832,8 +1835,20 @@ async function main() {
         if (config.jevEnabled && (now - lastJevRecommendationTs >= 60000) && telemetry.level > 0) {
           lastJevRecommendationTs = now;
           const mapSnap = protocolMapper.snapshot();
-          const currentHId = matchHunt(wave)?.id || matchHunt(telemetry.hunt)?.id || manualHuntId || 'glooth-cave';
-          const rawUnlocked = mapSnap.unlockedHunts?.length ? mapSnap.unlockedHunts : HUNTS_TABLE;
+          const currentMetrics = runtimeMetrics();
+          const currentHId = currentMetrics.selectedHuntId
+            || matchHunt(wave)?.id
+            || matchHunt(telemetry.hunt)?.id
+            || manualHuntId
+            || 'glooth-cave';
+          const profilerUnlocked = Array.isArray((profiler as any).unlockedIds)
+            ? (profiler as any).unlockedIds : [];
+          // A lista protocolar/DOM é a lista real liberada pela conta. Só usa
+          // o catálogo inteiro quando nenhuma fonte do jogo respondeu ainda;
+          // nesse caso as opções ficam sem evidência e não ganham por level.
+          const rawUnlocked = mapSnap.unlockedHunts?.length
+            ? mapSnap.unlockedHunts
+            : (profilerUnlocked.length ? profilerUnlocked : HUNTS_TABLE);
           const unlockedList = rawUnlocked.map((item: any) => {
             if (typeof item === 'string') {
               const matched = matchHunt(item);
@@ -1850,12 +1865,68 @@ async function main() {
               minLevel: item.minLevel ?? item.min ?? matched?.min ?? 1,
             };
           });
+          const canonical = (value: any) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const previews = new Map<string, any>();
+          for (const preview of Array.isArray(mapSnap.lastOfflineInfo?.previews) ? mapSnap.lastOfflineInfo.previews : []) {
+            if (preview?.huntId) previews.set(canonical(preview.huntId), preview);
+          }
+          const candidates = unlockedList.map((hunt: any) => {
+            const key = canonical(hunt.id);
+            const preview = previews.get(key) || null;
+            const score = (mapSnap.scores as any)?.[hunt.id]
+              || Object.entries(mapSnap.scores || {}).find(([id]) => canonical(id) === key)?.[1]
+              || {};
+            const benchmark = ((profiler as any).benchmarks || {})[hunt.id]
+              || Object.entries((profiler as any).benchmarks || {}).find(([id]) => canonical(id) === key)?.[1]
+              || {};
+            const isCurrent = key === canonical(currentHId);
+            const selected: any = isCurrent ? (currentMetrics.selectedHuntMetrics || {}) : {};
+            const has = (obj: any, field: string) => obj && Object.prototype.hasOwnProperty.call(obj, field);
+            const firstPresent = (...pairs: Array<[any, string]>) => {
+              for (const [obj, field] of pairs) if (has(obj, field)) return Number(obj[field]) || 0;
+              return 0;
+            };
+            const xp = firstPresent(
+              [preview, 'xpPerHour'], [score, 'xpPerHour'],
+              ...(isCurrent ? [[selected, 'xp_per_hour'] as [any, string]] : []),
+            );
+            const loot = firstPresent(
+              [preview, 'lootGoldPerHour'], [score, 'lootGoldPerHour'],
+              ...(isCurrent ? [[selected, 'loot_per_hour'] as [any, string]] : []),
+            );
+            const supply = firstPresent([preview, 'supplyGoldPerHour'], [score, 'supplyGoldPerHour']);
+            const previewHasNet = has(preview, 'netGoldPerHour');
+            const scoreHasNet = has(score, 'netGoldPerHour');
+            const net = previewHasNet ? Number(preview.netGoldPerHour) || 0
+              : (scoreHasNet ? Number(score.netGoldPerHour) || 0
+                : (isCurrent && selected.gold_sample_ready === true
+                  ? Number(selected.gold_per_hour) || 0
+                  : (Number(benchmark.gold_per_hour) || 0)));
+            const source = preview ? 'server-preview'
+              : score.sampleReady === true ? 'live-observed'
+                : (isCurrent && selected.gold_sample_ready === true ? 'live-observed'
+                  : (Number(benchmark.gold_per_hour) > 0 ? 'historical-observed' : 'unknown'));
+            return {
+              id: hunt.id,
+              name: hunt.name,
+              minLevel: hunt.minLevel,
+              xpPerHour: xp,
+              lootGoldPerHour: loot,
+              supplyGoldPerHour: supply,
+              netGoldPerHour: net,
+              risk: preview?.risk || '',
+              wipeMs: Number(preview?.msToWipe || score.wipeMs || 0) || 0,
+              sampleReady: Boolean(preview || score.sampleReady === true || (isCurrent && selected.gold_sample_ready === true)),
+              source,
+            };
+          });
           jev.evaluateHuntRecommendation({
             level: telemetry.level,
             vocation: (telemetry as any).vocation || 'Knight',
             currentHuntId: currentHId,
             unlockedHunts: unlockedList,
             recentDeaths: 0,
+            candidates,
           }).then((rec) => {
             jevRecommendation = rec;
             if (rec?.recommendedHuntName) {
@@ -2013,9 +2084,11 @@ async function main() {
         const normalizedWave = String(wave || '').toLowerCase().replace(/[-\s]/g, '');
         const normalizedTarget = String(manualHuntId || '').toLowerCase().replace(/[-\s]/g, '');
         const currentHuntForCheck = matchHunt(wave) || matchHunt(telemetry.hunt);
+        // EXATO: includes() marcava "já estou no alvo" errado para
+        // pares como dragon-lair/undeadragon-lair. matchHunt cobre sufixos.
         const alreadyAtForcedHunt = !trainingActive && !isCity && !!forceTarget && (
           (currentHuntForCheck?.id === forceTarget) ||
-          (normalizedWave && normalizedTarget && (normalizedWave.includes(normalizedTarget) || normalizedTarget.includes(normalizedWave)))
+          (normalizedWave && normalizedTarget && normalizedWave === normalizedTarget)
         );
         if (isKnownHunt && !isCity && !trainingActive && (!forceTarget || alreadyAtForcedHunt)) {
           needsHuntEntry = false;

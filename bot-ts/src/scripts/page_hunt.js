@@ -53,17 +53,23 @@ async (target) => {
     .replace(/([a-z])\1+/g, "$1") // colapsa letras repetidas (ex: dd -> d para undead-dragon vs undeadragon)
     .replace(/(s|es)$/, ""); // singulariza
 
+  // IDs completos normalizados (SEM strip de -lair/-cave).
+  // NUNCA use substring/includes aqui: "dragon" é substring de "undeadragon"
+  // e de "megadragon", então includes() clicava na hunt errada.
+  // Comparação é sempre EXATA sobre o id/nome completo.
+  const wantIdNorm = wantIdRaw ? normalizeToken(wantIdRaw) : "";
+  const wantNameNorm = wantNameRaw ? normalizeToken(wantNameRaw) : "";
+
   const isMatch = (str) => {
     if (!str) return false;
     const normStr = normalizeToken(str);
-    if (wantIdRaw) {
-      const cleanTarget = normalizeToken(wantIdRaw.replace(/-lair|-cave|-dungeon|-camp|-ground/g, ""));
-      if (normStr === cleanTarget || normStr.includes(cleanTarget) || cleanTarget.includes(normStr)) return true;
-    }
-    if (wantNameRaw) {
-      const cleanName = normalizeToken(wantNameRaw);
-      if (normStr === cleanName || normStr.includes(cleanName) || cleanName.includes(normStr)) return true;
-    }
+    if (!normStr) return false;
+    // Exato: cobre "Dragon Lair" == dragon-lair (ambos viram "dragonlair")
+    // e "Undead Dragon" == undeadragon-lair? Não — display não tem "lair",
+    // então esse caso cai para a checagem via pick-current + wave abaixo,
+    // nunca para um includes() genérico que confundiria dragon/undead.
+    if (wantIdNorm && normStr === wantIdNorm) return true;
+    if (wantNameNorm && normStr === wantNameNorm) return true;
     return false;
   };
 
@@ -185,26 +191,22 @@ async (target) => {
     row = rows.find((r) => (r.dataset.hunt || "").toLowerCase() === wantIdRaw);
   }
 
-  // 2. Busca normalizada por ID ou Nome
+  // 2. Busca normalizada EXATA por ID completo (tolerando case/acentos/
+  // variante undead-dragon vs undeadragon via normalizeToken).
+  // SEM includes(): "dragon" ⊂ "undeadragon"/"megadragon" clicava errado.
   if (!row && wantIdRaw) {
-    const cleanWantId = normalizeToken(wantIdRaw.replace(/-lair|-cave|-dungeon|-camp|-ground/g, ""));
     row = rows.find((r) => {
-      const hIdNorm = normalizeToken((r.dataset.hunt || "").replace(/-lair|-cave|-dungeon|-camp|-ground/g, ""));
-      const rNameNorm = normalizeToken(text(r.querySelector("b, .stage-name-line b")));
-      const matchId = hIdNorm && cleanWantId && (hIdNorm === cleanWantId || hIdNorm.includes(cleanWantId) || cleanWantId.includes(hIdNorm));
-      const matchName = rNameNorm && cleanWantId && (rNameNorm === cleanWantId || rNameNorm.includes(cleanWantId) || cleanWantId.includes(rNameNorm));
-      return matchId || matchName;
+      const hIdNorm = normalizeToken(r.dataset.hunt || "");
+      return hIdNorm && wantIdNorm && hIdNorm === wantIdNorm;
     });
   }
 
-  if (!row && wantNameRaw) {
-    const cleanWantName = normalizeToken(wantNameRaw);
+  // 2b. Busca exata por nome completo (ex: "Dragon Lair" === "Dragon Lair").
+  // SEM includes(): evita "Dragon" casar dentro de "Undead Dragon"/"Mega Dragon".
+  if (!row && wantNameNorm) {
     row = rows.find((r) => {
       const rNameNorm = normalizeToken(text(r.querySelector("b, .stage-name-line b")));
-      const rTextNorm = normalizeToken(text(r));
-      const matchName = rNameNorm && cleanWantName && (rNameNorm === cleanWantName || rNameNorm.includes(cleanWantName) || cleanWantName.includes(rNameNorm));
-      const matchText = rTextNorm && cleanWantName && rTextNorm.includes(cleanWantName);
-      return matchName || matchText;
+      return rNameNorm && wantNameNorm && rNameNorm === wantNameNorm;
     });
   }
 

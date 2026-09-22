@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { damageTakenPct, shouldAbortSample, sampleReady, chooseExplorationTarget } from '../src/exploration';
-import { effectiveDamage, simulateHunt } from '../src/hunt_sim';
+import { effectiveDamage, estimateDps, simulateHunt } from '../src/hunt_sim';
 
 describe('Controlled hunt exploration', () => {
   const policy = { sampleSec: 120, maxDeaths: 0, maxDamageTakenPct: 35, cooldownSec: 1200 };
@@ -53,5 +53,31 @@ describe('Controlled hunt exploration', () => {
   it('marks hunts without resistance data as assumed instead of pretending it is known', () => {
     const sim = simulateHunt('grimreaper-cave', 306, { power: 2, aoe: 2, heal: 1 });
     expect(sim?.resistance_source).toBe('assumed');
+  });
+
+  it('estimateDps usa formula empirica JEV (nao chute teorico 90x)', () => {
+    // Endgame p3/a3/party: 1.05*level (mediana soak 1.044). Antiga dava 106*level.
+    const endgame = { power: 3, aoe: 3, heal: 1, party_ready: true, slot1_present: true };
+    expect(estimateDps(150, endgame)).toBeCloseTo(157.5, 0);
+    expect(estimateDps(311, endgame)).toBeCloseTo(326.6, 0);
+    // Base sem magia: 0.24*level (scaling 4.4x, nao 21x).
+    expect(estimateDps(100, { power: 0, aoe: 0 })).toBeCloseTo(24, 0);
+    expect(estimateDps(1, { power: 0, aoe: 0 })).toBeGreaterThanOrEqual(0.5);
+  });
+
+  it('simulateHunt reproduz kills/h reais do soak (erro <25%)', () => {
+    const endgame = { power: 3, aoe: 3, heal: 1, party_ready: true, slot1_present: true };
+    const cases: Array<[string, number, number]> = [
+      ['dragon-lair', 150, 838],
+      ['glooth-cave', 150, 831],
+      ['vexclaw-lair', 311, 485],
+      ['undeadragon-lair', 312, 519],
+    ];
+    for (const [hid, lvl, obs] of cases) {
+      const sim = simulateHunt(hid, lvl, endgame, 1.0);
+      expect(sim).not.toBeNull();
+      const err = Math.abs((sim!.kills_h - obs) / obs);
+      expect(err).toBeLessThan(0.25);
+    }
   });
 });

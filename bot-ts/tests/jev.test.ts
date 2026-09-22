@@ -144,6 +144,11 @@ describe('JEV (TypeSafe AI Decision Engine)', () => {
       currentHuntId: 'dragon-lair',
       unlockedHunts: hunts,
       recentDeaths: 0,
+      candidates: [
+        { id: 'trolls', name: 'Troll Cave', minLevel: 1, xpPerHour: 200_000, netGoldPerHour: 50_000, sampleReady: true, source: 'server-preview' },
+        { id: 'dragon-lair', name: 'Dragon Lair', minLevel: 60, xpPerHour: 2_000_000, netGoldPerHour: 100_000, sampleReady: true, source: 'server-preview' },
+        { id: 'glooth-cave', name: 'Glooth Bandits', minLevel: 140, xpPerHour: 5_000_000, netGoldPerHour: 2_000_000, sampleReady: true, source: 'server-preview' },
+      ],
     });
 
     expect(rec.advisoryOnly).toBe(true);
@@ -167,8 +172,25 @@ describe('JEV (TypeSafe AI Decision Engine)', () => {
       recentDeaths: 0,
     });
 
-    expect(rec.recommendedHuntId).toBe('wyrm-cave');
-    expect(rec.recommendedHuntName).toBe('Wyrm');
+    expect(rec.recommendedHuntId).toBe('troll-cave');
+    expect(rec.recommendedHuntName).toBe('Troll Cave');
+    expect(rec.rationale).toContain('Sem amostra válida');
     expect(rec.advisoryOnly).toBe(true);
+  });
+
+  it('discoverDamageFormula retorna coeficientes calibrados no soak (fallback offline)', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const res = await offlineEngine.discoverDamageFormula([
+      { level: 150, avgHp: 1450, alive: 3, spawnS: 3.6, kills: 966, uptimeSec: 4149, huntId: 'dragon-lair' },
+      { level: 150, avgHp: 2500, alive: 4, spawnS: 2.2, kills: 981, uptimeSec: 4250, huntId: 'glooth-cave' },
+      { level: 311, avgHp: 8450, alive: 4, spawnS: 2.2, kills: 172, uptimeSec: 1276, huntId: 'vexclaw-lair' },
+    ]);
+    expect(res.source).toBe('fallback');
+    expect(res.a).toBeCloseTo(0.24, 2);
+    expect(res.b).toBeCloseTo(0.12, 2);
+    expect(res.c).toBeCloseTo(0.08, 2);
+    expect(res.partyMult).toBeCloseTo(1.25, 2);
+    expect(res.medianK).toBeGreaterThan(0.5);
+    expect(res.medianK).toBeLessThan(2.0);
   });
 });

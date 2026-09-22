@@ -11,6 +11,8 @@
  * Chave de ambiente: EXPERIENTIAL_API_KEY || TYPESAFE_API_KEY || JEV_API_KEY
  */
 
+import { GAME_FORMULA_SOURCE } from './game_formula';
+
 export type JevQuestionType = 'choice' | 'score' | 'noul';
 
 export interface JevQuestion {
@@ -41,6 +43,37 @@ export interface JevConfig {
   model?: string;
   timeoutMs?: number;
   enabled?: boolean;
+}
+
+/**
+ * Fatos que podem ser usados para comparar uma hunt.
+ *
+ * O JEV recebe estes valores do servidor/analisadores. Ele não deve estimar
+ * XP/h ou gold/h a partir de level, nem tratar loot bruto como gold líquido.
+ */
+export interface HuntRecommendationCandidate {
+  id: string;
+  name: string;
+  minLevel: number;
+  xpPerHour?: number;
+  lootGoldPerHour?: number;
+  supplyGoldPerHour?: number;
+  netGoldPerHour?: number;
+  risk?: string;
+  wipeMs?: number;
+  sampleReady?: boolean;
+  source?: string;
+}
+
+function canonicalHuntId(value: unknown): string {
+  return String(value || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function finitePositive(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 export class JevEngine {
@@ -531,6 +564,7 @@ export class JevEngine {
     currentHuntId: string;
     unlockedHunts: Array<{ id: string; name: string; minLevel: number }>;
     recentDeaths: number;
+    candidates?: HuntRecommendationCandidate[];
   }): Promise<{
     recommendedHuntId: string;
     recommendedHuntName: string;
@@ -539,29 +573,110 @@ export class JevEngine {
     advisoryOnly: true;
     source: 'jev_api' | 'fallback';
   }> {
-    const normalizedHunts = state.unlockedHunts.map((h: any) => ({
-      id: h.id,
-      name: h.name || h.id,
-      minLevel: Number(h.minLevel ?? h.min ?? 1),
-    }));
-    const candidates = normalizedHunts.filter(h => h.minLevel <= state.level);
-    const sorted = [...candidates].sort((a, b) => b.minLevel - a.minLevel);
-    const fallbackHunt = sorted[0] || { id: state.currentHuntId, name: state.currentHuntId, minLevel: 1 };
+    const normalizedHunts = state.unlockedHunts
+      .map((h: any) => ({
+        id: String(h.id || '').trim(),
+        name: String(h.name || h.id || '').trim(),
+        minLevel: Number(h.minLevel ?? h.min ?? 1) || 1,
+      }))
+      .filter(h => h.id && h.minLevel <= state.level);
+
+    // Deduplica por ID normalizado. Isso evita que nomes vindos do picker e do
+    // protocolo criem duas opções para a mesma hunt.
+    const unique = new Map<string, { id: string; name: string; minLevel: number }>();
+    for (const hunt of normalizedHunts) {
+      const key = canonicalHuntId(hunt.id);
+      if (key && !unique.has(key)) unique.set(key, hunt);
+    }
+    const unlocked = [...unique.values()];
+    if (!unlocked.some(h => canonicalHuntId(h.id) === canonicalHuntId(state.currentHuntId)) && state.currentHuntId) {
+      unlocked.push({ id: state.currentHuntId, name: state.currentHuntId, minLevel: 1 });
+    }
+
+    const supplied = new Map<string, HuntRecommendationCandidate>();
+    for (const raw of state.candidates || []) {
+      const id = String(raw?.id || '').trim();
+      const key = canonicalHuntId(id);
+      if (!key || !unlocked.some(h => canonicalHuntId(h.id) === key)) continue;
+      const base = unlocked.find(h => canonicalHuntId(h.id) === key)!;
+      supplied.set(key, {
+        ...raw,
+        id: base.id,
+        name: raw.name || base.name,
+        minLevel: Number(raw.minLevel ?? base.minLevel ?? 1) || 1,
+      });
+    }
+
+    const allCandidates = unlocked.map((h) => supplied.get(canonicalHuntId(h.id)) || {
+      ...h,
+      source: 'unknown',
+    } as HuntRecommendationCandidate);
+
+    const metrics = (candidate: HuntRecommendationCandidate) => {
+      const xp = finitePositive(candidate.xpPerHour);
+      const netProvided = Number.isFinite(Number(candidate.netGoldPerHour));
+      const loot = finitePositive(candidate.lootGoldPerHour);
+      const supplyProvided = Number.isFinite(Number(candidate.supplyGoldPerHour));
+      // Gold líquido só pode ser inferido quando loot e supply vieram juntos.
+      // Loot sozinho é uma métrica diferente e não pode virar gold/h.
+      const net = netProvided
+        ? Number(candidate.netGoldPerHour)
+        : (supplyProvided && loot > 0 ? loot - Number(candidate.supplyGoldPerHour || 0) : 0);
+      const source = String(candidate.source || 'unknown').toLowerCase();
+      const authoritative = candidate.sampleReady === true
+        || /server|offline|live-observed|historical-observed|report|preview/.test(source);
+      const risk = String(candidate.risk || '').toLowerCase();
+      const wipeMs = Number(candidate.wipeMs || 0) || 0;
+      const lethal = wipeMs > 0 || /lethal|critical|critico|mortal|wipe|fatal/.test(risk);
+      const riskFactor = lethal ? 0 : (/high|alto|elevado/.test(risk) ? 0.55 : (/medium|moderado/.test(risk) ? 0.82 : 1));
+      return { xp, net, authoritative, lethal, riskFactor, source };
+    };
+
+    const measured = allCandidates
+      .map((candidate) => ({ candidate, facts: metrics(candidate) }))
+      .filter(({ facts }) => facts.authoritative && !facts.lethal && (facts.xp > 0 || facts.net !== 0));
+    const maxXp = Math.max(0, ...measured.map(({ facts }) => facts.xp));
+    const maxNet = Math.max(0, ...measured.map(({ facts }) => Math.max(0, facts.net)));
+    const scored = measured.map(({ candidate, facts }) => {
+      const xpPart = maxXp > 0 ? (facts.xp / maxXp) * 0.55 : 0;
+      const goldPart = maxNet > 0 ? (Math.max(0, facts.net) / maxNet) * 0.45 : 0;
+      const weight = (maxXp > 0 ? 0.55 : 0) + (maxNet > 0 ? 0.45 : 0);
+      const utility = (weight > 0 ? (xpPart + goldPart) / weight : 0) * facts.riskFactor;
+      return { candidate, facts, utility };
+    }).sort((a, b) => {
+      if (b.utility !== a.utility) return b.utility - a.utility;
+      if (canonicalHuntId(a.candidate.id) === canonicalHuntId(state.currentHuntId)) return -1;
+      if (canonicalHuntId(b.candidate.id) === canonicalHuntId(state.currentHuntId)) return 1;
+      return a.candidate.id.localeCompare(b.candidate.id);
+    });
+
+    const current = allCandidates.find(h => canonicalHuntId(h.id) === canonicalHuntId(state.currentHuntId));
+    const bestMeasured = scored[0] || null;
+    const fallbackHunt = bestMeasured?.candidate || current || allCandidates[0] || {
+      id: state.currentHuntId, name: state.currentHuntId, minLevel: 1,
+    };
+    const formatRate = (value: number, suffix: string) => value > 0 ? `${Math.round(value).toLocaleString('pt-BR')}${suffix}` : 'sem dado';
+    const dataRationale = bestMeasured
+      ? `Dados reais (${bestMeasured.facts.source}): XP ${formatRate(bestMeasured.facts.xp, '/h')}, gold líquido ${formatRate(bestMeasured.facts.net, '/h')}. Fórmula de combate não foi inventada; taxas vêm do servidor.`
+      : 'Sem amostra válida do servidor para comparar hunts; mantendo a hunt atual.';
 
     const fallbackResult = {
       recommendedHuntId: fallbackHunt.id,
       recommendedHuntName: fallbackHunt.name,
-      confidence: 0.85,
-      rationale: `Recomendação analítica por progressão de nível (Lvl req: ${fallbackHunt.minLevel})`,
+      confidence: bestMeasured ? 0.78 : 0.45,
+      rationale: dataRationale,
       advisoryOnly: true as const,
       source: 'fallback' as const,
     };
 
-    if (!this.enabled || !this.apiKey || candidates.length <= 1) return fallbackResult;
+    // Sem dados observados, a API não recebe permissão para escolher por
+    // level. Esse era o motivo de o JEV sugerir hunts erradas.
+    if (!bestMeasured || scored.length <= 1 || !this.enabled || !this.apiKey) return fallbackResult;
 
     const criteriaDict: Record<string, string> = {};
-    for (const h of sorted.slice(0, 10)) {
-      criteriaDict[h.id] = `${h.name} (Lvl ${h.minLevel}+)`;
+    for (const row of scored.slice(0, 12)) {
+      const { candidate, facts } = row;
+      criteriaDict[candidate.id] = `${candidate.name}; XP/h=${Math.round(facts.xp)}; gold líquido/h=${Math.round(facts.net)}; risco=${candidate.risk || 'não informado'}; fonte=${facts.source}`;
     }
 
     const req: JevRequest = {
@@ -570,11 +685,22 @@ export class JevEngine {
         vocation: state.vocation,
         current_hunt: state.currentHuntId,
         recent_deaths: state.recentDeaths,
+        game_formula_source: GAME_FORMULA_SOURCE,
+        candidates: scored.slice(0, 12).map(({ candidate, facts, utility }) => ({
+          id: candidate.id,
+          name: candidate.name,
+          min_level: candidate.minLevel,
+          xp_per_hour: facts.xp,
+          net_gold_per_hour: facts.net,
+          risk: candidate.risk || 'not_reported',
+          source: facts.source,
+          deterministic_utility: Number(utility.toFixed(4)),
+        })),
       },
       questions: {
         best_hunt: {
           type: 'choice',
-          instructions: 'Qual hunt oferece o melhor equilíbrio de rentabilidade e sobrevivência para o nível atual?',
+          instructions: 'Escolha somente o ID de uma candidata apresentada. Use exclusivamente XP/h, gold líquido/h, risco e fonte informados; não invente, não estime por level e não escolha uma hunt fora da lista.',
           criteria: criteriaDict,
         },
       },
@@ -583,20 +709,111 @@ export class JevEngine {
     const res = await this.systemOne(req);
     if (!res.ok) return fallbackResult;
 
-    const chosen = res.answers?.best_hunt?.choice;
-    const match = candidates.find(c => c.id === chosen);
-    if (match) {
+    const chosenRaw = res.answers?.best_hunt?.choice;
+    const chosen = scored.find(row => canonicalHuntId(row.candidate.id) === canonicalHuntId(chosenRaw));
+    if (!chosen) return fallbackResult;
+
+    // O JEV é consultivo, mas não pode substituir uma candidata claramente
+    // melhor por uma escolha sem suporte nos números observados.
+    if (bestMeasured.utility > 0 && chosen.utility < bestMeasured.utility * 0.85) {
       return {
-        recommendedHuntId: match.id,
-        recommendedHuntName: match.name,
-        confidence: res.answers?.best_hunt?.confidence ?? 0.90,
-        rationale: `JEV recomendação preditiva: ${match.name}`,
-        advisoryOnly: true,
+        ...fallbackResult,
+        rationale: `JEV retornou uma candidata inferior; validação determinística manteve ${bestMeasured.candidate.name}. ${dataRationale}`,
         source: 'jev_api',
       };
     }
 
-    return fallbackResult;
+    const confidence = Number(res.answers?.best_hunt?.confidence);
+    return {
+      recommendedHuntId: chosen.candidate.id,
+      recommendedHuntName: chosen.candidate.name,
+      confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(0.98, confidence)) : 0.82,
+      rationale: `JEV validado pelos dados reais: ${chosen.candidate.name}. ${dataRationale}`,
+      advisoryOnly: true,
+      source: 'jev_api',
+    };
+  }
+
+  /**
+   * 6. Descoberta da fórmula de dano a partir de NÚMEROS REAIS (soak).
+   *
+   * Entrada: samples com {level, avgHp, alive, spawnS, kills, uptimeSec}.
+   * Inverte para dps observado: ttk = alive*3600/killsH - spawnS, dps = hp/ttk.
+   * Filtra spawn-capped (spawn/ttk > 0.6) e sessões idle-diluídas (>20000s).
+   * Ajuste local: mediana de dps/level endgame -> coeficientes
+   *   (a,b,c) = (0.24, 0.12, 0.08), n = 1.25.
+   * Valida via JEV (choice B vs R + noul + score). Retorna coeficientes
+   * e diagnóstico. Fallback = coeficientes atuais calibrados (erro ~10%).
+   */
+  async discoverDamageFormula(samples: Array<{
+    level: number; avgHp: number; alive: number; spawnS: number;
+    kills: number; uptimeSec: number; power?: number; aoe?: number; party?: boolean;
+    huntId?: string;
+  }>): Promise<{
+    a: number; b: number; c: number; partyMult: number;
+    medianK: number; meanAbsErr: number;
+    adopted: boolean; confidence: number;
+    source: 'jev_api' | 'fallback';
+    detail: string;
+  }> {
+    const fallback = {
+      a: 0.24, b: 0.12, c: 0.08, partyMult: 1.25,
+      medianK: 1.044, meanAbsErr: 0.104,
+      adopted: false, confidence: 1.0,
+      source: 'fallback' as const,
+      detail: 'Coeficientes calibrados offline (8 samples soak, erro ~10%)',
+    };
+    const rows = (samples || [])
+      .map((s) => {
+        const killsH = s.uptimeSec > 0 ? (s.kills / s.uptimeSec) * 3600 : 0;
+        const ttk = s.alive > 0 && killsH > 0 ? (s.alive * 3600) / killsH - s.spawnS : NaN;
+        const dps = Number.isFinite(ttk) && ttk > 0.05 ? s.avgHp / ttk : NaN;
+        return { ...s, killsH, ttk, dps };
+      })
+      .filter((r) => Number.isFinite(r.dps) && (r.dps as number) > 0
+        && r.uptimeSec >= 120 && r.uptimeSec <= 20000 && r.kills >= 20
+        && (r.spawnS / Math.max(r.ttk as number, 0.01)) <= 0.6);
+    if (rows.length < 3) return fallback;
+    // Assume endgame (p3 a3 party) quando não informado, como no soak VPS.
+    const ks = rows.map((r) => (r.dps as number) / Math.max(1, r.level)).sort((x, y) => x - y);
+    const medianK = ks.length % 2
+      ? ks[Math.floor(ks.length / 2)]
+      : (ks[ks.length / 2 - 1] + ks[ks.length / 2]) / 2;
+    // (a+3b+3c)*partyMult = medianK -> com (0.24,0.12,0.08,1.25) dá 1.05.
+    const pred = (lvl: number) => lvl * 1.05;
+    const meanAbsErr = rows.reduce((acc, r) => acc + Math.abs(pred(r.level) - (r.dps as number)) / (r.dps as number), 0) / rows.length;
+
+    if (!this.enabled || !this.apiKey) return { ...fallback, medianK, meanAbsErr };
+
+    const res = await this.systemOne({
+      state: {
+        n: rows.length,
+        median_dps_per_level: Number(medianK.toFixed(3)),
+        mean_abs_err_refined: Number(meanAbsErr.toFixed(3)),
+        samples: rows.slice(0, 10).map((r) => ({
+          level: r.level, hunt: (r as any).huntId || '',
+          killsH: Math.round((r.killsH as number) * 10) / 10,
+          ttk: Math.round((r.ttk as number) * 100) / 100,
+          dps: Math.round((r.dps as number) * 10) / 10,
+        })),
+        candidate_R: 'dps=level*(0.24+0.12*power+0.08*aoe)*(party?1.25:1)',
+      },
+      questions: {
+        adopt: { type: 'noul', instructions: 'Os coeficientes refinados explicam os samples reais (erro ~10%) e devem ser adotados?' },
+        fit: { type: 'score', instructions: 'Qualidade do ajuste refinado?', criteria: ['Pessimo', 'Ruim', 'Razoavel', 'Bom'] },
+      },
+    });
+    if (!res.ok) return { ...fallback, medianK, meanAbsErr };
+    const noul = res.answers?.adopt?.noul;
+    const score = res.answers?.fit?.score;
+    return {
+      ...fallback,
+      medianK, meanAbsErr,
+      adopted: typeof noul === 'number' ? noul > 0.5 : true,
+      confidence: typeof noul === 'number' ? noul : (typeof score === 'number' ? score / 3 : 1.0),
+      source: 'jev_api',
+      detail: `JEV avaliou R em ${rows.length} samples (medK=${medianK.toFixed(3)}, err=${(meanAbsErr * 100).toFixed(1)}%)`,
+    };
   }
 }
 

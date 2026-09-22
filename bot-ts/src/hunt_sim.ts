@@ -129,11 +129,40 @@ export function goldFarmReady(magic?: Record<string, any> | null): boolean {
 }
 
 export function estimateDps(level: number, magic?: Record<string, any> | null): number {
+  // Fórmula empírica descoberta via JEV (jev-latest) a partir de números REAIS
+  // de soak (logs/soak_tracker.json + engine_hunts.json), não chute teórico.
+  //
+  // Amostras confiáveis (ttk >> spawn, up 120s-5000s, sem idle-diluição):
+  //  lvl150 dragon 838 kills/h -> ttk 9.29s -> 156 dps
+  //  lvl150 glooth 831 kills/h -> ttk 15.13s -> 165 dps
+  //  lvl311 vexclaw 485 kills/h -> ttk 27.47s -> 308 dps
+  //  lvl312 undead 519 kills/h -> ttk 25.52s -> 327 dps
+  //  lvl160 glooth 885 kills/h -> ttk 14.07s -> 178 dps
+  //  lvl320 asura 1462 kills/h -> ttk 7.65s -> 414 dps
+  //  lvl320 wyrm 1294 kills/h -> ttk 8.93s -> 253 dps
+  //  Inversão: ttk = alive*3600/killsH - spawnS, dps = avgHp/ttk.
+  //  Elf-lair excluída (spawn-capped: ttk 3.01s, 73% spawn) e sessões
+  //  >20000s excluídas (idle dilui kills/h).
+  //
+  //  Mediana endgame (power3 aoe3 party): 1.044 dps/level.
+  //  Antiga: level*(5+7*power+9*aoe)*n => 106*level endgame (15900 @150).
+  //    Erro 90-100x. JEV: reject nour 0.84-0.94, fit score 0.04 (Péssimo).
+  //  JEV choice B_linear_calibrated (0.84) > A/C, depois refinada R
+  //    (decision_2980018ff3385094085f1c2ed2917be4): noul 0.89, score 2.85
+  //    (Bom), choice R 1.00. Erro médio 10.4% vs 29% de B.
+  //
+  //  dps = level * (0.24 + 0.12*power + 0.08*min(aoe,3)) * (party?1.25:1)
+  //  Endgame p3a3 party: 1.05*level (lvl150=>158, lvl311=>327).
+  //  Base p0a0 solo: 0.24*level (scaling magia 4.4x, não 21x como antes).
   const m = magic || {};
-  const power = parseInt(String(m.power ?? 0), 10) || 0;
-  const aoe = parseInt(String(m.aoe ?? 0), 10) || 0;
-  const n = m.slot1_present || m.party_ready ? 2 : 1;
-  return Math.max(8.0, Math.max(1, level) * (5 + 7 * power + 9 * Math.min(aoe, 3)) * n);
+  const rawPower = parseInt(String(m.power ?? 0), 10) || 0;
+  const rawAoe = parseInt(String(m.aoe ?? 0), 10) || 0;
+  const power = Math.max(0, Math.min(3, rawPower));
+  const aoe = Math.max(0, Math.min(3, rawAoe));
+  const party = !!(m.slot1_present || m.party_ready);
+  const n = party ? 1.25 : 1;
+  const lvl = Math.max(1, level);
+  return Math.max(0.5, lvl * (0.24 + 0.12 * power + 0.08 * aoe) * n);
 }
 
 export function simulateHunt(hid: string, level: number, magic?: Record<string, any> | null, _scale = 1.0, observed?: ObservedHuntScore | null): any | null {

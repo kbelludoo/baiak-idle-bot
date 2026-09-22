@@ -21,24 +21,35 @@ export function findHuntRow(rows: Array<{ id: string; name: string }>, target: {
     if (exact) return exact;
   }
 
-  // 2. Normalizado com colapso de duplicatas e sufixos
-  const wantId = target.id ? normalizeHuntToken(target.id.replace(/-lair|-cave|-dungeon|-camp|-ground/g, '')) : '';
+  // 2. Normalizado EXATO (sem includes): "dragon" ⊂ "undeadragon"/"megadragon",
+  // então includes() clicava na hunt errada. Comparação sempre exata.
+  const wantId = target.id ? normalizeHuntToken(target.id) : '';
   const wantName = target.name ? normalizeHuntToken(target.name) : '';
 
-  return rows.find(r => {
-    const rowIdNorm = normalizeHuntToken(r.id.replace(/-lair|-cave|-dungeon|-camp|-ground/g, ''));
-    const rowNameNorm = normalizeHuntToken(r.name);
-
-    if (wantId && (rowIdNorm === wantId || rowIdNorm.includes(wantId) || wantId.includes(rowIdNorm))) return true;
-    if (wantName && (rowNameNorm === wantName || rowNameNorm.includes(wantName) || wantName.includes(rowNameNorm))) return true;
+  const exactHit = rows.find(r => {
+    if (wantId && normalizeHuntToken(r.id) === wantId) return true;
+    if (wantName && normalizeHuntToken(r.name) === wantName) return true;
     return false;
-  }) || null;
+  });
+  if (exactHit) return exactHit;
+
+  // 3. Base sem sufixo, ainda exata (tolerando "cobra" -> cobra-cave,
+  // "undead-dragon" -> undeadragon-lair via normalizeToken).
+  if (wantId) {
+    const wantBase = normalizeHuntToken(target.id!.replace(/-lair|-cave|-dungeon|-camp|-ground/g, ''));
+    const baseHit = rows.find(r =>
+      normalizeHuntToken(r.id.replace(/-lair|-cave|-dungeon|-camp|-ground/g, '')) === wantBase);
+    if (baseHit) return baseHit;
+  }
+  return null;
 }
 
 describe('Hunt Matching & Normalization', () => {
   const sampleRows = [
     { id: 'asura-lair', name: 'Asuras' },
+    { id: 'dragon-lair', name: 'Dragon Lair' },
     { id: 'undeadragon-lair', name: 'Undead Dragon' },
+    { id: 'megadragon-cave', name: 'Mega Dragon' },
     { id: 'cobra-cave', name: 'Cobras' },
     { id: 'glooth-cave', name: 'Glooth Bandit' },
   ];
@@ -69,5 +80,21 @@ describe('Hunt Matching & Normalization', () => {
     expect(matchHunt('Undead Dragon 5/10')?.id).toBe('undeadragon-lair');
     expect(matchHunt('Cobras 1/10')?.id).toBe('cobra-cave');
     expect(matchHunt('Glooth Bandit 8/10')?.id).toBe('glooth-cave');
+  });
+
+  it('REGRESSÃO VPS1: dragon-lair nunca casa com undead/mega dragon', () => {
+    // Seleção exata por ID
+    expect(findHuntRow(sampleRows, { id: 'dragon-lair' })?.id).toBe('dragon-lair');
+    expect(findHuntRow(sampleRows, { id: 'undeadragon-lair' })?.id).toBe('undeadragon-lair');
+    expect(findHuntRow(sampleRows, { id: 'megadragon-cave' })?.id).toBe('megadragon-cave');
+    // Seleção por nome
+    expect(findHuntRow(sampleRows, { name: 'Dragon Lair' })?.id).toBe('dragon-lair');
+    expect(findHuntRow(sampleRows, { name: 'Undead Dragon' })?.id).toBe('undeadragon-lair');
+    // matchHunt: variante com hífen não pode cair no Dragon Lair
+    expect(matchHunt('undead-dragon')?.id).toBe('undeadragon-lair');
+    expect(matchHunt('undead-dragons')?.id).toBe('undeadragon-lair');
+    expect(matchHunt('Dragon Lair 3/10')?.id).toBe('dragon-lair');
+    expect(matchHunt('Undead Dragon')?.id).toBe('undeadragon-lair');
+    expect(matchHunt('Mega Dragon')?.id).toBe('megadragon-cave');
   });
 });

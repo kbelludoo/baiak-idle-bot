@@ -872,6 +872,12 @@ const esc = v => String(v ?? '—').replace(/[&<>"']/g, x => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 }[x]));
 
+function canonicalHunt(value) {
+  return String(value || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 const num = v => typeof v === 'number' ? v.toLocaleString('pt-BR', { maximumFractionDigits: 1 }) : esc(v);
 
 function formatGold(v) {
@@ -1007,7 +1013,7 @@ function huntMetricValue(status, huntId, category) {
 
   const keys = category === 'xp'
     ? ['xpPerHour', 'xp_per_hour', 'avg_xp_h', 'xp_h', 'xp_h_display']
-    : ['lootGoldPerHour', 'loot_per_hour', 'avg_loot_h', 'avg_gold_h', 'gold_per_hour', 'netGoldPerHour'];
+    : ['lootGoldPerHour', 'loot_per_hour', 'avg_loot_h'];
 
   let best = 0;
   for (const s of sources) {
@@ -1101,11 +1107,8 @@ function applyJevHunt(botId, huntId) {
   const sel = document.getElementById('hunt-select-' + botId);
   if (!sel) return;
   let targetVal = huntId;
-  let matched = Array.from(sel.options).find(o => o.value === targetVal);
-  if (!matched) {
-    matched = Array.from(sel.options).find(o => o.value.includes(huntId) || huntId.includes(o.value));
-    if (matched) targetVal = matched.value;
-  }
+  const matched = Array.from(sel.options).find(o => canonicalHunt(o.value) === canonicalHunt(targetVal));
+  if (matched) targetVal = matched.value;
   if (matched) {
     sel.value = targetVal;
     pendingHuntSelections[botId] = targetVal;
@@ -1126,7 +1129,10 @@ function applyJevHunt(botId, huntId) {
 
 function huntSection(id, s, decision, isForced) {
   const stage = huntStageInfo(s);
-  const huntName = esc(huntNameWithoutStage(stage.raw || s.last_hunt || s.hunt || '—'));
+  const currentId = s.selected_hunt_id || s.force_hunt_id || s.last_hunt_id || '';
+  const currentCatalog = HUNTS_CATALOG.find(h => canonicalHunt(h.id) === canonicalHunt(currentId))
+    || HUNTS_CATALOG.find(h => canonicalHunt(h.name) === canonicalHunt(s.selected_hunt_name || s.last_hunt || s.hunt));
+  const huntName = esc(currentCatalog?.name || huntNameWithoutStage(s.selected_hunt_name || stage.raw || s.last_hunt || s.hunt || '—'));
   const mode = '🎮 ESCOLHA MANUAL';
   const decisionText = s.hunt_control === 'manual'
     ? (s.pending_hunt_id ? `Aguardando finalizar o estágio para trocar para ${s.pending_hunt_name || s.pending_hunt_id}` : 'Alvo fixado pelo jogador')

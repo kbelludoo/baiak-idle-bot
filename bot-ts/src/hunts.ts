@@ -373,17 +373,52 @@ const _HUNTS_MATCH_ORDER = [...HUNTS_TABLE].sort((a, b) => b.name.length - a.nam
 export function matchHunt(wave?: string | null): { id: string; name: string; min: number } | null {
   if (!wave) return null;
   const low = wave.toLowerCase().trim();
-  // 1. Tenta correspondência exata ou por nome completo mais longo
+  // 1. Nome/id completo com sufixo de wave ("Dragon Lair 3/10").
+  // EXATO após strip do estágio — NUNCA includes(): "dragon" é substring de
+  // "undeadragon"/"megadragon" e casava a hunt errada.
+  const lowNoStage = low.replace(/\s*\d+\s*\/\s*\d+\s*$/, '').trim();
   for (const h of _HUNTS_MATCH_ORDER) {
-    if (low.includes(h.name.toLowerCase()) || low.includes(h.id.toLowerCase())) {
+    if (lowNoStage === h.name.toLowerCase() || lowNoStage === h.id.toLowerCase()) {
       return h;
     }
   }
-  // 2. Fallback por cleanId sem sufixos
-  for (const h of _HUNTS_MATCH_ORDER) {
-    const cleanId = h.id.replace(/-lair|-cave|-dungeon|-camp|-ground|-mountain|-ruins/g, '').toLowerCase();
-    if (cleanId.length >= 5 && low.includes(cleanId)) {
-      return h;
+  // 2. Fallback EXATO (normalizado): "dragon" é substring de "undeadragon" e
+  // "megadragon", então includes() aqui classificava "undead-dragon" como
+  // dragon-lair. Compara o token completo após normalizar (case, acentos,
+  // separadores, letras duplas, plural), sem substring.
+  const normLow = low
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[-_'\s]+/g, '')
+    .replace(/([a-z])\1+/g, '$1')
+    .replace(/(s|es)$/, '');
+  if (normLow) {
+    for (const h of _HUNTS_MATCH_ORDER) {
+      const normId = h.id.toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[-_'\s]+/g, '')
+        .replace(/([a-z])\1+/g, '$1')
+        .replace(/(s|es)$/, '');
+      if (normLow === normId) return h;
+      const normName = h.name.toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[-_'\s]+/g, '')
+        .replace(/([a-z])\1+/g, '$1')
+        .replace(/(s|es)$/, '');
+      if (normLow === normName) return h;
+    }
+    for (const h of _HUNTS_MATCH_ORDER) {
+      const cleanId = h.id.replace(/-lair|-cave|-dungeon|-camp|-ground|-mountain|-ruins/g, '').toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[-_'\s]+/g, '')
+        .replace(/([a-z])\1+/g, '$1')
+        .replace(/(s|es)$/, '');
+      if (cleanId.length >= 5 && normLow === cleanId) {
+        return h;
+      }
     }
   }
   return null;
@@ -399,14 +434,13 @@ export function idsFromPickerRows(rows?: Array<Record<string, any>> | null): str
     const blob = `${row.name || ''} ${row.text || ''}`.trim().toLowerCase();
     if (!blob) continue;
     let hit: string | null = null;
-    for (const h of HUNTS_TABLE) {
+    // Ordem longest-first + word-boundary: "Dragon Lair" nunca casa dentro de
+    // "Undead Dragon"/"Mega Dragon". SEM fallback includes() — substring aqui
+    // recasava o bug do dragon/undeadragon.
+    const byLongest = [...HUNTS_TABLE].sort((a, b) => b.name.length - a.name.length);
+    for (const h of byLongest) {
       const n = h.name.toLowerCase();
       if (blob === n || blob.startsWith(n + ' ') || ` ${blob} `.includes(` ${n} `)) { hit = h.id; break; }
-    }
-    if (!hit) {
-      for (const h of HUNTS_TABLE) {
-        if (blob.includes(h.name.toLowerCase())) { hit = h.id; break; }
-      }
     }
     if (hit) out.push(hit);
   }
