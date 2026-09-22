@@ -606,8 +606,12 @@ export class TelemetryStore {
         this.updateLevel(parseInt(dugLevel.trim(), 10), 'websocket');
       }
 
-      // Gold — varre wallet/balance/coins/money em qualquer ninho
-      const g = digDeep(pay, ['gold', 'coins', 'wallet', 'balance', 'money', 'goldAmount', 'totalGold', 'coinBalance']);
+      // Gold — varre wallet/balance/money em qualquer ninho.
+      // NOTA: 'coins'/'coinBalance' são moedas da loja (updateCoins) e NUNCA
+      // podem ser lidas como gold: um frame com {coins: 500} e sem gold
+      // derrubava o saldo de 1.3B para 500 e o retorno a 1.3B era
+      // contabilizado como +1.3B de lucro da hunt.
+      const g = digDeep(pay, ['gold', 'wallet', 'balance', 'money', 'goldAmount', 'totalGold']);
       if (typeof g === 'number' || typeof g === 'string') this.updateGold(g as any, 'websocket');
 
       // Stamina — aceita número (fração 0..1 ou minutos), string ou objeto {minutes, pct}

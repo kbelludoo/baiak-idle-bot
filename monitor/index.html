@@ -1235,26 +1235,30 @@ function card(id, b) {
   const liveXpPerHour = huntElapsedHours > 0 && huntXp > 0 ? Math.round(huntXp / huntElapsedHours) : 0;
   const liveKillsPerHour = huntElapsedHours > 0 && huntKills > 0 ? Math.round(huntKills / huntElapsedHours) : 0;
   const liveWavesPerHour = huntElapsedHours > 0 && huntWaves > 0 ? Math.round(huntWaves / huntElapsedHours) : 0;
+  const hasSampleFlag = Object.prototype.hasOwnProperty.call(selected, 'sample_ready');
+  const currentSampleReady = hasSampleFlag ? selected.sample_ready === true : huntElapsedSec >= 60;
+  const hasGoldSampleFlag = Object.prototype.hasOwnProperty.call(selected, 'gold_sample_ready');
+  const goldSampleReady = hasGoldSampleFlag ? selected.gold_sample_ready === true : currentSampleReady;
 
   // XP / hora da nova medição
   const rawXpRate = selected.xp_per_hour ?? an.xp_per_hour;
-  let parsedXpRate = parseHuntMetric(rawXpRate);
-  if (!(parsedXpRate > 0) || huntElapsedSec < 60) {
+  let parsedXpRate = currentSampleReady ? parseHuntMetric(rawXpRate) : 0;
+  if (currentSampleReady && !(parsedXpRate > 0) && !hasSampleFlag) {
     parsedXpRate = liveXpPerHour || huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'xp');
   }
-  const displayXpHour = parsedXpRate > 0 ? `${formatXp(parsedXpRate)}/h` : (huntElapsedSec < 60 ? 'Calculando…' : '0 XP/h');
+  const displayXpHour = !currentSampleReady ? 'Calculando…' : (parsedXpRate > 0 ? `${formatXp(parsedXpRate)}/h` : '0 XP/h');
 
   // Loot / hora da nova medição
   const rawLootRate = selected.loot_per_hour ?? an.loot_per_hour;
-  let parsedLootRate = parseHuntMetric(rawLootRate);
-  if (!(parsedLootRate > 0) || huntElapsedSec < 60) {
+  let parsedLootRate = currentSampleReady ? parseHuntMetric(rawLootRate) : 0;
+  if (currentSampleReady && !(parsedLootRate > 0) && !hasSampleFlag) {
     parsedLootRate = huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'loot');
   }
-  const displayLootHour = parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : (huntElapsedSec < 60 ? 'Calculando…' : '0/h');
+  const displayLootHour = !currentSampleReady ? 'Calculando…' : (parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : '0/h');
 
   // Gold / hora
-  const goldHourVal = Number(selected.gold_per_hour ?? a.goldPerHour ?? an.net_gold_per_hour ?? 0) || 0;
-  const displayGoldHour = goldHourVal > 0 ? `${formatGold(goldHourVal)}/h` : (parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : '0/h');
+  const goldHourVal = goldSampleReady ? (Number(selected.gold_per_hour ?? a.goldPerHour ?? an.net_gold_per_hour ?? 0) || 0) : 0;
+  const displayGoldHour = !goldSampleReady ? 'Calculando…' : (goldHourVal > 0 ? `${formatGold(goldHourVal)}/h` : '0/h');
 
   // Kills / hora & Waves / hora
   const killsHourVal = huntElapsedSec >= 60 ? (liveKillsPerHour || Number(sessionMetrics.kills_per_hour ?? a.killsPerHour ?? 0)) : (liveKillsPerHour || 0);

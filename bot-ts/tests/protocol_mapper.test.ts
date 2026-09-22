@@ -119,4 +119,19 @@ describe('ProtocolMapper', () => {
     expect(score?.lootGoldPerHour).toBe(0);
     expect(score?.netGoldPerHour).toBe(0);
   });
+
+  it('descarta a taxa histórica ao abrir uma nova janela da mesma hunt', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'baiak-mapper-restart-window-'));
+    const mapper = new ProtocolMapper(dir);
+    mapper.ingest('offlineInfo', {
+      previews: [{ huntId: 'vexclaw-lair', xpPerHour: 9000000, lootGoldPerHour: 428357, netGoldPerHour: 428357 }],
+    }, 100);
+    expect(mapper.snapshot().scores['vexclaw-lair']?.netGoldPerHour).toBe(428357);
+
+    mapper.ingest('joined', { huntId: 'vexclaw-lair', wave: 1 }, 20);
+    const score = mapper.snapshot().scores['vexclaw-lair'];
+    expect(score?.source).toBe('live-window');
+    expect(score?.netGoldPerHour).toBe(0);
+    expect(score?.sampleReady).toBe(false);
+  });
 });

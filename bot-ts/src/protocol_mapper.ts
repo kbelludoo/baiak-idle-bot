@@ -222,6 +222,32 @@ export class ProtocolMapper {
 
   private activeHunt: string | null = null;
 
+  /**
+   * Abre uma janela nova para esta execução. As taxas salvas no disco são
+   * histórico; não podem reaparecer como se fossem a medição do processo novo.
+   */
+  private beginLiveWindow(hid: string, record: MapperSnapshot['hunts'][string]): void {
+    this.liveWindows.set(hid, {
+      startedAt: Date.now(), xp: Number(record.xp || 0), loot: Number(record.loot || 0),
+      kills: Number(record.kills || 0),
+    });
+    const old = this.snapshotData.scores[hid];
+    if (old) {
+      this.snapshotData.scores[hid] = {
+        ...old,
+        xpPerHour: 0,
+        lootGoldPerHour: 0,
+        supplyGoldPerHour: 0,
+        netGoldPerHour: 0,
+        kills: 0,
+        sampleSeconds: 0,
+        sampleReady: false,
+        updatedAt: new Date().toISOString(),
+        source: 'live-window',
+      };
+    }
+  }
+
   private collectHunt(type: unknown, payload: any): void {
     const payloadHunt = this.currentHuntId(payload);
     if (payloadHunt) this.activeHunt = payloadHunt;
@@ -231,10 +257,7 @@ export class ProtocolMapper {
       healing: 0, kills: 0, loot: 0, xp: 0, waves: 0, lastWave: 0,
     });
     if (!this.liveWindows.has(key)) {
-      this.liveWindows.set(key, {
-        startedAt: Date.now(), xp: Number(record.xp || 0), loot: Number(record.loot || 0),
-        kills: Number(record.kills || 0),
-      });
+      this.beginLiveWindow(key, record);
     }
     record.frames++;
     const lower = String(type).toLowerCase();
@@ -387,13 +410,16 @@ export class ProtocolMapper {
     const factor = 3_600_000 / elapsedMs;
     const old = this.snapshotData.scores[hid];
     const liveLootH = loot * factor;
-    const liveSupplyH = Number(old?.supplyGoldPerHour || 0);
+    // O mapper não acompanha suprimentos gastos por uma janela própria. Não
+    // copie o supply/gold antigo para a medição atual, pois isso ressuscita
+    // valores de outra execução depois de um restart.
+    const liveSupplyH = 0;
     const liveNetH = liveSupplyH > 0 ? liveLootH - liveSupplyH : liveLootH;
     this.snapshotData.scores[hid] = {
-      xpPerHour: xp > 0 ? xp * factor : old?.xpPerHour || 0,
-      lootGoldPerHour: liveLootH > 0 ? liveLootH : old?.lootGoldPerHour || 0,
+      xpPerHour: xp * factor,
+      lootGoldPerHour: liveLootH,
       supplyGoldPerHour: liveSupplyH,
-      netGoldPerHour: (liveLootH > 0 || liveSupplyH > 0) ? liveNetH : old?.netGoldPerHour || 0,
+      netGoldPerHour: liveNetH,
       damagePerSecond: old?.damagePerSecond || 0,
       healingPerSecond: old?.healingPerSecond || 0,
       kills,
@@ -417,16 +443,20 @@ export class ProtocolMapper {
     const balance = balanceKey ? parse(analyzer[balanceKey]) : 0;
     if (xp <= 0 && loot <= 0 && supply <= 0 && balance <= 0) return;
     const old = this.snapshotData.scores[hid];
+    const liveWindow = this.liveWindows.has(hid);
+    const previous = liveWindow && old?.sampleReady !== true
+      ? { xpPerHour: 0, lootGoldPerHour: 0, supplyGoldPerHour: 0, netGoldPerHour: 0, kills: 0 }
+      : old;
     this.snapshotData.scores[hid] = {
-      xpPerHour: xp || old?.xpPerHour || 0,
-      lootGoldPerHour: loot || old?.lootGoldPerHour || 0,
-      supplyGoldPerHour: supply || old?.supplyGoldPerHour || 0,
+      xpPerHour: xp || previous?.xpPerHour || 0,
+      lootGoldPerHour: loot || previous?.lootGoldPerHour || 0,
+      supplyGoldPerHour: supply || previous?.supplyGoldPerHour || 0,
       netGoldPerHour: balanceKey
         ? balance
-        : (loot || old?.lootGoldPerHour || 0) - (supply || old?.supplyGoldPerHour || 0),
+        : (loot || previous?.lootGoldPerHour || 0) - (supply || previous?.supplyGoldPerHour || 0),
       damagePerSecond: old?.damagePerSecond || 0,
       healingPerSecond: old?.healingPerSecond || 0,
-      kills: parse(analyzer.hunt_kills ?? analyzer.kills) || old?.kills || 0,
+      kills: parse(analyzer.hunt_kills ?? analyzer.kills) || previous?.kills || 0,
       wipeMs: old?.wipeMs || 0,
       updatedAt: new Date().toISOString(),
       sampleSeconds: this.sampleSecondsFor(hid),
@@ -438,6 +468,9 @@ export class ProtocolMapper {
 
   private recordServerScore(hid: string, raw: any): void {
     if (!hid || !raw || typeof raw !== 'object') return;
+    // Preview/offlineInfo é histórico do servidor. Durante uma janela ao vivo
+    // ele não pode sobrescrever a medição que começou nesta execução.
+    if (this.liveWindows.has(hid)) return;
     const old = this.snapshotData.scores[hid];
     const has = (key: string): boolean => Object.prototype.hasOwnProperty.call(raw, key);
     const num = (key: string): number => Number(raw[key] ?? 0) || 0;

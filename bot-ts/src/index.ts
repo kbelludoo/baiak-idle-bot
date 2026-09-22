@@ -561,6 +561,25 @@ async function main() {
     const selectedMatrix: any = selectedHuntId ? ((huntMatrix as any).matrix?.[selectedHuntId] || {}) : {};
     const analyzerBelongsToSelected = !!selectedHuntId && activeMatch?.id === selectedHuntId;
     const analyzer = analyzerBelongsToSelected ? latestAnalyzers : {};
+    const scoreSampleReady = selectedScore.sampleReady === true;
+    const profilerActive = !!selectedHuntId && String((profiler as any).activeHuntId || '') === selectedHuntId;
+    const profilerElapsed = profilerActive && typeof (profiler as any).measureElapsed === 'function'
+      ? Math.max(0, Number((profiler as any).measureElapsed()) || 0) : 0;
+    let profilerSampleReady = false;
+    try {
+      profilerSampleReady = profilerActive && typeof (profiler as any).visitReady === 'function'
+        ? Boolean((profiler as any).visitReady()) : false;
+    } catch (_) {}
+    const profilerHasGold = profilerActive
+      && (profiler as any).huntStartGold !== null && (profiler as any).huntStartGold !== undefined
+      && (profiler as any).lastGold !== null && (profiler as any).lastGold !== undefined;
+    const profilerGoldReady = profilerSampleReady && profilerHasGold;
+    // Enquanto a janela atual não está pronta, nunca consuma a taxa salva no
+    // mapper/matriz: ela pode ser de uma execução anterior do mesmo VPS.
+    const currentScore = scoreSampleReady ? selectedScore : {};
+    const currentAnalyzer = scoreSampleReady && analyzerBelongsToSelected ? analyzer : {};
+    const currentHuntIsActive = analyzerBelongsToSelected || profilerActive;
+    const historicalMatrix = currentHuntIsActive ? {} : selectedMatrix;
     const firstPositive = (...values: any[]): number => {
       for (const value of values) {
         const n = parseMetricValue(value);
@@ -569,23 +588,23 @@ async function main() {
       return 0;
     };
     const xpPerHour = firstPositive(
-      analyzer.xp_per_hour,
-      selectedScore.xpPerHour,
-      selectedMatrix.xp_h_display,
-      selectedMatrix.avg_xp_h,
+      currentAnalyzer.xp_per_hour,
+      currentScore.xpPerHour,
+      historicalMatrix.xp_h_display,
+      historicalMatrix.avg_xp_h,
     );
     const lootPerHour = firstPositive(
-      analyzer.loot_per_hour,
-      selectedScore.lootGoldPerHour,
-      selectedMatrix.loot_h_display,
-      selectedMatrix.avg_loot_h,
+      currentAnalyzer.loot_per_hour,
+      currentScore.lootGoldPerHour,
+      historicalMatrix.loot_h_display,
+      historicalMatrix.avg_loot_h,
     );
-    const goldPerHour = firstPositive(
-      analyzer.net_gold_per_hour,
-      selectedScore.netGoldPerHour,
-      selectedMatrix.avg_gold_h,
-      lootPerHour,
-    );
+    // Gold/h é a variação real do saldo da conta. Loot/h continua separado;
+    // nunca transforme loot bruto em gold/h só porque faltou o saldo. Se o
+    // saldo não estiver disponível, o painel aguarda a próxima amostra.
+    const goldPerHour = profilerGoldReady
+      ? Math.max(0, Number((profiler as any).sessGoldH) || 0) : 0;
+    const goldSampleReady = profilerGoldReady;
     const sessionKillsPerHour = Math.round((telemetry.kills / elapsedSeconds) * 3600 * 10) / 10;
     const sessionWavesPerHour = Math.round((telemetry.waves / elapsedSeconds) * 3600 * 10) / 10;
     const levelPerHour = sessionStartLevel !== null
@@ -602,9 +621,14 @@ async function main() {
         xp_per_hour: xpPerHour,
         loot_per_hour: lootPerHour,
         gold_per_hour: goldPerHour,
-        source: analyzerBelongsToSelected && parseMetricValue(analyzer.xp_per_hour) > 0
-          ? 'hunt-analyzer' : (selectedScore.xpPerHour > 0 ? 'selected-hunt-live' : 'selected-hunt-history'),
-        window_seconds: Number(selectedScore.sampleSeconds || 0) || 0,
+        sample_ready: scoreSampleReady,
+        gold_sample_ready: goldSampleReady,
+        source: profilerGoldReady
+          ? 'profiler-live'
+          : (scoreSampleReady && analyzerBelongsToSelected && parseMetricValue(currentAnalyzer.xp_per_hour) > 0
+            ? 'hunt-analyzer' : (scoreSampleReady ? 'selected-hunt-live' : 'selected-hunt-measuring')),
+        window_seconds: Math.max(Number(selectedScore.sampleSeconds || 0) || 0, profilerElapsed),
+        historical_gold_per_hour: Number((selectedHuntId ? ((profiler as any).benchmarks || {})[selectedHuntId] : {})?.gold_per_hour || 0) || 0,
       },
       sessionKillsPerHour,
       sessionWavesPerHour,
@@ -1740,12 +1764,27 @@ async function main() {
               const b = ((profiler as any).benchmarks || {})[hId] || {};
               const elapsedS = Math.max(1, (Date.now() - t0Loop) / 1000);
               const observedScore = (protocolMapper.snapshot().scores as any)?.[hId] || {};
-              huntMatrix.recordTick(hId, hName, telemetry.level,
-                Number(observedScore.netGoldPerHour || observedScore.lootGoldPerHour || b.gold_per_hour || 0), Number(b.kills_per_hour || observedScore.kills || 0),
-                Math.round((telemetry.waves / elapsedS) * 3600 * 10) / 10,
-                Number(b.deaths || 0),
-                (latestAnalyzers as any).xp_per_hour ?? observedScore.xpPerHour,
-                (latestAnalyzers as any).loot_per_hour ?? observedScore.lootGoldPerHour);
+              let profilerReady = false;
+              try { profilerReady = Boolean((profiler as any).visitReady?.()); } catch (_) {}
+              const hasProfilerGold = (profiler as any).huntStartGold !== null && (profiler as any).huntStartGold !== undefined
+                && (profiler as any).lastGold !== null && (profiler as any).lastGold !== undefined;
+              const metricReady = profilerReady && hasProfilerGold;
+              // A matriz só aprende com uma janela válida. Antes disso, o
+              // score persistido de um processo anterior contaminava o gold/h
+              // da hunt atual a cada tick.
+              if (metricReady) {
+                const matrixGold = Math.max(0, Number((profiler as any).sessGoldH) || 0);
+                const matrixXp = observedScore.sampleReady === true
+                  ? ((latestAnalyzers as any).xp_per_hour ?? observedScore.xpPerHour)
+                  : 0;
+                const matrixLoot = observedScore.sampleReady === true
+                  ? ((latestAnalyzers as any).loot_per_hour ?? observedScore.lootGoldPerHour)
+                  : 0;
+                huntMatrix.recordTick(hId, hName, telemetry.level,
+                  matrixGold, Number(b.kills_per_hour || observedScore.kills || 0),
+                  Math.round((telemetry.waves / elapsedS) * 3600 * 10) / 10,
+                  Number(b.deaths || 0), matrixXp, matrixLoot);
+              }
             } catch (_) {}
           }
         } else if (isCity && (profiler as any).activeHuntId) {
@@ -2166,7 +2205,7 @@ async function main() {
 
         // Fila de Ação: Sincronização Elemental de Magias conforme a Hunt
         if (needsSpellSync && domAutomationReady && !telemetry.inTreino && !pickerOpen && !pickerOpenEv &&
-            actionQueue.pendingByLane.spell === 0 && now - lastSpellSyncAttempt >= 8000) {
+            actionQueue.pendingByLane.gear === 0 && now - lastSpellSyncAttempt >= 8000) {
           lastSpellSyncAttempt = now;
           actionQueue.enqueue({
             id: "spell_element_sync",

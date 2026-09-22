@@ -357,6 +357,15 @@ export const PROBE_COOLDOWN = 1200;
 export const PROFIT_MARGIN = 1.15;
 export const SWITCH_GRACE = 45;
 
+/**
+ * Teto plausível de gold/h farmado numa hunt (loot - supply).
+ * Acima disso é sincronização de saldo (primeiro tRPC, troca de char,
+ * leitura errada do HUD) e NÃO pode ser contabilizado como lucro da hunt.
+ * Maior taxa legítima observada na frota: ~2kk/h. 20kk/h já é generoso
+ * para hunts 800+.
+ */
+export const MAX_PLAUSIBLE_GOLD_PER_HOUR = 20_000_000;
+
 // Ordenado por comprimento de nome decrescente para que nomes específicos
 // (ex: 'Undead Dragon', 'Mega Dragon', 'True Azura') casem antes de substrings genéricas ('Dragon Lair', 'Asuras')
 const _HUNTS_MATCH_ORDER = [...HUNTS_TABLE].sort((a, b) => b.name.length - a.name.length);
@@ -585,6 +594,32 @@ export class HuntProfiler {
       try { this.benchmarks = JSON.parse(readFileSync(this.filePath, 'utf-8')); }
       catch (_) { this.benchmarks = {}; }
     }
+    let dirty = false;
+    // Sanitiza registros contaminados por saltos de saldo: se o gold_gained
+    // acumulado implica taxa absurda (> teto), zera só a parte de gold e
+    // recalcula a taxa — kills/tempo são preservados para re-medir.
+    try {
+      for (const [k, b] of Object.entries(this.benchmarks)) {
+        if (k.startsWith('_') || typeof b !== 'object' || !b) continue;
+        const rec = b as any;
+        const sec = Number(rec.total_seconds || 0);
+        const gained = Number(rec.gold_gained || 0);
+        const rate = Number(rec.gold_per_hour || 0);
+        const implied = sec >= 30 && gained > 0 ? (gained / sec) * 3600 : rate;
+        if (implied > MAX_PLAUSIBLE_GOLD_PER_HOUR) {
+          rec.gold_gained = 0;
+          rec.gold_per_hour = 0;
+          rec.max_gold_h = 0;
+          dirty = true;
+        } else if (rate > MAX_PLAUSIBLE_GOLD_PER_HOUR) {
+          rec.gold_per_hour = sec >= 30
+            ? Math.round(((gained / sec) * 3600) * 10) / 10
+            : 0;
+          rec.max_gold_h = Math.min(Number(rec.max_gold_h || 0), MAX_PLAUSIBLE_GOLD_PER_HOUR);
+          dirty = true;
+        }
+      }
+    } catch (_) {}
     const st = (this.benchmarks._decision as Record<string, any>) || {};
     delete this.benchmarks._decision;
     this.homeId = st.home_id ?? null;
@@ -596,6 +631,7 @@ export class HuntProfiler {
     const ln = String(st.last_played_name || '').trim();
     this.lastPlayedId = lp || null;
     this.lastPlayedName = ln || null;
+    if (dirty) this.save();
   }
 
   save(): void {
@@ -654,7 +690,14 @@ export class HuntProfiler {
     if (dur >= 5) {
       b.total_seconds = Number(b.total_seconds || 0) + dur;
       if (curGold != null && this.huntStartGold != null) {
-        b.gold_gained = Number(b.gold_gained || 0) + Math.max(0, curGold - this.huntStartGold);
+        const delta = Math.max(0, curGold - this.huntStartGold);
+        // Salto de saldo (primeiro tRPC, troca de char, leitura errada do
+        // HUD) implica gold/h absurdo e não é lucro da hunt: conta o tempo
+        // e os kills, mas ignora o delta de gold.
+        const impliedRate = dur > 0 ? (delta / dur) * 3600 : 0;
+        if (delta === 0 || impliedRate <= MAX_PLAUSIBLE_GOLD_PER_HOUR) {
+          b.gold_gained = Number(b.gold_gained || 0) + delta;
+        }
       }
       if (curKills != null && this.huntStartKills != null) {
         b.kills = Number(b.kills || 0) + Math.max(0, curKills - this.huntStartKills);
@@ -765,6 +808,17 @@ export class HuntProfiler {
     const elapsed = Date.now() / 1000 - this.huntStartTime;
     const gDelta = curGold != null && this.huntStartGold != null ? Math.max(0, curGold - this.huntStartGold) : 0;
     const kDelta = curKills != null && this.huntStartKills != null ? Math.max(0, curKills - this.huntStartKills) : 0;
+    // Salto de saldo no meio da sessão (ex: 0 -> 1.3B no primeiro tRPC):
+    // re-baselina em vez de publicar gold/h de bilhões.
+    if (gDelta > 0 && elapsed > 0 && (gDelta / elapsed) * 3600 > MAX_PLAUSIBLE_GOLD_PER_HOUR) {
+      this.huntStartGold = curGold ?? null;
+      this.measureT0 = Date.now() / 1000;
+      this.measureGold0 = curGold ?? null;
+      this.measureKills0 = curKills ?? null;
+      this.sessGoldH = 0;
+      this.sessKillsH = kDelta > 0 ? (kDelta / elapsed) * 3600 : 0;
+      return;
+    }
     if (elapsed > 0) {
       this.sessGoldH = (gDelta / elapsed) * 3600;
       this.sessKillsH = (kDelta / elapsed) * 3600;
@@ -1063,11 +1117,12 @@ export class HuntMatrix {
     rec.samples += 1;
     rec.deaths = Math.max(rec.deaths || 0, deaths);
     rec.last_seen_ts = Date.now() / 1000;
-    if (goldPerHour > 0) {
+    const goldRate = Number(goldPerHour);
+    if (Number.isFinite(goldRate) && goldRate >= 0) {
       rec.avg_gold_h = rec.samples === 1
-        ? Math.round(goldPerHour * 10) / 10
-        : Math.round(((rec.avg_gold_h || 0) * 0.7 + goldPerHour * 0.3) * 10) / 10;
-      rec.max_gold_h = Math.max(rec.max_gold_h || 0, Math.round(goldPerHour * 10) / 10);
+        ? Math.round(goldRate * 10) / 10
+        : Math.round(((rec.avg_gold_h || 0) * 0.7 + goldRate * 0.3) * 10) / 10;
+      rec.max_gold_h = Math.max(rec.max_gold_h || 0, Math.round(goldRate * 10) / 10);
     }
     if (killsPerHour > 0) rec.avg_kills_h = rec.samples === 1
       ? Math.round(killsPerHour * 10) / 10
@@ -1118,8 +1173,8 @@ export class HuntMatrix {
     else if (rec.deaths <= 2) rec.safety_rating = 'MODERADO';
     else rec.safety_rating = 'PERIGOSO';
     const xpRef = Math.max(1, ...Object.values(this.matrix).map((x: any) => Number(x.avg_xp_h || 0)));
-    const goldRef = Math.max(1, ...Object.values(this.matrix).map((x: any) => Number(x.avg_gold_h || x.avg_loot_h || 0)));
-    rec.balance_score = Math.round((0.55 * (Number(rec.avg_xp_h || 0) / xpRef) + 0.45 * (Number(rec.avg_gold_h || rec.avg_loot_h || 0) / goldRef)) * 10000) / 100;
+    const goldRef = Math.max(1, ...Object.values(this.matrix).map((x: any) => Number(x.avg_gold_h || 0)));
+    rec.balance_score = Math.round((0.55 * (Number(rec.avg_xp_h || 0) / xpRef) + 0.45 * (Number(rec.avg_gold_h || 0) / goldRef)) * 10000) / 100;
     if (rec.deaths > 2) { rec.category = 'EVITAR (ALTA MORTALIDADE)'; rec.efficiency_score = 20; }
     else if (rec.balance_score >= 80) { rec.category = 'TOP_EQUILIBRADO'; rec.efficiency_score = Math.min(99, Math.round(rec.balance_score)); }
     else if (rec.avg_gold_h >= 100000) { rec.category = 'TOP_LUCRO (OURO ALTO)'; rec.efficiency_score = 95; }
