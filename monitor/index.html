@@ -964,7 +964,7 @@ const PRIMARY_TUNNEL = 'https://parliamentary-insight-message-standards.trycloud
 let savedApi = '';
 try {
   savedApi = localStorage.getItem('baiak-live-api') || '';
-  if (savedApi.includes('ngrok-free.dev') || savedApi.includes('disfigure-tribune-silo') || savedApi.includes('envelope-advisory-classification-laboratory')) {
+  if (!savedApi || savedApi.includes('trycloudflare.com') || savedApi.includes('ngrok')) {
     savedApi = '';
     localStorage.removeItem('baiak-live-api');
   }
@@ -974,6 +974,7 @@ const LIVE_API = (PARAM_API || savedApi || PRIMARY_TUNNEL).replace(/\/$/, '');
 const API = LIVE_API;
 const PUBLIC_MODE = false;
 const OVERVIEW_PATH = '/api/overview';
+const SNAPSHOT_URL = './fleet-snapshot.json?ts=' + Date.now();
 // No painel servido pela VPS, mesma-origem primeiro; túnel Cloudflare como fallback remoto.
 const API_ENDPOINTS = [OVERVIEW_PATH, LIVE_API + OVERVIEW_PATH, PRIMARY_TUNNEL + OVERVIEW_PATH];
 try { localStorage.setItem('baiak-live-api', LIVE_API); } catch (_) {}

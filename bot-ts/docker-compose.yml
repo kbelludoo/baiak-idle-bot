@@ -19,7 +19,7 @@ services:
     environment:
       - PORT=${PORT:-8080}
       - HOST=0.0.0.0
-      - HEADLESS=true
+      - HEADLESS=false
       - STREAM=false
       - SCREENSHOT_INTERVAL=0
       # Permite configurar HUNT_MODE e FORCE_HUNT via .env ou padrão engine

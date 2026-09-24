@@ -371,8 +371,8 @@ Bun.serve({
   hostname: '0.0.0.0',
   async fetch(request) {
     const url = new URL(request.url);
-    if (request.method === 'OPTIONS' && (url.pathname.startsWith('/api/public/') || url.pathname === '/api/hunt' || url.pathname === '/api/treino')) {
-      return new Response(null, { headers: publicCors() });
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: publicCors(request) });
     }
     if (url.pathname === '/' || url.pathname === '/index.html') {
       return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
@@ -381,13 +381,13 @@ Bun.serve({
       const current = await refreshSnapshot();
       const states = Object.values(current.bots as Record<string, JsonRecord>).map((bot) => bot.health?.state);
       const ok = states.some((state) => state === 'online');
-      return json({ ok, generatedAt: current.generatedAt, states }, { status: ok ? 200 : 503 });
+      return json({ ok, generatedAt: current.generatedAt, states }, { status: ok ? 200 : 503 }, publicCors(request));
     }
-    if (url.pathname === '/api/public/overview' && request.method === 'GET') {
-      return json(publicSnapshot(await refreshSnapshot()), {}, publicCors());
+    if (url.pathname === '/api/public/overview' && (request.method === 'GET' || request.method === 'HEAD')) {
+      return json(publicSnapshot(await refreshSnapshot()), {}, publicCors(request));
     }
-    if (url.pathname === '/api/overview' && request.method === 'GET') {
-      return json(await refreshSnapshot());
+    if (url.pathname === '/api/overview' && (request.method === 'GET' || request.method === 'HEAD')) {
+      return json(await refreshSnapshot(), {}, publicCors(request));
     }
     if (url.pathname === '/api/hunt' && request.method === 'POST') {
       if (!botProxyAuthorized(request)) {

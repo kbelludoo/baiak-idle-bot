@@ -685,12 +685,15 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
             // uma avaliação concorrente, safeEval retorna nulo para não
             // formar uma fila de promises. Dê ao fluxo oficial algumas
             // janelas para pegar o navegador livre antes de desistir.
-            for (let attempt = 1; attempt <= 3; attempt++) {
-              browserRes = await safeEval<any>(page, 'extra', deferredBrowserSell, 20000);
+            for (let attempt = 1; attempt <= 2; attempt++) {
+              // Espera até 30s por uma avaliação anterior e deixa o fluxo
+              // oficial ter tempo para abrir modal, reautenticar e aguardar
+              // a confirmação nativa do jogo.
+              browserRes = await safeEval<any>(page, 'extra', deferredBrowserSell, 60000, 30000);
               if (browserRes?.events && Array.isArray(browserRes.events)) break;
-              if (attempt < 3) {
-                logs.push(`[AUCTION] Navegador ocupado; nova tentativa oficial em 25s (${attempt}/3)`);
-                await new Promise((resolve) => setTimeout(resolve, 25000));
+              if (attempt < 2) {
+                logs.push(`[AUCTION] Navegador ocupado; nova tentativa oficial em 10s (${attempt}/2)`);
+                await new Promise((resolve) => setTimeout(resolve, 10000));
               }
             }
             if (browserRes?.events && Array.isArray(browserRes.events)) {

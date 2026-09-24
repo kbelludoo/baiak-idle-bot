@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxkbcommon0 \
     libgbm1 \
     ca-certificates \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -30,4 +31,6 @@ ENV USER_DATA_DIR=/app/data/chrome_profile
 EXPOSE 8080
 
 # Execução direta em memória RAM (JIT) com o Bun
-CMD ["bun", "run", "src/index.ts"]
+# Turnstile e o modal nativo do leilão precisam de um contexto visual real.
+# O Xvfb fornece uma tela virtual dentro da VPS, sem depender de monitor.
+CMD ["xvfb-run", "-a", "--server-args=-screen 0 800x600x24 -ac", "bun", "run", "src/index.ts"]

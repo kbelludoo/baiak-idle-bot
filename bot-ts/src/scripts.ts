@@ -41,7 +41,8 @@ export async function safeEval<T = any>(
   page: Page | null,
   name: string,
   arg: any = null,
-  timeoutMs: number = 20000
+  timeoutMs: number = 20000,
+  waitExistingMs: number = 6000
 ): Promise<T | null> {
   if (!page) return null;
   const pageObject = page as unknown as object;
@@ -53,7 +54,7 @@ export async function safeEval<T = any>(
       try {
         await Promise.race([
           existing,
-          new Promise((r) => setTimeout(r, 6000))
+          new Promise((r) => setTimeout(r, waitExistingMs))
         ]);
       } catch (_) {}
     }
