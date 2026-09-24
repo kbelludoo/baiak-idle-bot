@@ -3,6 +3,124 @@ import type { BotConfig, TelemetryState } from './types';
 import { roomSend, sendBoss, sendSellReward } from './room_send';
 import { checkAndBuyBossGear } from './boss_collector';
 
+/**
+ * Lista de bosses do Baiak Idle extraída do bundle do jogo (index-BV-saACX.js).
+ * Ordenada do mais fácil (menor minLevel) para o mais difícil.
+ * - rarity "archfoe" = boss raro comum, dificuldade moderada
+ * - rarity "nemesis"  = boss poderoso, precisa de margem maior acima do minLevel
+ * - rarity "bane"     = boss extremamente difícil, requer muito mais nível
+ * - sem rarity ("on") = boss principal do ciclo diário
+ */
+export const KNOWN_BOSSES: Array<{
+  id: string;
+  name: string;
+  minLevel: number;
+  rarity: 'daily' | 'archfoe' | 'nemesis' | 'bane';
+}> = [
+  // Bosses diários (ciclo principal — sem rarity especial no bundle)
+  { id: 'brokul',          name: 'Brokul',               minLevel: 50,  rarity: 'daily'   },
+  { id: 'scarlett',        name: 'Scarlett Etzel',       minLevel: 80,  rarity: 'daily'   },
+  { id: 'oberon',          name: 'Grand Master Oberon',  minLevel: 100, rarity: 'daily'   },
+  { id: 'ratmiral',        name: 'Ratmiral Blackwhiskers', minLevel: 100, rarity: 'daily' },
+  { id: 'nightmare_beast', name: 'The Nightmare Beast',  minLevel: 210, rarity: 'daily'   },
+
+  // Archfoes (bosses raros de dificuldade moderada)
+  { id: 'darkfang',        name: 'Darkfang',             minLevel: 15,  rarity: 'archfoe' },
+  { id: 'bloodback',       name: 'Bloodback',            minLevel: 15,  rarity: 'archfoe' },
+  { id: 'shadowpelt',      name: 'Shadowpelt',           minLevel: 5,   rarity: 'archfoe' },
+  { id: 'black_vixen',     name: 'Black Vixen',          minLevel: 20,  rarity: 'archfoe' },
+  { id: 'sharpclaw',       name: 'Sharpclaw',            minLevel: 20,  rarity: 'archfoe' },
+  { id: 'utua_stone_sting',name: 'Utua Stone Sting',     minLevel: 35,  rarity: 'archfoe' },
+  { id: 'amenef_the_burning', name: 'Amenef the Burning',minLevel: 50,  rarity: 'archfoe' },
+  { id: 'ahau',            name: 'Ahau',                 minLevel: 60,  rarity: 'archfoe' },
+  { id: 'irgix_the_flimsy',name: 'Irgix The Flimsy',    minLevel: 60,  rarity: 'archfoe' },
+  { id: 'kusuma',          name: 'Kusuma',               minLevel: 60,  rarity: 'archfoe' },
+  { id: 'brain_head',      name: 'Brain Head',           minLevel: 70,  rarity: 'archfoe' },
+  { id: 'neferi_the_spy',  name: 'Neferi the Spy',       minLevel: 70,  rarity: 'archfoe' },
+  { id: 'sister_hetai',    name: 'Sister Hetai',         minLevel: 70,  rarity: 'archfoe' },
+  { id: 'the_time_guardian', name: 'The Time Guardian',  minLevel: 80,  rarity: 'archfoe' },
+  { id: 'lloyd',           name: 'Lloyd',                minLevel: 80,  rarity: 'archfoe' },
+  { id: 'sir_nictros',     name: 'Sir Nictros',          minLevel: 80,  rarity: 'archfoe' },
+  { id: 'megasylvan_yselda', name: 'Megasylvan Yselda',  minLevel: 90,  rarity: 'archfoe' },
+  { id: 'drume',           name: 'Drume',                minLevel: 90,  rarity: 'archfoe' },
+  { id: 'ghulosh',         name: 'Ghulosh',              minLevel: 110, rarity: 'archfoe' },
+  { id: 'lokathmor',       name: 'Lokathmor',            minLevel: 110, rarity: 'archfoe' },
+  { id: 'mazzinor',        name: 'Mazzinor',             minLevel: 110, rarity: 'archfoe' },
+  { id: 'the_brainstealer',name: 'The Brainstealer',     minLevel: 110, rarity: 'archfoe' },
+
+  // Nemesis (bosses muito poderosos — precisam de margem maior)
+  { id: 'leiden',          name: 'Leiden',               minLevel: 25,  rarity: 'nemesis' },
+  { id: 'solid_frozen_horror', name: 'Solid Frozen Horror', minLevel: 50, rarity: 'nemesis' },
+  { id: 'dragonking_zyrtarch', name: 'Dragonking Zyrtarch', minLevel: 80, rarity: 'nemesis' },
+  { id: 'mounted_thorn_knight', name: 'Mounted Thorn Knight', minLevel: 80, rarity: 'nemesis' },
+  { id: 'alptramun',       name: 'Alptramun',            minLevel: 110, rarity: 'nemesis' },
+
+  // Banes (extremamente difíceis)
+  { id: 'tanjis',          name: 'Tanjis',               minLevel: 60,  rarity: 'bane'    },
+  { id: 'rakesh_moonfang', name: 'Rakesh Moonfang',      minLevel: 70,  rarity: 'bane'    },
+  { id: 'obujos',          name: 'Obujos',               minLevel: 90,  rarity: 'bane'    },
+  { id: 'jaul',            name: 'Jaul',                 minLevel: 120, rarity: 'bane'    },
+];
+
+/**
+ * Margem de segurança de nível por rarity.
+ * O personagem precisa ter (minLevel + SAFETY_MARGIN[rarity]) para o bot tentar o boss.
+ * Baseado na experiência: bosses "daily" são projetados para o nível mínimo;
+ * archfoes precisam de ~30 níveis a mais, nemesis ~60, bane ~80.
+ */
+const SAFETY_MARGIN: Record<string, number> = {
+  daily:   0,
+  archfoe: 30,
+  nemesis: 60,
+  bane:    80,
+};
+
+/**
+ * Monta automaticamente a playlist de bosses para um dado nível,
+ * usando os dados do motor do jogo:
+ * 1. Filtra bosses pelo nível efetivo (minLevel + margem de segurança por rarity)
+ * 2. Se difficulty do servidor estiver disponível, prioriza bosses com score > 0
+ * 3. Ordena: bosses daily primeiro (garantidos), depois archfoes do mais fácil para o mais difícil
+ *
+ * @param characterLevel  Nível atual do personagem
+ * @param serverDifficulty  Mapa bossId -> { score, canWin } vindo do autobossstate.difficulty
+ * @param serverKillDeaths  Mapa bossId -> { kills, deaths } para filtrar bosses impossíveis
+ */
+export function buildAutoPlaylist(
+  characterLevel: number,
+  serverDifficulty: Record<string, any> = {},
+  serverKillDeaths: Record<string, { kills: number; deaths: number }> = {}
+): string[] {
+  const viable = KNOWN_BOSSES.filter(b => {
+    const margin = SAFETY_MARGIN[b.rarity] ?? 0;
+    const effectiveLevel = b.minLevel + margin;
+
+    // Nível insuficiente
+    if (characterLevel < effectiveLevel) return false;
+
+    // Se o servidor informou dificuldade e é impossível, excluir
+    const diff = serverDifficulty[b.id];
+    if (diff && diff.canWin === false) return false;
+
+    // Se tem histórico de muitas mortes e poucas kills, boss é muito difícil
+    const kd = serverKillDeaths[b.id];
+    if (kd && kd.deaths > 0 && kd.kills === 0 && kd.deaths >= 3) return false;
+
+    return true;
+  });
+
+  // Ordenar: daily primeiro (mais previsíveis), depois por minLevel crescente dentro de cada rarity
+  const rarityOrder: Record<string, number> = { daily: 0, archfoe: 1, nemesis: 2, bane: 3 };
+  viable.sort((a, b) => {
+    const ro = rarityOrder[a.rarity] - rarityOrder[b.rarity];
+    if (ro !== 0) return ro;
+    return a.minLevel - b.minLevel;
+  });
+
+  return viable.map(b => b.id);
+}
+
+
 export interface BossPageSnapshot {
   bossChargesLeft: number | null;
   bossChargesMax: number;
@@ -345,7 +463,25 @@ export class SoftwareBossRunner {
     };
 
     // 6. Seleciona o proximo chefe da playlist configurada
-    const playlist = config.autoBossPlaylist || [];
+    // Se nao houver playlist manual, auto-seleciona os bosses conforme o nivel do personagem
+    // usando dados reais do motor do jogo: difficulty e historico de kills/deaths por boss
+    const characterLevel = (telemetry as any).level || 0;
+    let playlist: string[];
+    if (config.autoBossPlaylist && config.autoBossPlaylist.length > 0) {
+      playlist = config.autoBossPlaylist;
+    } else {
+      // Extrair dados de dificuldade e historico do autobossstate (vindo do servidor via WebSocket)
+      const absState = (telemetry as any).autobossstate || {};
+      const serverDifficulty: Record<string, any> = absState.difficulty || {};
+      // kills/deaths vem no autobossstate como { bossId: { kills, deaths } } ou flat kills/deaths por boss
+      const serverKillDeaths: Record<string, { kills: number; deaths: number }> = absState.bossHistory || {};
+      playlist = buildAutoPlaylist(characterLevel, serverDifficulty, serverKillDeaths);
+    }
+
+    if (playlist.length === 0) {
+      return { handled: false, detail: `sem_bosses_para_nivel_${characterLevel}` };
+    }
+
     const nextBoss = selectNextBoss(playlist, mergedCooldowns, chargesLeft, now);
 
     if (!nextBoss) {
