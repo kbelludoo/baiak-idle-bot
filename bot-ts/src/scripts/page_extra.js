@@ -33,7 +33,12 @@ async ({ job, ...auctionCfg }) => {
       const tid = setTimeout(() => controller.abort(), 12000);
       const response = await fetch(`/api/trpc/${path}?batch=1`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(auctionCfg.token ? { authorization: `Bearer ${auctionCfg.token}` } : {})
+        },
+        // The game uses tRPC's identity transformer: batched inputs are
+        // indexed directly, without a { json: ... } wrapper.
         body: JSON.stringify({ "0": input ?? null }),
         signal: controller.signal
       });
@@ -52,7 +57,36 @@ async ({ job, ...auctionCfg }) => {
     }
   };
 
-  const getTurnstileToken = async (timeoutMs = 12000) => {
+  const trpcPostAuction = async (path, input) => {
+    // Timeout 30s para criação de leilão (inclui espera do Turnstile)
+    try {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 30000);
+      const response = await fetch(`/api/trpc/${path}?batch=1`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(auctionCfg.token ? { authorization: `Bearer ${auctionCfg.token}` } : {})
+        },
+        body: JSON.stringify({ "0": input ?? null }),
+        signal: controller.signal
+      });
+      clearTimeout(tid);
+      const rawText = await response.text().catch(() => "");
+      let raw = null;
+      try { raw = rawText ? JSON.parse(rawText) : null; } catch (_) {}
+      const item = Array.isArray(raw) ? raw[0] : raw;
+      const error = item?.error?.json?.message || item?.error?.json?.data?.message ||
+        item?.error?.message || item?.error?.data?.message ||
+        (!response.ok ? rawText.slice(0, 240) : null);
+      if (!response.ok) console.warn(`[BOT TRPC] ${path} HTTP ${response.status}: ${String(error || rawText).slice(0, 240)}`);
+      return { data: response.ok && !error ? unwrapTrpc(raw) : null, error, status: response.status };
+    } catch (error) {
+      return { data: null, error: String(error) };
+    }
+  };
+
+  const getTurnstileToken = async (timeoutMs = 30000) => {
     return new Promise((resolve) => {
       let resolved = false;
       const timer = setTimeout(() => {
@@ -124,6 +158,154 @@ async ({ job, ...auctionCfg }) => {
         onToken("");
       }
     });
+  };
+
+  const createGoldListing = async (input, label) => {
+    // Tenta Turnstile (30s); se falhar usa token vazio como fallback (comportamento antigo que funcionava)
+    const token = await getTurnstileToken(30000);
+    if (!token) console.warn("[BOT AUCTION] Turnstile sem token — tentando com captchaToken vazio");
+    const res = await trpcPostAuction("auction.createGold", {
+      password: "",
+      twofaCode: "",
+      smsCode: "",
+      pushProof: "",
+      ...input,
+      confirmText: "CONFIRMAR",
+      captchaToken: token || ""
+    });
+    return { ...res, label };
+  };
+
+  const nativeCreateGoldListing = async (goldAmount, startPrice, durationHours) => {
+    // A rota nativa é mais estável que os rótulos do modal, que mudam entre
+    // builds. Tenta primeiro com captcha; o fluxo visual permanece fallback.
+    const directRes = await createGoldListing({
+      goldAmount: Math.floor(goldAmount),
+      startPrice: Math.max(25, Math.floor(startPrice)),
+      durationHours: Math.floor(durationHours),
+    }, 'direct');
+    if (directRes?.data) return { ok: true, method: 'trpc', data: directRes.data };
+    // Log do motivo da falha antes de tentar fallback via DOM
+    console.warn(`[BOT AUCTION] tRPC direto falhou [HTTP ${directRes?.status || '?'}]: ${directRes?.error || 'sem resposta'} — tentando fallback DOM`);
+
+    const modal = document.getElementById("auction-modal") || document.getElementById("leilao-modal");
+    const visible = (el) => !!(el && !el.disabled && (
+      (el.offsetParent !== null) ||
+      (getComputedStyle(el).position === "fixed" && el.getClientRects().length > 0)
+    ));
+    const text = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+    const clickText = (root, re) => {
+      const el = Array.from(root.querySelectorAll("button, [role=button], label"))
+        .find((node) => visible(node) && re.test(text(node)));
+      if (!el) return false;
+      el.click();
+      return true;
+    };
+    const setInput = (input, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, String(value));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    const waitFor = async (fn, timeout = 10000) => {
+      const until = Date.now() + timeout;
+      while (Date.now() < until) {
+        const value = fn();
+        if (value) return value;
+        await sleep(150);
+      }
+      return null;
+    };
+
+    if (!modal) return { ok: false, error: "modal do leilão não encontrado" };
+    const auctionTab = document.getElementById("tab-auction") || document.getElementById("tab-leilao");
+    if (auctionTab && !visible(modal)) auctionTab.click();
+    await waitFor(() => visible(modal), 10000);
+
+    const naviCreate = await waitFor(() =>
+      Array.from(modal.querySelectorAll("button, [role=button]")).find((b) => visible(b) &&
+        /criar\s*(?:an[uú]ncio|oferta)|anunciar|vender/i.test(text(b)) &&
+        (/mk-navi/.test(b.className) || /criar|anunciar|vender/i.test(text(b))))
+    );
+    if (!naviCreate) return { ok: false, error: "aba Criar anúncio não encontrada" };
+    if (!naviCreate.classList.contains("on")) naviCreate.click();
+    await sleep(400);
+
+    const goldTab = await waitFor(() =>
+      Array.from(modal.querySelectorAll("button, [role=button], label")).find((b) => visible(b) && /vender\s*(?:gold|ouro)|gold\s*(?:listing|sale)|ouro/i.test(text(b)))
+    );
+    if (!goldTab) return { ok: false, error: "aba Vender gold não encontrada" };
+    if (!goldTab.classList.contains("on")) goldTab.click();
+
+    const fields = await waitFor(() => Array.from(modal.querySelectorAll("input, select, textarea"))
+      .filter((el) => visible(el)));
+    if (!fields || fields.length < 2) return { ok: false, error: `campos do anúncio não encontrados (${text(modal).slice(0, 180)})` };
+
+    const numberInputs = fields.filter((el) => el.tagName === "INPUT" && (el.type === "number" || el.type === "text"));
+    const fieldText = (el) => text(el.closest("div, label, form") || el.parentElement);
+    const goldInput = numberInputs.find((el) => /gold|quantidade|amount/i.test(`${el.name} ${el.id} ${el.placeholder} ${fieldText(el)}`)) || numberInputs[0];
+    const priceInput = numberInputs.find((el) => el !== goldInput && /preço|preco|price|coin/i.test(`${el.name} ${el.id} ${el.placeholder} ${fieldText(el)}`)) || numberInputs.find((el) => el !== goldInput);
+    if (!goldInput || !priceInput) return { ok: false, error: "campos de gold/preço não encontrados" };
+    setInput(goldInput, goldAmount);
+    setInput(priceInput, startPrice);
+
+    const durationSelect = fields.find((el) => el.tagName === "SELECT" && /duration|duração|duracao|hours|horas/i.test(`${el.name} ${el.id} ${fieldText(el)}`));
+    if (durationSelect) {
+      const option = Array.from(durationSelect.options).find((o) => Number(o.value) === durationHours || Number(o.textContent) === durationHours || new RegExp(`${durationHours}\\s*h`, "i").test(o.textContent));
+      if (option) { durationSelect.value = option.value; durationSelect.dispatchEvent(new Event("change", { bubbles: true })); }
+    } else {
+      clickText(modal, new RegExp(`^${durationHours}\\s*(?:h|horas?)$`, "i"));
+    }
+
+    await sleep(300);
+    if (!clickText(modal, /anunciar\s*(?:gold|ouro)|criar\s*an[uú]ncio|publicar\s*(?:gold|ouro)|vender\s*(?:gold|ouro)/i)) {
+      return { ok: false, error: "botão de publicação não encontrado" };
+    }
+
+    // Fluxo nativo de confirmação do jogo:
+    // 1) Se a sessão não está autenticada (leftMs=0), abre o modal "Confirme
+    //    sua identidade" pedindo a senha da conta.
+    // 2) Depois abre o modal "Confirmar anúncio": Turnstile nativo + campo de
+    //    texto do anúncio exato + botão "Confirmar anuncio".
+    const rootForOverlay = document.body;
+    const senha = await waitFor(() => {
+      const inputs = Array.from(rootForOverlay.querySelectorAll("input[type=password]"));
+      return inputs.find((el) => visible(el));
+    }, 5000);
+    if (senha) {
+      const pw = auctionCfg.accountPassword || "";
+      if (!pw) return { ok: false, error: "reauth pede senha da conta (AUCTION_SELL_PASSWORD)" };
+      setInput(senha, pw);
+      await sleep(150);
+      const continueBtn = await waitFor(() =>
+        Array.from(rootForOverlay.querySelectorAll("button"))
+          .find((b) => visible(b) && /continuar|confirmar/i.test(text(b)) && !/enviar|enviado/i.test(text(b)))
+      , 5000);
+      if (!continueBtn) return { ok: false, error: "botão de continuar do reauth não encontrado" };
+      continueBtn.click();
+      await sleep(600);
+    }
+
+    const confirm = await waitFor(() => {
+      const buttons = Array.from(document.querySelectorAll("button"));
+      return buttons.find((b) => visible(b) && /confirmar anúncio|confirmar anuncio/i.test(text(b)));
+    }, 15000);
+    if (!confirm) return { ok: false, error: "modal nativo de confirmação não abriu" };
+
+    const confirmTextField = await waitFor(() => {
+      const target = document.querySelector(".mk-confirm-target");
+      const input = document.querySelector(".mk-confirm-text input");
+      return (target && input && visible(input)) ? { target, input } : null;
+    }, 8000);
+    if (confirmTextField?.target && !confirmTextField.input.value) {
+      setInput(confirmTextField.input, confirmTextField.target.textContent || "");
+    }
+
+    await waitFor(() => !confirm.disabled, 30000);
+    if (confirm.disabled) return { ok: false, error: "Turnstile nativo não liberou a confirmação" };
+    confirm.click();
+    await sleep(1200);
+    return { ok: true };
   };
 
   const revealTab = (id) => {
@@ -498,9 +680,10 @@ async ({ job, ...auctionCfg }) => {
         return Math.round(parsed * multiplier);
       };
 
-      const [browseData, historyData] = await Promise.all([
+      const [browseData, historyData, mineData] = await Promise.all([
         trpcGet("auction.browse", { page: 1, perPage: 50, type: "gold" }).catch(() => null),
-        trpcGet("auction.history", { page: 1, perPage: 25, type: "gold" }).catch(() => null)
+        trpcGet("auction.history", { page: 1, perPage: 25, type: "gold" }).catch(() => null),
+        trpcGet("auction.mine", null).catch(() => null)
       ]);
 
       const browseRows = Array.isArray(browseData?.rows) ? browseData.rows : (Array.isArray(browseData) ? browseData : []);
@@ -532,11 +715,28 @@ async ({ job, ...auctionCfg }) => {
           document.querySelector("[data-coins], .wallet-coins, .coins-count, .coins-amount, .ac-wallet-val");
         coinsAvailable = coinEl ? Math.max(0, number(coinEl.getAttribute("data-coins") || coinEl.getAttribute("data-value") || coinEl.textContent) ?? 0) : 0;
       }
+      if (coinsAvailable <= 0) {
+        try {
+          const bal = await trpcGet("coin.balances", null);
+          const b = Array.isArray(bal) ? bal[0] : bal;
+           coinsAvailable = Math.max(0, Number(b?.marketCoins) || 0);
+        } catch (_) {}
+      }
 
-      const hasOwnActiveGold = browseRows.some((r) =>
-        (r.type === "gold" || /\bgold\b|ouro|kk\b/i.test(r.name || "")) &&
-        (r.isOwn === true || r.isOwner === true) &&
-        (r.status === "active" || (Number(r.endsAt) > Date.now()))
+      const mineRows = Array.isArray(mineData?.rows) ? mineData.rows : (Array.isArray(mineData) ? mineData : (mineData?.items || []));
+
+      // Anúncio próprio ativo: fonte autoritativa é o auction.mine (o browse
+      // não lista os itens do próprio dono), então consultamos os dois.
+      const hasOwnActiveGold = (
+        browseRows.some((r) =>
+          (r.type === "gold" || /\bgold\b|ouro|kk\b/i.test(r.name || "")) &&
+          (r.isOwn === true || r.isOwner === true) &&
+          (r.status === "active" || (Number(r.endsAt) > Date.now()))
+        ) ||
+        mineRows.some((r) =>
+          (r.type === "gold" || /\bgold\b|ouro|kk\b/i.test(r.name || "")) &&
+          (r.status === "active" || (Number(r.endsAt) > Date.now()))
+        )
       );
 
       let currentGold = number(auctionCfg.currentGold) || 0;
@@ -556,7 +756,7 @@ async ({ job, ...auctionCfg }) => {
       }
 
       const feeGold = 5000000;
-      const minGoldAmount = 25000000;
+       const minGoldAmount = 100000000;
       const maxToSell = Math.max(0, number(auctionCfg.sellGoldAmount) || 800000000);
       const goldToSell = Math.min(maxToSell, Math.max(0, Math.floor(currentGold - feeGold)));
 
@@ -592,7 +792,7 @@ async ({ job, ...auctionCfg }) => {
   }
 
   if (job === "auction_execute") {
-    const { sellDecision, buyDecision, goldToSell, live } = auctionCfg;
+    const { sellDecision, buyDecision, goldToSell, live, currency } = auctionCfg;
     const events = [];
 
     // 1. Executar Venda de Gold decidida pelo JEV
@@ -603,23 +803,12 @@ async ({ job, ...auctionCfg }) => {
         events.push("DRY-RUN VENDA (JEV): " + sellMsg);
       } else {
         try {
-          events.push("Obtendo Turnstile token...");
-          const token = await getTurnstileToken(10000);
-          const createRes = await trpcPost("auction.createGold", {
-            goldAmount: Math.floor(goldToSell),
-            startPrice: targetCoins,
-            durationHours: 12,
-            password: "",
-            twofaCode: "",
-            smsCode: "",
-            confirmText: "CONFIRMAR",
-            captchaToken: token || ""
-          });
-          if (createRes?.data) {
+          events.push("Abrindo formulário nativo do leilão...");
+          const nativeRes = await nativeCreateGoldListing(Math.floor(goldToSell), targetCoins, 6);
+          if (nativeRes?.ok) {
             events.push("ANÚNCIO DE VENDA CRIADO (JEV): " + sellMsg);
           } else {
-            const err = createRes?.error || "falha";
-            events.push(`VENDA RECUSADA [HTTP ${createRes?.status || "?"}] (${err}): ` + sellMsg);
+            events.push(`VENDA NÃO ENVIADA (${nativeRes?.error || "falha"}): ` + sellMsg);
           }
         } catch (e) {
           events.push(`ERRO VENDA (${String(e)}): ` + sellMsg);
@@ -639,7 +828,7 @@ async ({ job, ...auctionCfg }) => {
           const bidRes = await trpcPost("auction.bid", {
             listingId: lid,
             maxAmount: maxPrice,
-            currency: "normal"
+            currency: currency || buyDecision.currency || "market"
           });
           if (bidRes?.data) {
             events.push("LANCE REGISTRADO (JEV): " + buyMsg);
@@ -736,7 +925,8 @@ async ({ job, ...auctionCfg }) => {
       .map((r) => ({
         id: r.id,
         name: `${(Number(r.goldAmount) / 1000000).toFixed(0)}kk Gold`,
-        price: Number(r.currentPrice),
+         price: Number(r.currentPrice),
+         nextPrice: Number(r.currentPrice) + (Number(r.bidCount) > 0 ? Math.max(1, Math.ceil(Number(r.currentPrice) * 0.10)) : 0),
         goldAmount: Number(r.goldAmount),
         bids: Number(r.bidCount) || 0,
         minutesRemaining: Number.isFinite(Number(r.endsAt)) ? Math.max(0, Math.round((Number(r.endsAt) - now) / 60000)) : null,
@@ -773,9 +963,9 @@ async ({ job, ...auctionCfg }) => {
       ? referenceRates.slice().sort((a, b) => a - b)[Math.floor(referenceRates.length / 2)]
       : 5500000;
 
-    const balances = await trpcGet("coin.balances", null);
-    let coinsAvailable = Math.max(0, number(cfg.coinsAvailable) ?? 0);
-    const apiCoins = number(balances?.coins);
+     const balances = await trpcGet("coin.balances", null);
+     let coinsAvailable = Math.max(0, number(cfg.coinsAvailable) ?? 0);
+     const apiCoins = number(balances?.marketCoins) ?? number(balances?.coins);
     if (apiCoins !== null) coinsAvailable = apiCoins;
     if (coinsAvailable <= 0) {
       const coinEl = document.getElementById("hud-coins") || document.getElementById("coins-count") ||
@@ -784,8 +974,11 @@ async ({ job, ...auctionCfg }) => {
     }
 
     const marketCfg = await trpcGet("auction.config", null) || {};
-    const mineData = await trpcGet("auction.mine", null);
-    const mineRows = Array.isArray(mineData) ? mineData : (Array.isArray(mineData?.rows) ? mineData.rows : []);
+     const mineData = await trpcGet("auction.mine", null);
+     const mineRows = Array.isArray(mineData) ? mineData : (Array.isArray(mineData?.rows) ? mineData.rows : []);
+     const myBidsData = await trpcGet("auction.myBids", null);
+     const myBidRows = Array.isArray(myBidsData) ? myBidsData : (Array.isArray(myBidsData?.rows) ? myBidsData.rows : (myBidsData?.items || []));
+     const activeBids = myBidRows.filter((r) => r.status === "active" && r.myBidStatus === "active").length;
     const hasOwnActiveGold = mineRows.some((r) =>
       (r.type === "gold" || isGold(r, r.name || "")) &&
       (r.status === "active" || (Number(r.endsAt) > Date.now()))
@@ -816,22 +1009,12 @@ async ({ job, ...auctionCfg }) => {
           events.push("DRY-RUN VENDA: " + sellMsg);
         } else {
           try {
-            const token = await getTurnstileToken(10000);
-            const createRes = await trpcPost("auction.createGold", {
-              goldAmount: goldToSell,
-              startPrice: targetPriceCoins,
-              durationHours: 12,
-              password: "",
-              twofaCode: "",
-              smsCode: "",
-              confirmText: "CONFIRMAR",
-              captchaToken: token || ""
-            });
-            if (createRes?.data) {
+            events.push("Abrindo formulário nativo do leilão...");
+            const nativeRes = await nativeCreateGoldListing(Math.floor(goldToSell), targetPriceCoins, 6);
+            if (nativeRes?.ok) {
               events.push("ANÚNCIO DE VENDA CRIADO: " + sellMsg);
             } else {
-              const err = createRes?.error || "falha";
-              events.push(`VENDA RECUSADA [HTTP ${createRes?.status || "?"}] (${err}): ` + sellMsg);
+              events.push(`VENDA NÃO ENVIADA (${nativeRes?.error || "falha"}): ` + sellMsg);
             }
           } catch (e) {
             events.push(`ERRO VENDA (${String(e)}): ` + sellMsg);
@@ -845,8 +1028,10 @@ async ({ job, ...auctionCfg }) => {
     }
 
     // 4. Sniping de Compra de Gold (Arbitragem: Comprar barato com Coins até o orçamento)
-    const maxMins = Math.max(1, number(cfg.maxMinutesRemaining) ?? 5);
-    const opportunities = listings.map((item) => {
+    const maxMins = Math.max(1, number(cfg.maxMinutesRemaining) ?? 3);
+      if (activeBids > 0) events.push(`${activeBids} lance(s) ativo(s); usando apenas o saldo livre restante`);
+
+     const opportunities = listings.map((item) => {
       // O servidor sobe o lance em pelo menos 10% quando já existe lance;
       // +1 era recusado pela validação do leilão e fazia a compra parecer
       // executada apenas no DOM.
@@ -857,8 +1042,8 @@ async ({ job, ...auctionCfg }) => {
       const mins = item.minutesRemaining !== null ? item.minutesRemaining : 360;
       const isEnding = mins <= maxMins;
       return { ...item, nextPrice, reference, goldPerCoin, marginPct, isEnding, mins };
-    }).filter((x) => x.isEnding && x.nextPrice <= (number(cfg.budget) ?? 0) && x.nextPrice <= coinsAvailable && x.marginPct >= (number(cfg.minMarginPct) ?? 0))
-      .sort((a, b) => b.goldPerCoin - a.goldPerCoin);
+     }).filter((x) => x.isEnding && x.nextPrice <= (number(cfg.budget) ?? 0) && x.nextPrice <= coinsAvailable && x.marginPct >= (number(cfg.minMarginPct) ?? 0))
+       .sort((a, b) => (b.goldAmount / b.nextPrice - a.goldAmount / a.nextPrice) || (b.goldPerCoin - a.goldPerCoin));
 
     if (!opportunities.length) {
       events.push(`sem pacote de gold vantajoso terminando em <=${maxMins}m (gold=${listings.length}, mediana=${reference.toFixed(2)} gold/coin)`);
@@ -878,7 +1063,7 @@ async ({ job, ...auctionCfg }) => {
           const bidRes = await trpcPost("auction.bid", {
             listingId: opportunity.id,
             maxAmount: opportunity.nextPrice,
-            currency: "normal"
+             currency: cfg.currency || "market"
           });
           if (bidRes?.data) {
             events.push("LANCE REGISTRADO: " + msg);
