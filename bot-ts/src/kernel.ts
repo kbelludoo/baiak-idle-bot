@@ -487,6 +487,7 @@ export const KERNEL_SOURCE = `
     deaths: [], dailystatus: null, event: null, eventmeta: null,
     reconnectOk: false, resume: null, ready: false,
     bossChargesLeft: null, bossPassLeft: null, bossCooldowns: null, activeBossId: null,
+    bossgate: null, autobossstate: null, bossChargesMax: null,
     lastUpdate: 0,
   };
 
@@ -611,6 +612,20 @@ export const KERNEL_SOURCE = `
         if (payload.bossPassLeft !== undefined) state.bossPassLeft = payload.bossPassLeft;
         if (payload.bossCooldowns !== undefined) state.bossCooldowns = payload.bossCooldowns;
         if (payload.activeBossId !== undefined) state.activeBossId = payload.activeBossId;
+      } else if (type === 'bossgate' && payload && typeof payload === 'object') {
+        // Pacote real do servidor: contém cargas restantes e cooldowns por boss
+        state.bossgate = payload;
+        // chargesLeft / chargesMax podem vir diretamente no bossgate
+        if (payload.chargesLeft !== undefined && payload.chargesLeft !== null)
+          state.bossChargesLeft = Number(payload.chargesLeft);
+        if (payload.chargesMax !== undefined && payload.chargesMax !== null)
+          state.bossChargesMax = Number(payload.chargesMax);
+        if (payload.cooldowns && typeof payload.cooldowns === 'object')
+          state.bossCooldowns = payload.cooldowns;
+        if (payload.activeBossId !== undefined) state.activeBossId = payload.activeBossId;
+      } else if (type === 'autobossstate' && payload && typeof payload === 'object') {
+        // Pacote VIP Auto Boss: until=timestamp de expiração do passe, list=playlist atual
+        state.autobossstate = payload;
       }
     } catch (_) {}
   }
