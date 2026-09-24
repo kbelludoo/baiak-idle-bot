@@ -35,7 +35,7 @@ export interface HuntArea {
   safety?: 'SEGURO' | 'MODERADO' | 'PERIGOSO';
 }
 
-export type SubsystemStatus = 'FUNCIONAL' | 'AGUARDANDO' | 'AGUARDANDO_REQUISITO' | 'TREINANDO' | 'VERIFICANDO';
+export type SubsystemStatus = 'FUNCIONAL' | 'AGUARDANDO' | 'AGUARDANDO_REQUISITO' | 'TREINANDO' | 'VERIFICANDO' | 'FORCANDO';
 
 export interface SubsystemInfo {
   status: SubsystemStatus;
@@ -87,10 +87,15 @@ export interface BotConfig {
   auctionSniperMaxMinutes: number;
   auctionSellGoldAmount: number;
   auctionSellEnabled: boolean;
+  auctionSellPassword: string;
   jevEnabled: boolean;
   jevApiKey: string;
   jevEndpoint: string;
   jevTimeoutMs: number;
+  jevAutoHunt: boolean;
+  huntGoal: 'level' | 'gold' | 'balanced';
+  autoBossPlaylist: string[];
+  autoBuyBossItems: string[];
 }
 
 export interface TelemetryState {

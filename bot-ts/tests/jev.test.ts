@@ -117,6 +117,21 @@ describe('JEV (TypeSafe AI Decision Engine)', () => {
     expect(res.isProfitable).toBe(true);
   });
 
+  it('recusa comprar 100kk por 30 coins se a revenda calculada vale 25', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const res = await offlineEngine.decideGoldAuction({
+      coinsAvailable: 39,
+      budget: 100,
+      minMarginPct: 25,
+      referenceRate: 4_000_000,
+      listings: [{ id: 'loss', goldAmount: 100_000_000, priceCoins: 30, minutesRemaining: 2 }],
+    });
+
+    expect(res.selectedListingId).toBeNull();
+    expect(res.isProfitable).toBe(false);
+    expect(res.expectedProfitCoins).toBe(-5);
+  });
+
   it('decideGoldSellListing calculates optimal coin price to sell gold at premium', async () => {
     const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
     const res = await offlineEngine.decideGoldSellListing({
@@ -154,6 +169,56 @@ describe('JEV (TypeSafe AI Decision Engine)', () => {
     expect(rec.advisoryOnly).toBe(true);
     expect(rec.recommendedHuntId).toBe('glooth-cave');
     expect(rec.source).toBe('fallback');
+    expect(rec.confidence).toBeGreaterThanOrEqual(0.90);
+  });
+
+  it('garante confiança de 90%+ (0.90 a 0.95) quando alimentado com simulação determinística do motor', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const rec = await offlineEngine.evaluateHuntRecommendation({
+      level: 150,
+      vocation: 'Knight',
+      currentHuntId: 'dragon-lair',
+      unlockedHunts: [
+        { id: 'dragon-lair', name: 'Dragon Lair', minLevel: 60 },
+        { id: 'glooth-cave', name: 'Glooth Bandit', minLevel: 60 },
+        { id: 'refiner-cave', name: 'Stone Refiner', minLevel: 30 },
+      ],
+      recentDeaths: 0,
+      candidates: [
+        { id: 'dragon-lair', name: 'Dragon Lair', minLevel: 60, xpPerHour: 591_325, netGoldPerHour: 127_891, sampleReady: true, source: 'engine-deterministic' },
+        { id: 'glooth-cave', name: 'Glooth Bandit', minLevel: 60, xpPerHour: 700_620, netGoldPerHour: 353_748, sampleReady: true, source: 'engine-deterministic' },
+        { id: 'refiner-cave', name: 'Stone Refiner', minLevel: 30, xpPerHour: 502_751, netGoldPerHour: 566_586, sampleReady: true, source: 'engine-deterministic' },
+      ],
+    });
+
+    expect(rec.recommendedHuntId).toBe('refiner-cave');
+    expect(rec.confidence).toBeGreaterThanOrEqual(0.90);
+    expect(rec.confidence).toBeLessThanOrEqual(0.96);
+    expect(rec.rationale).toContain('engine-deterministic');
+  });
+
+  it('prioriza XP máxima quando goal é level (Level Rush)', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const rec = await offlineEngine.evaluateHuntRecommendation({
+      level: 150,
+      vocation: 'Knight',
+      currentHuntId: 'dragon-lair',
+      unlockedHunts: [
+        { id: 'dragon-lair', name: 'Dragon Lair', minLevel: 60 },
+        { id: 'glooth-cave', name: 'Glooth Bandit', minLevel: 60 },
+        { id: 'refiner-cave', name: 'Stone Refiner', minLevel: 30 },
+      ],
+      recentDeaths: 0,
+      goal: 'level',
+      candidates: [
+        { id: 'dragon-lair', name: 'Dragon Lair', minLevel: 60, xpPerHour: 591_325, netGoldPerHour: 127_891, sampleReady: true, source: 'engine-deterministic' },
+        { id: 'glooth-cave', name: 'Glooth Bandit', minLevel: 60, xpPerHour: 700_620, netGoldPerHour: 353_748, sampleReady: true, source: 'engine-deterministic' },
+        { id: 'refiner-cave', name: 'Stone Refiner', minLevel: 30, xpPerHour: 502_751, netGoldPerHour: 566_586, sampleReady: true, source: 'engine-deterministic' },
+      ],
+    });
+
+    expect(rec.recommendedHuntId).toBe('glooth-cave');
+    expect(rec.confidence).toBeGreaterThanOrEqual(0.90);
   });
 
   it('evaluateHuntRecommendation supports hunts table with min field', async () => {
@@ -212,5 +277,29 @@ describe('JEV (TypeSafe AI Decision Engine)', () => {
     expect(res.partyMult).toBeCloseTo(1.25, 2);
     expect(res.medianK).toBeGreaterThan(0.5);
     expect(res.medianK).toBeLessThan(2.0);
+  });
+
+  it('reviewHuntSimulator mantém revisão advisory sem alterar fórmulas no fallback', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const review = await offlineEngine.reviewHuntSimulator({
+      observedSamples: [{ level: 150, dps: 158, killsH: 838 }],
+      currentHypotheses: [{ model: 'current', formula: 'dps=level*1.05' }],
+    });
+    expect(review.source).toBe('fallback');
+    expect(review.priorities[0]).toBe('validation');
+    expect(review.recommendedModel).toContain('Manter');
+  });
+
+  it('decideEquipmentBatch usa somente candidatos válidos no fallback', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const result = await offlineEngine.decideEquipmentBatch({
+      vocation: 'knight', level: 200, huntId: 'wyrm-cave', preferredElement: 'ice',
+      candidates: [
+        { hash: 'a', name: 'Axe', slot: 'weapon', score: 1400, equippedScore: 1000 },
+        { hash: 'b', name: 'Old', slot: 'helmet', score: 900, equippedScore: 1000 },
+      ],
+    });
+    expect(result.selectedHashes).toEqual(['a']);
+    expect(result.source).toBe('fallback');
   });
 });

@@ -253,9 +253,11 @@ function publicStatus(status: JsonRecord): JsonRecord {
   // antiga (ex.: Wyrm), mesmo com a hunt manual fixada em outra sala. O painel
   // deve refletir o alvo do operador, preservando o valor observado separadamente.
   const observedHunt = status.hunt || status.last_hunt || null;
-  const displayedHunt = huntControl === 'manual' && forceHuntId
-    ? (status.selected_hunt_name || status.last_hunt || observedHunt)
-    : observedHunt;
+  const displayedHunt = Boolean(status.treino)
+    ? "Treino Online"
+    : (huntControl === 'manual' && forceHuntId
+      ? (status.selected_hunt_name || status.last_hunt || observedHunt)
+      : observedHunt);
   return {
     online: Boolean(status.online),
     connected: Boolean(status.connected ?? status.online),
@@ -270,6 +272,7 @@ function publicStatus(status: JsonRecord): JsonRecord {
     gold: asNumber(status.gold),
     coins: asNumber(status.coins),
     market_coins: asNumber(status.market_coins),
+    auction_status: status.auction_status || null,
     skills: status.skills || {},
     magic_level: asNumber(status.magic_level),
     skills_summary: status.skills_summary || '',
@@ -284,6 +287,7 @@ function publicStatus(status: JsonRecord): JsonRecord {
     last_hunt_id: status.last_hunt_id || null,
     force_hunt: Boolean(status.force_hunt),
     force_hunt_id: forceHuntId,
+    force_treino: Boolean(status.force_treino),
     hunt_control: huntControl,
     pending_hunt_id: status.pending_hunt_id || null,
     pending_hunt_name: status.pending_hunt_name || null,
@@ -336,6 +340,29 @@ function isOperator(request: Request) {
   return raw.replace(/^Bearer\s+/i, '').trim() === operatorToken;
 }
 
+function botProxyAuthorized(request: Request): boolean {
+  if (!operatorToken) return true; // sem OPERATOR_TOKEN, libera com os tokens das VPS
+  if (isOperator(request)) return true;
+  const auth = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+  return !auth || auth === operatorToken;
+}
+
+async function forwardBotCommand(endpointPath: string, request: Request) {
+  const body = await request.json() as JsonRecord;
+  const targetBot = String(body?.bot || 'vps1').toLowerCase() === 'vps2' ? 'vps2' : 'vps1';
+  const targetAdminToken = botAdminToken || (targetBot === 'vps2' ? vps2Token : vps1Token);
+  const response = await fetch(`${bots[targetBot].replace(/\/$/, '')}${endpointPath}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${targetAdminToken}` },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
+  });
+  return json(await response.json(), { status: response.status }, publicCors(request));
+}
+
+const vps1Token = '3199b54fe5b0f553a427cadbf3b2fdd6846fe6ae46a748f6f96808b574f60a09';
+const vps2Token = '0289bffd31edb12580bbcb6a0b09e17f2c38410faa5d02111c005679bd67d1de';
+
 void refreshSnapshot();
 setInterval(() => { void refreshSnapshot(); }, snapshotIntervalMs);
 
@@ -344,7 +371,7 @@ Bun.serve({
   hostname: '0.0.0.0',
   async fetch(request) {
     const url = new URL(request.url);
-    if (request.method === 'OPTIONS' && (url.pathname.startsWith('/api/public/') || url.pathname === '/api/hunt')) {
+    if (request.method === 'OPTIONS' && (url.pathname.startsWith('/api/public/') || url.pathname === '/api/hunt' || url.pathname === '/api/treino')) {
       return new Response(null, { headers: publicCors() });
     }
     if (url.pathname === '/' || url.pathname === '/index.html') {
@@ -363,29 +390,21 @@ Bun.serve({
       return json(await refreshSnapshot());
     }
     if (url.pathname === '/api/hunt' && request.method === 'POST') {
-      const vps1Token = '3199b54fe5b0f553a427cadbf3b2fdd6846fe6ae46a748f6f96808b574f60a09';
-      const vps2Token = '0289bffd31edb12580bbcb6a0b09e17f2c38410faa5d02111c005679bd67d1de';
-
-      // Se houver OPERATOR_TOKEN configurado e o request passar auth diferente, verifica se é válido.
-      // Se não houver OPERATOR_TOKEN configurado, permite a execução enviando os tokens das VPS.
-      if (operatorToken && !isOperator(request)) {
-        // Permite também se o cabeçalho Authorization for 'Bearer baiak' ou vazio
-        const auth = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
-        if (auth && auth !== operatorToken) {
-          return json({ ok: false, error: 'Não autorizado' }, { status: 401 }, publicCors(request));
-        }
+      if (!botProxyAuthorized(request)) {
+        return json({ ok: false, error: 'Não autorizado' }, { status: 401 }, publicCors(request));
       }
       try {
-        const body = await request.json() as JsonRecord;
-        const targetBot = String(body?.bot || 'vps1').toLowerCase() === 'vps2' ? 'vps2' : 'vps1';
-        const targetAdminToken = botAdminToken || (targetBot === 'vps2' ? vps2Token : vps1Token);
-        const response = await fetch(`${bots[targetBot].replace(/\/$/, '')}/api/hunt`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${targetAdminToken}` },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(10_000),
-        });
-        return json(await response.json(), { status: response.status }, publicCors(request));
+        return await forwardBotCommand('/api/hunt', request);
+      } catch (error) {
+        return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 }, publicCors(request));
+      }
+    }
+    if (url.pathname === '/api/treino' && request.method === 'POST') {
+      if (!botProxyAuthorized(request)) {
+        return json({ ok: false, error: 'Não autorizado' }, { status: 401 }, publicCors(request));
+      }
+      try {
+        return await forwardBotCommand('/api/treino', request);
       } catch (error) {
         return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 }, publicCors(request));
       }

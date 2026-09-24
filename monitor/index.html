@@ -420,6 +420,50 @@ body {
 .hunt-msg.ok { color: var(--lime); }
 .hunt-msg.err { color: var(--red); }
 .hunt-msg.busy { color: var(--orange); }
+.btn-treino {
+  background: transparent;
+  border: 1px solid var(--lime);
+  color: var(--lime);
+  font-weight: 700;
+  font-size: 12px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.btn-treino:hover {
+  background: rgba(165, 238, 117, 0.12);
+  box-shadow: 0 0 14px rgba(165, 238, 117, 0.35);
+}
+.btn-treino:active {
+  transform: scale(0.98);
+}
+.btn-treino:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-treino.active {
+  background: rgba(255, 113, 133, 0.12);
+  border-color: var(--red);
+  color: var(--red);
+}
+.treino-active-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(165, 238, 117, 0.1);
+  border: 1px solid var(--lime);
+  color: var(--lime);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+.treino-active-badge small {
+  color: var(--muted);
+  font-weight: 400;
+}
 .hunt-readonly {
   display: flex;
   justify-content: space-between;
@@ -554,6 +598,150 @@ body {
 }
 .metric.gold b { color: var(--gold); }
 .metric.accent b { color: var(--bot); }
+
+/* PAINÉIS DE CHEFES E LEILÃO/MERCADO */
+.card-sub-panel {
+  background: linear-gradient(135deg, rgba(20, 26, 38, 0.95), rgba(12, 17, 24, 0.95));
+  border: 1px solid #233044;
+  border-radius: 12px;
+  padding: 13px 15px;
+  margin-top: 13px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+  position: relative;
+  overflow: hidden;
+}
+.card-sub-panel.boss-panel {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: linear-gradient(135deg, rgba(38, 17, 22, 0.95), rgba(16, 20, 30, 0.98));
+}
+.card-sub-panel.auction-panel {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: linear-gradient(135deg, rgba(38, 28, 14, 0.95), rgba(16, 20, 30, 0.98));
+}
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  padding-bottom: 8px;
+}
+.panel-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.boss-title { color: #fca5a5; }
+.auction-title { color: #fde047; }
+.panel-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.badge-boss-fighting {
+  background: rgba(220, 38, 38, 0.3);
+  border: 1px solid #ef4444;
+  color: #fee2e2;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+  animation: pulseFighting 1.5s infinite;
+}
+.badge-boss-ready {
+  background: rgba(16, 185, 129, 0.2);
+  border: 1px solid #10b981;
+  color: #a7f3d0;
+}
+.badge-boss-collecting {
+  background: rgba(139, 92, 246, 0.25);
+  border: 1px solid #8b5cf6;
+  color: #ddd6fe;
+}
+.badge-boss-completed {
+  background: rgba(100, 116, 139, 0.2);
+  border: 1px solid #64748b;
+  color: #cbd5e1;
+}
+.badge-auction-active {
+  background: rgba(245, 158, 11, 0.25);
+  border: 1px solid #f59e0b;
+  color: #fef08a;
+}
+.panel-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+@media (max-width: 900px) {
+  .panel-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 500px) {
+  .panel-grid { grid-template-columns: 1fr; }
+}
+.panel-item {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+  padding: 9px 11px;
+  min-width: 0;
+}
+.panel-item span {
+  display: block;
+  font-size: 9px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: 700;
+}
+.panel-item strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 800;
+  margin-top: 4px;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.panel-item small {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bar-track {
+  width: 100%;
+  height: 5px;
+  background: rgba(255,255,255,0.12);
+  border-radius: 3px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ef4444, #f87171);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.bar-fill.gold {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+@keyframes pulseFighting {
+  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
+  70% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
 
 /* TAXAS POR HORA */
 .rates {
@@ -1077,6 +1265,16 @@ function renderHuntOptions(currentHuntId, isForced, botId, status, category) {
 function renderHuntPicker(botId, status, isForced) {
   const category = huntCategorySelections[botId] || 'loot';
   const categoryLabel = category === 'xp' ? 'XP por hora' : 'Loot por hora';
+  const forceTreino = Boolean(status.force_treino);
+  const stam = esc(status.stamina || '—');
+  const treinoBtn = PUBLIC_MODE
+    ? ''
+    : (forceTreino
+      ? `<button class="btn-treino active" id="btn-treino-${botId}" onclick="toggleTreino('${botId}', false)">🧘 PARAR TREINO</button>`
+      : `<button class="btn-treino" id="btn-treino-${botId}" onclick="toggleTreino('${botId}', true)">🧘 IR TREINAR</button>`);
+  const treinoBadge = forceTreino
+    ? `<span class="treino-active-badge">🧘 TREINANDO<small>stopping em 100% · agora ${stam}</small></span>`
+    : '';
   return `<div class="hunt-picker" id="hunt-picker-${botId}">
     <div class="hunt-category-row">
       <span class="hunt-category-label">Mostrar hunts por</span>
@@ -1088,6 +1286,11 @@ function renderHuntPicker(botId, status, isForced) {
     <div class="hunt-control-row">
       <select id="hunt-select-${botId}" class="hunt-select" aria-label="Escolher hunt por ${categoryLabel}" onchange="pendingHuntSelections['${botId}'] = this.value">${renderHuntOptions(status.selected_hunt_id || status.last_hunt_id || status.force_hunt_id, isForced, botId, status, category)}</select>
       <button class="btn-hunt" id="btn-hunt-${botId}" onclick="changeHunt('${botId}')">Mudar Hunt</button>
+    </div>
+    <div class="hunt-control-row" style="margin-top:8px;gap:10px;">
+      ${treinoBtn}
+      ${treinoBadge}
+      <span class="hunt-msg" id="treino-msg-${botId}"></span>
     </div>
     <div class="hunt-picker-note">Lista ordenada por ${categoryLabel}. A troca fica na fila e só é aplicada após finalizar o estágio atual.</div>
   </div>`;
@@ -1131,15 +1334,19 @@ function applyJevHunt(botId, huntId) {
 
 function huntSection(id, s, decision, isForced) {
   const stage = huntStageInfo(s);
-  const currentId = s.selected_hunt_id || s.force_hunt_id || s.last_hunt_id || '';
-  const currentCatalog = HUNTS_CATALOG.find(h => canonicalHunt(h.id) === canonicalHunt(currentId))
-    || HUNTS_CATALOG.find(h => canonicalHunt(h.name) === canonicalHunt(s.selected_hunt_name || s.last_hunt || s.hunt));
-  const huntName = esc(currentCatalog?.name || huntNameWithoutStage(s.selected_hunt_name || stage.raw || s.last_hunt || s.hunt || '—'));
-  const mode = '🎮 ESCOLHA MANUAL';
-  const decisionText = s.hunt_control === 'manual'
-    ? (s.pending_hunt_id ? `Aguardando finalizar o estágio para trocar para ${s.pending_hunt_name || s.pending_hunt_id}` : 'Alvo fixado pelo jogador')
-    : (decision.reason || 'Telemetria em modo leitura');
-  const stageBadge = stage.label ? `<span class="hunt-stage">ESTÁGIO ${esc(stage.label)}</span>` : '';
+  const inTreino = Boolean(s.treino || /treino online|treino parou u\.é|training/i.test(String(s.observed_hunt || s.hunt)));
+  const currentId = inTreino ? 'treino-online' : (s.selected_hunt_id || s.force_hunt_id || s.last_hunt_id || '');
+  const currentCatalog = inTreino ? null
+    : (HUNTS_CATALOG.find(h => canonicalHunt(h.id) === canonicalHunt(currentId))
+      || HUNTS_CATALOG.find(h => canonicalHunt(h.name) === canonicalHunt(s.selected_hunt_name || s.last_hunt || s.hunt)));
+  const huntName = esc(inTreino ? 'Treino Online' : (currentCatalog?.name || huntNameWithoutStage(s.selected_hunt_name || stage.raw || s.last_hunt || s.hunt || '—')));
+  const mode = inTreino ? '🧘 TREINO ATIVO' : '🎮 ESCOLHA MANUAL';
+  const decisionText = inTreino
+    ? 'Bot em Treino Online: XP, gold e kills zerados até voltar à caçada'
+    : (s.hunt_control === 'manual'
+      ? (s.pending_hunt_id ? `Aguardando finalizar o estágio para trocar para ${s.pending_hunt_name || s.pending_hunt_id}` : 'Alvo fixado pelo jogador')
+      : (decision.reason || 'Telemetria em modo leitura'));
+  const stageBadge = inTreino ? '' : (stage.label ? `<span class="hunt-stage">ESTÁGIO ${esc(stage.label)}</span>` : '');
   const pending = s.pending_hunt_id ? `<div class="hunt-pending">⏳ Troca solicitada para <b>${esc(s.pending_hunt_name || s.pending_hunt_id)}</b>. A hunt atual será finalizada antes da troca.</div>` : '';
 
   const jev = s.jev_recommendation;
@@ -1191,6 +1398,120 @@ function huntSection(id, s, decision, isForced) {
   </div>`;
 }
 
+function bossSection(s) {
+  const bs = s.boss_status || {};
+  const autoSub = s.subsystems?.auto_boss || {};
+  const state = bs.state || (autoSub.status === 'FUNCIONAL' ? 'IDLE' : 'DISABLED');
+  const activeBossId = bs.activeBossId || (state === 'FIGHTING' ? 'Chefe Ativo' : null);
+  const killsToday = Number(bs.killsToday ?? 0);
+  const chargesLeft = bs.chargesLeft !== undefined ? Number(bs.chargesLeft) : (s.bossChargesLeft !== undefined ? Number(s.bossChargesLeft) : 20);
+  const chargesMax = Number(bs.chargesMax || 20);
+  const chargesPct = Math.min(100, Math.max(0, Math.round((chargesLeft / Math.max(1, chargesMax)) * 100)));
+  const detail = bs.detail || autoSub.detail || (state === 'FIGHTING' ? `Em combate contra ${activeBossId}` : 'Rotação diária pronta');
+
+  let badgeClass = 'badge-boss-ready';
+  let badgeText = '⚡ ROTAÇÃO ATIVA';
+  if (state === 'FIGHTING' || activeBossId) {
+    badgeClass = 'badge-boss-fighting';
+    badgeText = `🔥 COMBATE: ${esc(activeBossId)}`;
+  } else if (state === 'COLLECTING') {
+    badgeClass = 'badge-boss-collecting';
+    badgeText = '💎 COLETANDO BAÚ';
+  } else if (state === 'COMPLETED_DAY' || chargesLeft <= 0) {
+    badgeClass = 'badge-boss-completed';
+    badgeText = '🏆 CONCLUÍDO HOJE';
+  }
+
+  return `
+    <div class="card-sub-panel boss-panel">
+      <div class="panel-head">
+        <div class="panel-title boss-title">
+          <span>👑</span>
+          <span>SALA DE CHEFES & AUTO BOSS</span>
+        </div>
+        <span class="panel-badge ${badgeClass}">${badgeText}</span>
+      </div>
+      <div class="panel-grid">
+        <div class="panel-item">
+          <span>Chefe em Execução / Alvo</span>
+          <strong title="${esc(activeBossId || 'Nenhum combate ativo')}">${esc(activeBossId ? `🐲 ${activeBossId}` : 'Aguardando gatilho')}</strong>
+          <small>${activeBossId ? 'Na sala de combate' : 'Farming em hunt normal'}</small>
+        </div>
+        <div class="panel-item">
+          <span>Cargas Restantes Hoje</span>
+          <strong>${chargesLeft} / ${chargesMax}</strong>
+          <div class="bar-track">
+            <div class="bar-fill" style="width: ${chargesPct}%;"></div>
+          </div>
+        </div>
+        <div class="panel-item">
+          <span>Chefes Derrotados Hoje</span>
+          <strong style="color:var(--lime);">⚔️ ${killsToday} vitória(s)</strong>
+          <small>Cooldown 24h respeitado</small>
+        </div>
+        <div class="panel-item">
+          <span>Recompensas / Reward Chest</span>
+          <strong>Auto Coleta & Venda</strong>
+          <small title="${esc(detail)}">${esc(detail)}</small>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function auctionSection(s) {
+  const auc = s.auction_status || {};
+  const totalCoins = Number(s.coins ?? 0);
+  const marketCoins = Number(s.market_coins ?? auc.marketCoins ?? 0);
+  const walletCoins = Math.max(0, totalCoins - marketCoins);
+  const reservedCoins = Number(auc.reservedCoins ?? 0);
+  const activeBids = Number(auc.activeBids ?? 0);
+  const hasOwnActiveGold = Boolean(auc.hasOwnActiveGold);
+  const refRate = Number(auc.referenceRate ?? 5500000);
+  const goldToSell = Number(auc.goldToSell ?? 0);
+  const sellStatus = auc.sellStatus || (hasOwnActiveGold ? 'Anúncio de Gold ativo no mercado' : 'Acumulando saldo mín (105kk)');
+
+  let badgeClass = 'badge-auction-active';
+  let badgeText = activeBids > 0 ? `🎯 ${activeBids} LANCE(S) ATIVO(S)` : '🟢 SNIPER MONITORANDO';
+  if (hasOwnActiveGold) {
+    badgeText = '💰 VENDA DE GOLD ATIVA';
+  }
+
+  return `
+    <div class="card-sub-panel auction-panel">
+      <div class="panel-head">
+        <div class="panel-title auction-title">
+          <span>🪙</span>
+          <span>MERCADO & LEILÕES ATIVOS (SNIPER & GOLD)</span>
+        </div>
+        <span class="panel-badge ${badgeClass}">${badgeText}</span>
+      </div>
+      <div class="panel-grid">
+        <div class="panel-item">
+          <span>Lances Ativos no Leilão</span>
+          <strong>${activeBids > 0 ? `🎯 ${activeBids} lance(s)` : '0 lances'}</strong>
+          <small>${reservedCoins > 0 ? `🔒 ${num(reservedCoins)} coins reservadas` : 'Saldo 100% liberado'}</small>
+        </div>
+        <div class="panel-item">
+          <span>Venda de Gold por Coins</span>
+          <strong title="${esc(sellStatus)}">${hasOwnActiveGold ? '🟢 Anúncio Ativo' : 'Acumulando'}</strong>
+          <small>${goldToSell > 0 ? `Alvo: ${formatGold(goldToSell)} gold` : 'Mín: 105kk gold'}</small>
+        </div>
+        <div class="panel-item">
+          <span>Cotação de Mercado (JEV)</span>
+          <strong>~${(refRate / 1000000).toFixed(1)}kk / coin</strong>
+          <small>Mediana histórica de vendas</small>
+        </div>
+        <div class="panel-item">
+          <span>Saldo em Moedas (Coins)</span>
+          <strong style="color:var(--gold);">🪙 ${num(totalCoins)} coins</strong>
+          <small>${num(walletCoins)} carteira · ${num(marketCoins)} mercado</small>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function card(id, b) {
   const s = b.status || {};
   const a = s.analyzers || {};
@@ -1208,7 +1529,8 @@ function card(id, b) {
   const taken = an.taken || {};
 
   // Rastreador de Hunt: ao trocar de hunt, zera contadores e recomeça a medição
-  const currentHuntKey = String(s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id || s.hunt || 'unknown').trim().toLowerCase().replace(/-lair|-cave|-dungeon|-camp|-ground/g, '');
+  const isTreino = Boolean(s.treino || /treino online|treino parou u\.é|training/i.test(String(s.observed_hunt || s.hunt || s.subsystems?.auto_treino?.status || '')));
+  const currentHuntKey = isTreino ? 'treino' : String(s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id || s.hunt || 'unknown').trim().toLowerCase().replace(/-lair|-cave|-dungeon|-camp|-ground/g, '');
   const rawKills = Number(s.kills) || 0;
   const rawWaves = Number(s.waves) || 0;
   const rawSessionXp = Number(s.session_xp ?? an.session_xp ?? an.raw_xp ?? 0) || 0;
@@ -1244,6 +1566,10 @@ function card(id, b) {
   const huntElapsedStr = formatElapsed(huntElapsedSec, Math.floor(huntElapsedSec / 60));
   const huntElapsedHours = huntElapsedSec > 0 ? huntElapsedSec / 3600 : 0;
 
+  const huntXpFinal = isTreino ? 0 : huntXp;
+  const huntGoldFinal = isTreino ? 0 : huntGold;
+  const huntElapsedStrFinal = isTreino ? 'Em treino' : huntElapsedStr;
+
   const isForced = Boolean(s.force_hunt && s.force_hunt_id);
   const uptimeSec = Number(s.online_uptime_seconds ?? 0) || 0;
   const elapsedSecForUptime = Number(s.elapsed_seconds ?? 0) || 0;
@@ -1251,7 +1577,7 @@ function card(id, b) {
   const uptimeStr = s.online
     ? formatUptimeSec(s.online_uptime_seconds ?? uptimeBase)
     : 'Reconectando...';
-  const sessionXpStr = formatXp(huntXp);
+  const sessionXpStr = formatXp(huntXpFinal);
   const tickAt = Date.now();
 
   // Cálculo robusto de taxas ao vivo por hora reiniciando com a nova hunt
@@ -1299,6 +1625,11 @@ function card(id, b) {
   const displayLevelHour = huntElapsedSec < 60
     ? 'Calculando…'
     : (liveLevelRate > 0 ? num(liveLevelRate) : (rate !== null && Number.isFinite(rate) ? num(rate) : '0,0'));
+  const displayXpHourFinal = isTreino ? '0 XP/h' : displayXpHour;
+  const displayLootHourFinal = isTreino ? '0/h' : displayLootHour;
+  const displayGoldHourFinal = isTreino ? '0/h' : displayGoldHour;
+  const killsHourValFinal = isTreino ? 0 : killsHourVal;
+  const wavesHourValFinal = isTreino ? 0 : wavesHourVal;
 
   return `
     <article class="bot ${id}">
@@ -1330,11 +1661,15 @@ function card(id, b) {
               <span style="font-size:12px;">⚡</span>
             </div>
             <strong class="hero-val">${esc(sessionXpStr)}</strong>
-            <small>Taxa da hunt: ${esc(displayXpHour)}</small>
+            <small>Taxa da hunt: ${esc(displayXpHourFinal)}</small>
           </div>
         </div>
 
         ${huntSection(id, s, d, isForced)}
+
+        ${bossSection(s)}
+
+        ${auctionSection(s)}
 
         <!-- MÉTRICAS GERAIS -->
         <div class="metrics">
@@ -1344,12 +1679,17 @@ function card(id, b) {
           </div>
           <div class="metric gold">
             <span>Gold nesta Hunt</span>
-            <b title="Saldo da conta: ${num(s.gold)} gold">+${formatGold(Math.max(0, huntGold))}</b>
+            <b title="Saldo da conta: ${num(s.gold)} gold">+${formatGold(Math.max(0, huntGoldFinal))}</b>
             <small style="display:block;font-size:10px;color:var(--muted);margin-top:2px;">Total: ${formatGold(rawGold)}</small>
           </div>
           <div class="metric accent">
             <span>Coins (Mercado)</span>
             <b style="color:#f59e0b;">🪙 ${num(s.coins ?? 0)}${s.market_coins ? ` <small style="font-size:10px;color:var(--muted);">(+${num(s.market_coins)} mkt)</small>` : ''}</b>
+          </div>
+          <div class="metric accent">
+            <span>Leilão / Reservados</span>
+            <b style="color:#f59e0b;">${num(s.auction_status?.reservedCoins ?? 0)} coins</b>
+            <small style="display:block;font-size:10px;color:var(--muted);margin-top:2px;">${s.auction_status?.activeBids ? `${num(s.auction_status.activeBids)} lance(s) ativo(s)` : 'Nenhum lance ativo'}</small>
           </div>
           <div class="metric">
             <span>Stamina</span>
@@ -1365,15 +1705,15 @@ function card(id, b) {
           </div>
           <div class="metric">
             <span>Kills na Sessão</span>
-            <b>${num(huntKills)}</b>
+            <b>${isTreino ? '0' : num(huntKills)}</b>
           </div>
           <div class="metric">
             <span>Waves</span>
-            <b>${num(huntWaves)}</b>
+            <b>${isTreino ? '0' : num(huntWaves)}</b>
           </div>
           <div class="metric">
             <span>Tempo na Hunt</span>
-            <b data-tick-base="${huntElapsedSec}" data-tick-at="${tickAt}" data-tick-kind="elapsed">${esc(huntElapsedStr)}</b>
+            <b data-tick-base="${huntElapsedSec}" data-tick-at="${tickAt}" data-tick-kind="elapsed">${esc(huntElapsedStrFinal)}</b>
           </div>
           <div class="metric">
             <span>Loop Mode</span>
@@ -1393,27 +1733,27 @@ function card(id, b) {
         <div class="rates">
           <div class="rate">
             <span>Level / hora</span>
-            <b>${esc(displayLevelHour)}</b>
+            <b>${isTreino ? '0' : esc(displayLevelHour)}</b>
           </div>
           <div class="rate">
             <span>XP / hora</span>
-            <b>${esc(displayXpHour)}</b>
+            <b>${esc(displayXpHourFinal)}</b>
           </div>
           <div class="rate">
             <span>Loot / hora</span>
-            <b>${esc(displayLootHour)}</b>
+            <b>${esc(displayLootHourFinal)}</b>
           </div>
           <div class="rate">
             <span>Gold / hora</span>
-            <b>${esc(displayGoldHour)}</b>
+            <b>${esc(displayGoldHourFinal)}</b>
           </div>
           <div class="rate">
             <span>Kills / hora</span>
-            <b>${num(killsHourVal)}</b>
+            <b>${num(killsHourValFinal)}</b>
           </div>
           <div class="rate">
             <span>Waves / hora</span>
-            <b>${num(wavesHourVal)}</b>
+            <b>${num(wavesHourValFinal)}</b>
           </div>
           <div class="rate wide-rate">
             <span>Dano / seg</span>
@@ -1651,6 +1991,53 @@ async function changeHunt(botId) {
   } catch (err) {
     msg.className = 'hunt-msg err';
     msg.textContent = '❌ Erro de rede: ' + err.message;
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => {
+      if (msg && msg.className.includes('ok')) msg.textContent = '';
+    }, 6000);
+  }
+}
+
+async function toggleTreino(botId, enable) {
+  if (PUBLIC_MODE) return;
+  const btn = document.getElementById('btn-treino-' + botId);
+  const msg = document.getElementById('treino-msg-' + botId);
+  if (!btn || btn.disabled) return;
+
+  const operatorToken = sessionStorage.getItem('baiak-operator-token') || '';
+  btn.disabled = true;
+  if (msg) {
+    msg.className = 'hunt-msg busy';
+    msg.textContent = enable ? 'Enviando comando de treino...' : 'Enviando comando de parada...';
+  }
+
+  try {
+    const res = await fetch(API + '/api/treino', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + operatorToken,
+        'ngrok-skip-browser-warning': 'true'
+      },
+      body: JSON.stringify({ bot: botId, enabled: enable })
+    });
+    const data = await res.json();
+    if (msg) {
+      if (data.ok) {
+        msg.className = 'hunt-msg ok';
+        msg.textContent = '✅ ' + (data.message || (enable ? 'Treino ativado!' : 'Treino desativado.'));
+        setTimeout(update, 1200);
+      } else {
+        msg.className = 'hunt-msg err';
+        msg.textContent = '❌ ' + (data.error || data.reason || 'Falha ao aplicar treino');
+      }
+    }
+  } catch (err) {
+    if (msg) {
+      msg.className = 'hunt-msg err';
+      msg.textContent = '❌ Erro de rede: ' + err.message;
+    }
   } finally {
     btn.disabled = false;
     setTimeout(() => {

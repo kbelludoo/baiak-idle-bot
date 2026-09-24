@@ -113,7 +113,7 @@ export async function launchBrowser(
     // VPS com CPU compartilhada pode levar mais de 30s para expor o
     // endpoint CDP na primeira inicialização do Chromium.
     timeout: 120000,
-    protocolTimeout: 120000,
+    protocolTimeout: 300000,
     // Mesmo UA do bot Python para evitar uma segunda combinação de cliente na VPS.
     env: process.env,
     defaultViewport: {

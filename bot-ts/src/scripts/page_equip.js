@@ -1,5 +1,5 @@
 async (args) => {
-  const { preferredElement = "", preferredProtection = "" } = args || {};
+  const { preferredElement = "", preferredProtection = "", job = "equip", approvedHashes = [] } = args || {};
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const vis = (el) => !!(el && el.offsetParent !== null);
   const events = [];
@@ -253,6 +253,31 @@ async (args) => {
     cands.push({ cell, d, score: s, cur });
   }
   cands.sort((a, b) => b.score - a.score);
+
+  if (job === "inspect") {
+    return {
+      ok: true,
+      candidates: cands.slice(0, 12).map((c) => ({
+        hash: c.d.cmp?.hash || null,
+        name: c.d.name,
+        slot: c.d.slot,
+        rarity: c.d.rarity,
+        tier: c.d.ftier,
+        up: c.d.up,
+        score: c.score,
+        equippedScore: c.cur?.score || 0,
+        attrs: c.d.cmp?.attrs || "",
+      })),
+      equippedSlots: equippedBySlot,
+    };
+  }
+
+  const approved = new Set((Array.isArray(approvedHashes) ? approvedHashes : []).map(String));
+  if (approved.size > 0) {
+    for (let i = cands.length - 1; i >= 0; i--) {
+      if (!approved.has(String(cands[i].d.cmp?.hash || ""))) cands.splice(i, 1);
+    }
+  }
 
   if (!cands.length) {
     closeItem();

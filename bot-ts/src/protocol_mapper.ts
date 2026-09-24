@@ -1,5 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { huntFacts } from './hunt_sim';
+import type { DamageSample } from './formula_calibrator';
 
 type NumericPath = { path: string; min: number; max: number; last: number; count: number };
 
@@ -209,6 +211,27 @@ export class ProtocolMapper {
     return win ? Math.max(0, (Date.now() - win.startedAt) / 1000) : 0;
   }
 
+  formulaSamples(level: number, power = 0, aoe = 0, party = false): DamageSample[] {
+    const samples: DamageSample[] = [];
+    for (const [huntId, window] of this.liveWindows) {
+      const facts = huntFacts(huntId);
+      const score = this.snapshotData.scores[huntId];
+      const elapsedSec = Math.max(0, (Date.now() - window.startedAt) / 1000);
+      const kills = Math.max(0, Number(score?.kills || 0));
+      if (!facts || elapsedSec < 120 || kills < 20) continue;
+      samples.push({
+        level, power, aoe, party,
+        avgHp: Number(facts.avgHp || 0),
+        alive: Number(facts.maxAlive || 1),
+        spawnS: Number(facts.spawnMs || 0) / 1000,
+        kills,
+        uptimeSec: elapsedSec,
+        huntId,
+      });
+    }
+    return samples;
+  }
+
   /** XP ganho desde o início deste processo, independente do HUD/analyzer. */
   sessionXp(): number {
     let total = 0;
@@ -218,6 +241,30 @@ export class ProtocolMapper {
       total += Math.max(0, Number(row.xp || 0) - Number(win.xp || 0));
     }
     return Math.floor(total);
+  }
+
+  sessionXpFor(huntId: string): number {
+    const hid = String(huntId || '').trim();
+    const win = this.liveWindows.get(hid);
+    const row = this.snapshotData.hunts[hid];
+    if (!win || !row) return 0;
+    return Math.floor(Math.max(0, Number(row.xp || 0) - Number(win.xp || 0)));
+  }
+
+  resetLiveWindow(huntId: string): void {
+    const hid = String(huntId || '').trim();
+    const row = this.snapshotData.hunts[hid];
+    if (!hid || !row) return;
+    this.beginLiveWindow(hid, row);
+    const score = this.snapshotData.scores[hid];
+    if (score) {
+      this.snapshotData.scores[hid] = {
+        ...score,
+        xpPerHour: 0, lootGoldPerHour: 0, supplyGoldPerHour: 0, netGoldPerHour: 0,
+        damagePerSecond: 0, healingPerSecond: 0, kills: 0, sampleSeconds: 0,
+        sampleReady: false, updatedAt: new Date().toISOString(), source: 'live-window',
+      };
+    }
   }
 
   private activeHunt: string | null = null;

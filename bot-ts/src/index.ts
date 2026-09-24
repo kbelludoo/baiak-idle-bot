@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
 import { join, dirname } from "path";
 import { parseConfig, describeFlags } from "./config";
 import { launchBrowser } from "./browser";
@@ -13,10 +13,14 @@ import { TelemetryStore, parseHuntStage } from "./telemetry";
 import { ProtocolMapper } from "./protocol_mapper";
 import { chooseExplorationTarget } from "./exploration";
 import { helperTrigger } from "./helper_triggers";
-import { ActionQueue, evaluateStaminaTransition } from "./state_machine";
+import { ActionQueue, evaluateStaminaTransition, staminaToMinutes } from "./state_machine";
 import { createTrpcClient, normalizeChars } from "./trpc";
-import { roomSend, roomSendDetail, roomDrainEvents, sendStage, sendAutosellFull, sendAutosellPct, sendAutoBoss } from "./room_send";
+import { roomSend, roomSendDetail, roomDrainEvents, sendStage, sendAutosellFull, sendAutosellPct, sendAutoBoss, sendAutoBossList } from "./room_send";
 import { getJevEngine } from "./jev";
+import { simulateHunt } from "./hunt_sim";
+import { FormulaVersionStore } from "./formula_versions";
+import { checkAndBuyBossGear } from "./boss_collector";
+import { SoftwareBossRunner } from "./boss_runner";
 import type { TelemetryState, SubsystemInfo } from "./types";
 
 // ===================================================================
@@ -209,6 +213,15 @@ const FAST_STATE_JS = `() => {
     } catch (_) {}
   }
 
+  let market_coins = null;
+  try {
+    const w = window;
+    const b = w.__baiak_balances || w.ie?.balances || w.__coin_balances;
+    if (b && typeof b.marketCoins === "number" && Number.isFinite(b.marketCoins)) {
+      market_coins = Math.floor(b.marketCoins);
+    }
+  } catch (_) {}
+
   // Stamina — relógio, Xh Ym, % e tooltip; placeholder 42:00 = desconhecido
   // Ordem: IDs conhecidos -> espelhos kernel -> varredura genérica stamina.
   let stamina = normStam(text(document.getElementById("stamina-time") || document.querySelector(".stamina-time, .stamina-val, #stamina-val, [data-stamina], .hud-stamina, #stamina-panel, .stamina-panel")), trainingView);
@@ -318,6 +331,7 @@ const FAST_STATE_JS = `() => {
     party: shooters,
     gold,
     coins,
+    market_coins,
     stamina,
     loopOn,
     invText,
@@ -337,6 +351,18 @@ const FAST_STATE_JS = `() => {
 // ===================================================================
 // MAIN
 // ===================================================================
+
+// 100% de stamina (2520 min / 42:00). O placeholder "42:00" do jogo é
+// ambíguo durante o carregamento, mas com o personagem confirmado no Treino
+// Online ele é a leitura de cheio e libera o comando manual de treino.
+function staminaAtFull(raw: string | number | null | undefined): boolean {
+  if (raw === undefined || raw === null) return false;
+  const s = String(raw).trim();
+  if (s === '100%' || /^42\s*:\s*00(?::00)?$/.test(s)) return true;
+  if (typeof raw === 'number' && raw === 2520) return true;
+  const mins = staminaToMinutes(raw);
+  return mins !== null && mins >= 2520;
+}
 
 async function main() {
   if (process.argv.includes("--help") || process.argv.includes("-h")) {
@@ -363,12 +389,22 @@ async function main() {
 
   const dataDir = dirname(config.userDataDir);
   try { if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true }); } catch (_) {}
-  // A escolha feita pelo painel sobrevive ao restart e tem precedência sobre
-  // um FORCE_HUNT antigo deixado no ambiente da VPS.
+  // A escolha feita pelo painel sobrevive ao restart, exceto quando o modo
+  // JEV_AUTO_HUNT está ativo: nesse modo, uma escolha manual persistida não
+  // pode bloquear a seleção automática após um restart.
   let persistedManualHuntId: string | null = null;
+  if (!config.jevAutoHunt) {
+    try {
+      const saved = JSON.parse(readFileSync(join(dataDir, 'manual_hunt.json'), 'utf-8'));
+      if (saved?.hunt_id && matchHunt(String(saved.hunt_id))) persistedManualHuntId = String(saved.hunt_id);
+    } catch (_) {}
+  }
+  // Treino Online forçado pelo painel. Sobrevive ao restart como a escolha de
+  // hunt manual; fica ativo até a stamina voltar a 100% (aí é liberado sozinho).
+  let forceTreino = false;
   try {
-    const saved = JSON.parse(readFileSync(join(dataDir, 'manual_hunt.json'), 'utf-8'));
-    if (saved?.hunt_id && matchHunt(String(saved.hunt_id))) persistedManualHuntId = String(saved.hunt_id);
+    const savedTreino = JSON.parse(readFileSync(join(dataDir, 'manual_treino.json'), 'utf-8'));
+    if (savedTreino?.enabled) forceTreino = true;
   } catch (_) {}
 
   const watchdog = new Watchdog();
@@ -480,18 +516,27 @@ async function main() {
     },
   };
 
-  const jev = getJevEngine();
+  const jev = getJevEngine({
+    apiKey: config.jevApiKey,
+    endpoint: config.jevEndpoint,
+    timeoutMs: config.jevTimeoutMs,
+    enabled: config.jevEnabled,
+  });
   let jevRecommendation: any = null;
   let lastJevRecommendationTs = 0;
   let lastJevBuildTs = 0;
+  let lastFormulaCalibrationTs = 0;
+  let formulaCalibrationStatus: any = { status: 'aguardando amostras' };
 
   const telemetry = new TelemetryStore();
   const protocolMapper = new ProtocolMapper(dataDir);
+  const formulaVersions = new FormulaVersionStore(dataDir);
   const actionQueue = new ActionQueue();
   // Alvo manual autoritativo. O valor do ambiente vale apenas como alvo
   // inicial; uma escolha do painel invalida ações antigas da fila.
   let manualHuntId: string | null = persistedManualHuntId
     || (config.forceHunt && config.huntId ? config.huntId : null);
+  let automaticHuntId: string | null = null;
   if (manualHuntId) {
     config.forceHunt = true;
     config.huntId = manualHuntId;
@@ -506,6 +551,10 @@ async function main() {
   let hudXpLast: number | null = null;
   let hudXpAccumulated = 0;
   let sessionStartLevel: number | null = null;
+  let sessionHuntId: string | null = null;
+  let sessionHuntStartedAt = Date.now();
+  let sessionKillsBase = 0;
+  let sessionWavesBase = 0;
 
   const parseMetricValue = (value: any): number => {
     if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
@@ -550,8 +599,11 @@ async function main() {
   };
 
   const runtimeMetrics = () => {
-    const elapsedSeconds = Math.max(1, telemetry.elapsedSeconds());
+    const elapsedSeconds = Math.max(1, (Date.now() - sessionHuntStartedAt) / 1000);
     if (sessionStartLevel === null && telemetry.level > 0) sessionStartLevel = telemetry.level;
+    // Durante o Treino Online não há caçada: XP/h, gold/h e kills devem ficar
+    // zerados no painel para não exibir taxas obsoletas da última hunt.
+    const inTrainingNow = telemetry.inTreino;
 
     const activeText = telemetry.hunt && telemetry.hunt !== 'Conectando...' && telemetry.hunt !== '—'
       ? telemetry.hunt : '';
@@ -569,6 +621,15 @@ async function main() {
     const selectedMatrix: any = selectedHuntId ? ((huntMatrix as any).matrix?.[selectedHuntId] || {}) : {};
     const analyzerBelongsToSelected = !!selectedHuntId && activeMatch?.id === selectedHuntId;
     const analyzer = analyzerBelongsToSelected ? latestAnalyzers : {};
+    const analyzerSessionTime = String((analyzer as any).session_time || '');
+    const analyzerWindowSeconds = (() => {
+      const m = analyzerSessionTime.match(/^(\d+):([0-5]\d):([0-5]\d)$/);
+      return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : 0;
+    })();
+    // O Hunt Analyzer pode manter uma taxa antiga enquanto a sessão está em
+    // 00:00:00 (observado na VPS2). Nesse estado, a taxa não pertence à janela
+    // atual e deve perder para a matriz observada da hunt.
+    const analyzerRateTrusted = analyzerWindowSeconds >= 30;
     const scoreSampleReady = selectedScore.sampleReady === true;
     const profilerActive = !!selectedHuntId && String((profiler as any).activeHuntId || '') === selectedHuntId;
     const profilerElapsed = profilerActive && typeof (profiler as any).measureElapsed === 'function'
@@ -593,8 +654,9 @@ async function main() {
     // funciona como taxa provisória até a primeira amostra desta execução.
     const matrixObserved = Number(selectedMatrix?.samples || 0) >= 30
       && Number(selectedMatrix?.deaths || 0) <= 0;
+    const currentWindowMature = elapsedSeconds >= 120;
     const historicalMatrix = currentHuntIsActive
-      ? (matrixObserved ? selectedMatrix : {})
+      ? (matrixObserved && currentWindowMature ? selectedMatrix : {})
       : selectedMatrix;
     const firstPositive = (...values: any[]): number => {
       for (const value of values) {
@@ -603,12 +665,11 @@ async function main() {
       }
       return 0;
     };
-    const xpPerHour = firstPositive(
-      currentAnalyzer.xp_per_hour,
-      currentScore.xpPerHour,
-      historicalMatrix.avg_xp_h,
-      historicalMatrix.xp_h_display,
-    );
+    const xpPerHour = analyzerRateTrusted
+      ? firstPositive(currentAnalyzer.xp_per_hour, currentScore.xpPerHour, historicalMatrix.avg_xp_h, historicalMatrix.xp_h_display)
+      : (matrixObserved
+        ? firstPositive(selectedMatrix.avg_xp_h, selectedMatrix.xp_h_display)
+        : firstPositive(currentScore.xpPerHour, historicalMatrix.avg_xp_h, historicalMatrix.xp_h_display));
     const lootPerHour = firstPositive(
       currentAnalyzer.loot_per_hour,
       currentScore.lootGoldPerHour,
@@ -621,13 +682,13 @@ async function main() {
     const goldPerHour = profilerGoldReady
       ? Math.max(0, Number((profiler as any).sessGoldH) || 0) : 0;
     const goldSampleReady = profilerGoldReady;
-    const sessionKillsPerHour = Math.round((telemetry.kills / elapsedSeconds) * 3600 * 10) / 10;
-    const sessionWavesPerHour = Math.round((telemetry.waves / elapsedSeconds) * 3600 * 10) / 10;
+    const sessionKillsPerHour = Math.round((Math.max(0, telemetry.kills - sessionKillsBase) / elapsedSeconds) * 3600 * 10) / 10;
+    const sessionWavesPerHour = Math.round((Math.max(0, telemetry.waves - sessionWavesBase) / elapsedSeconds) * 3600 * 10) / 10;
     const levelPerHour = sessionStartLevel !== null
       ? Math.max(0, Math.round(((telemetry.level - sessionStartLevel) / elapsedSeconds) * 3600 * 10) / 10)
       : 0;
-    const mappedSessionXp = typeof (protocolMapper as any).sessionXp === 'function'
-      ? Number((protocolMapper as any).sessionXp()) || 0 : 0;
+    const mappedSessionXp = selectedHuntId && typeof (protocolMapper as any).sessionXpFor === 'function'
+      ? Number((protocolMapper as any).sessionXpFor(selectedHuntId)) || 0 : 0;
     // Em algumas sessões o Hunt Analyzer congela o "XP Stack", embora os
     // kills continuem chegando. Usa a razão XP/kill da matriz observada como
     // fallback explícito de progresso; não altera o nível autoritativo vindo
@@ -636,9 +697,30 @@ async function main() {
       ? Number(selectedMatrix?.avg_xp_h || 0) / Number(selectedMatrix.avg_kills_h)
       : 0;
     const estimatedSessionXp = matrixObserved && matrixXpPerKill > 0
-      ? Math.floor(Math.max(0, telemetry.kills) * matrixXpPerKill)
+      ? Math.floor(Math.max(0, telemetry.kills - sessionKillsBase) * matrixXpPerKill)
       : 0;
     const sessionXp = Math.floor(Math.max(mappedSessionXp, hudXpAccumulated, estimatedSessionXp));
+    if (inTrainingNow) {
+      return {
+        elapsedSeconds,
+        selectedHuntId: null,
+        selectedHuntName: "Treino Online",
+        selectedHuntMetrics: {
+          xp_per_hour: 0,
+          loot_per_hour: 0,
+          gold_per_hour: 0,
+          sample_ready: false,
+          gold_sample_ready: false,
+          source: 'treino',
+          window_seconds: 0,
+          historical_gold_per_hour: 0,
+        },
+        sessionKillsPerHour: 0,
+        sessionWavesPerHour: 0,
+        levelPerHour: 0,
+        sessionXp: 0,
+      };
+    }
     return {
       elapsedSeconds,
       selectedHuntId,
@@ -849,7 +931,11 @@ async function main() {
 
       // Personagens ativos da conta ordenados (líder primeiro se houver)
       const disabledIds = Array.isArray(cachedPartyConfig?.disabled) ? cachedPartyConfig.disabled : [];
+      const leaderId = cachedPartyConfig?.leader || (telemetry as any).partyLeaderId;
       const activeAccountChars = accList.filter((c: any) => !disabledIds.includes(c?.id));
+      if (leaderId) {
+        activeAccountChars.sort((a, b) => (a.id === leaderId ? -1 : b.id === leaderId ? 1 : 0));
+      }
 
       const slotsMap: Record<string, any> = (magicState?.slots || {}) as any;
       const hasMagic = Object.keys(slotsMap).length > 0;
@@ -859,27 +945,26 @@ async function main() {
       const totalSlots = Math.min(3, Math.max(rawMembers.length || 0, activeAccountChars.length || 0, telemetry.partySlots || 3));
       const memberLevels: number[] = [];
       const partyMembersOut: any[] = [];
+      const formatVocName = (v: string) => {
+        const vl = String(v || '').toLowerCase();
+        if (vl.includes('knight') || vl === 'ek') return 'Knight (EK)';
+        if (vl.includes('druid') || vl === 'ed') return 'Druid (ED)';
+        if (vl.includes('sorcerer') || vl === 'ms') return 'Sorcerer (MS)';
+        if (vl.includes('paladin') || vl === 'rp') return 'Paladin (RP)';
+        if (vl.includes('monk') || vl === 'em' || vl === 'mk') return 'Monk (EM)';
+        return v || 'Desconhecido';
+      };
+
       for (let sid = 0; sid < totalSlots; sid++) {
         const found = rawMembers.find((m: any) => Number(m?.slot) === sid) || rawMembers[sid];
         const vocFromText = found?.text ? parseVocFromText(found.text) : null;
         const fallbackChar = activeAccountChars[sid];
-        const voc = (found?.voc) || vocFromText || (fallbackChar ? `${fallbackChar.vocation.toUpperCase()}` : (sid === 0 ? "Knight (EK)" : (sid === 1 ? "Druid (ED)" : "Sorcerer (MS)")));
-        let charInfo: any = null;
-        const vocLow = String(voc).toLowerCase();
-        for (const [vk, vi] of Object.entries(accChars)) {
-          if (
-            vocLow.includes(vk) ||
-            (vk.includes("knight") && (vocLow.includes("knight") || vocLow.includes("ek"))) ||
-            (vk.includes("druid") && (vocLow.includes("druid") || vocLow.includes("ed"))) ||
-            (vk.includes("sorcerer") && (vocLow.includes("sorcerer") || vocLow.includes("ms"))) ||
-            (vk.includes("paladin") && (vocLow.includes("paladin") || vocLow.includes("rp"))) ||
-            (vk.includes("monk") && (vocLow.includes("monk") || vocLow.includes("mk")))
-          ) {
-            charInfo = vi;
-            break;
-          }
+        const voc = (found?.voc) || vocFromText || (fallbackChar ? formatVocName(fallbackChar.vocation) : (sid === 0 ? "Knight (EK)" : (sid === 1 ? "Druid (ED)" : "Sorcerer (MS)")));
+        let charInfo: any = fallbackChar || null;
+        if (found?.name && !String(found.name).startsWith("Slot")) {
+          const matchedByName = activeAccountChars.find((c: any) => String(c.name).toLowerCase() === String(found.name).toLowerCase());
+          if (matchedByName) charInfo = matchedByName;
         }
-        if (!charInfo && fallbackChar) charInfo = fallbackChar;
 
         const extractedName = found?.name && !String(found.name).startsWith("Slot") ? found.name : null;
         const lvlFromText = found?.text ? parseLvlFromText(found.text) : null;
@@ -912,19 +997,19 @@ async function main() {
       const mapSnapshot = protocolMapper.snapshot();
       const metrics = runtimeMetrics();
       const bossState = (telemetry as any).autoBossState;
-      if (config.autoBoss && bossState && typeof bossState === 'object') {
-        const until = Number(bossState.until || 0);
-        const playlist = Array.isArray(bossState.list) ? bossState.list : [];
-        const running = bossState.running === true;
-        if (until <= Date.now() || playlist.length === 0) {
-          subsystems.auto_boss = {
-            status: "AGUARDANDO_REQUISITO",
-            detail: "Auto Boss sem playlist/liberação no servidor; nenhuma rotação executada",
-          };
-        } else {
+      if (config.autoBoss) {
+        if (bossState && typeof bossState === 'object' && Number(bossState.until || 0) > Date.now()) {
+          const playlist = Array.isArray(bossState.list) ? bossState.list : [];
+          const running = bossState.running === true;
           subsystems.auto_boss = {
             status: "FUNCIONAL",
-            detail: running ? `Rotação Auto Boss em andamento (${playlist.length} chefes)` : `Playlist Auto Boss pronta (${playlist.length} chefes)`,
+            detail: running ? `Rotação Nativa em andamento (${playlist.length} chefes)` : `Playlist Nativa pronta (${playlist.length} chefes)`,
+          };
+        } else {
+          const rStat = softwareBossRunner.getStatus();
+          subsystems.auto_boss = {
+            status: "FUNCIONAL",
+            detail: rStat.detail,
           };
         }
       }
@@ -987,6 +1072,7 @@ async function main() {
         last_hunt_id: metrics.selectedHuntId || (profiler as any).lastPlayedId || null,
         force_hunt: Boolean(manualHuntId),
         force_hunt_id: manualHuntId || null,
+        force_treino: forceTreino,
         hunt_control: 'manual',
         pending_hunt_id: pendingHuntChange?.id || null,
         pending_hunt_name: pendingHuntChange?.name || null,
@@ -997,7 +1083,8 @@ async function main() {
         analyzers: analyzerOut,
         hunt_matrix: (huntMatrix as any).matrix,
         protocol_map: mapSnapshot,
-        hunt_metrics: mapSnapshot.scores,
+         hunt_metrics: mapSnapshot.scores,
+         formula_calibration: formulaCalibrationStatus,
         unlocked_hunts: mapSnapshot.unlockedHunts,
         // Lista usada pelo engine depois de combinar offlineInfo, servidor e
         // seletor DOM (a lista acima é apenas o mapa protocolar histórico).
@@ -1006,8 +1093,10 @@ async function main() {
         magic_level: telemetry.magicLevel,
         skills_summary: telemetry.skillsSummary,
         coins: telemetry.coins,
-        market_coins: telemetry.marketCoins,
-        jev_recommendation: jevRecommendation,
+         market_coins: telemetry.marketCoins,
+         auction_status: extrasScheduler.lastAuctionStatus,
+         boss_status: softwareBossRunner.getStatus(),
+         jev_recommendation: jevRecommendation,
       };
       writeFileSync(join(dataDir, "status.json"), JSON.stringify(statusData, null, 2), "utf-8");
     } catch (_) {}
@@ -1162,6 +1251,7 @@ async function main() {
   };
   let pendingHuntChange: PendingHuntChange | null = null;
   let lastLoggedSkillsSig = "";
+  const softwareBossRunner = new SoftwareBossRunner();
 
   const huntFinishedForSwitch = (): boolean => {
     const current = String(telemetry.hunt || '').toLowerCase();
@@ -1186,15 +1276,21 @@ async function main() {
     return !activeId && !current.includes('conectando');
   };
 
-  const activateManualHunt = (target: PendingHuntChange): void => {
+  const activateManualHunt = (target: PendingHuntChange, persist = true): void => {
     pendingHuntChange = null;
-    manualHuntId = target.id;
-    config.forceHunt = true;
-    config.huntId = target.id;
-    config.huntMode = 'force';
-    try {
-      writeFileSync(join(dataDir, 'manual_hunt.json'), JSON.stringify({ hunt_id: target.id, hunt_name: target.name, updated_at: new Date().toISOString() }, null, 2), 'utf-8');
-    } catch (_) {}
+    if (persist) {
+      manualHuntId = target.id;
+      config.forceHunt = true;
+      config.huntId = target.id;
+      config.huntMode = 'force';
+    } else {
+      automaticHuntId = target.id;
+    }
+    if (persist) {
+      try {
+        writeFileSync(join(dataDir, 'manual_hunt.json'), JSON.stringify({ hunt_id: target.id, hunt_name: target.name, updated_at: new Date().toISOString() }, null, 2), 'utf-8');
+      } catch (_) {}
+    }
     needsHuntEntry = true;
     lastHuntAttempt = 0;
     if (telemetry.inTreino) {
@@ -1238,6 +1334,7 @@ async function main() {
           elapsed_seconds: telemetry.elapsedSeconds(),
           force_hunt: Boolean(manualHuntId),
           force_hunt_id: manualHuntId || null,
+          force_treino: forceTreino,
           hunt_control: 'manual',
           pending_hunt_id: pendingHuntChange?.id || null,
           pending_hunt_name: pendingHuntChange?.name || null,
@@ -1291,6 +1388,21 @@ async function main() {
       activateManualHunt(request);
       writeStatusFile();
       return { ok: true, message: `Hunt ${targetName} iniciada com sucesso.`, pending: false };
+    },
+    onSetTreino: async (enabled: boolean) => {
+      forceTreino = Boolean(enabled);
+      if (forceTreino) {
+        try {
+          writeFileSync(join(dataDir, 'manual_treino.json'), JSON.stringify({ enabled: true, updated_at: new Date().toISOString() }, null, 2), 'utf-8');
+        } catch (_) {}
+        // Suspende entradas de hunt em voo; o treino assume a prioridade.
+        actionQueue.clearQueuedLane('hunt');
+        subsystems.auto_treino = { status: "FORCANDO", detail: "Comando manual do operador — indo para Treino Online (libera em 100%)" };
+        writeStatusFile();
+        return { ok: true, message: 'Treino Online ativado. O bot volta à caça sozinho ao atingir 100% de stamina.' };
+      }
+      try { unlinkSync(join(dataDir, 'manual_treino.json')); } catch (_) {}
+      return { ok: true, message: 'Treino forçado desativado.' };
     },
     dataDir,
   });
@@ -1524,6 +1636,16 @@ async function main() {
                 authoritativeHuntId = null;
               } else if (ev.type === 'reconnectOk') {
                 (telemetry as any).reconnectOk = true;
+              } else if (ev.type === 'mine' && ev.payload && typeof ev.payload === 'object') {
+                if (ev.payload.bossChargesLeft !== undefined) {
+                  (telemetry as any).bossChargesLeft = ev.payload.bossChargesLeft;
+                }
+                if (ev.payload.bossCooldowns !== undefined) {
+                  (telemetry as any).bossCooldowns = ev.payload.bossCooldowns;
+                }
+                if (ev.payload.activeBossId !== undefined) {
+                  (telemetry as any).activeBossId = ev.payload.activeBossId;
+                }
               }
             } catch (_) {}
           }
@@ -1651,6 +1773,7 @@ async function main() {
         if (domState.level) telemetry.updateLevel(domState.level, source);
         if (domState.gold !== undefined && domState.gold !== null) telemetry.updateGold(domState.gold, source);
         if (domState.coins !== undefined && domState.coins !== null) telemetry.updateCoins(domState.coins, source);
+        if (domState.market_coins !== undefined && domState.market_coins !== null) telemetry.updateMarketCoins(domState.market_coins, source);
         if (domState.stamina) telemetry.updateStamina(domState.stamina, source);
         telemetry.updateLoopMode(domState.loopOn, source);
         telemetry.updateBagSlots(domState.invText, source);
@@ -1779,19 +1902,38 @@ async function main() {
           writeStatusFile();
         }
 
-        // Quando a conta possui Auto Boss liberado, use o mesmo comando nativo
-        // do painel. Só inicia a playlist em cidade/templo, nunca no meio de
-        // uma wave, para não sacrificar a reserva da sala de hunt.
+        // Auto Boss (Nativo para quem tem passe Store; Software para quem não tem)
         const bossState = (telemetry as any).autoBossState;
-        if (config.autoBoss && isCity && bossState && typeof bossState === 'object' &&
-            Number(bossState.until || 0) > Date.now() && Array.isArray(bossState.list) &&
-            bossState.list.length > 0 && bossState.running !== true && now - lastBossNativeAttempt >= 90000) {
-          lastBossNativeAttempt = now;
-          const bossSend = await sendAutoBoss(pageRef, 'start').catch(() => null);
-          if (bossSend?.sent && bossSend.sent > 0) {
-            console.log(`[${new Date().toLocaleTimeString()}] 👑 [AUTO-BOSS] playlist nativa iniciada (${bossState.list.length} chefes)`);
+        if (config.autoBoss) {
+          const isSafeForBoss = isCity || huntFinishedForSwitch();
+          if (bossState && typeof bossState === 'object' && Number(bossState.until || 0) > Date.now()) {
+            if (isCity && now - lastBossNativeAttempt >= 60000) {
+              lastBossNativeAttempt = now;
+              const targetList = config.autoBossPlaylist || [];
+              const currentList = Array.isArray(bossState?.list) ? bossState.list : [];
+              const needsSync = targetList.length > 0 && JSON.stringify(targetList) !== JSON.stringify(currentList);
+              if (needsSync) {
+                console.log(`[${new Date().toLocaleTimeString()}] 👑 [AUTO-BOSS] Sincronizando playlist personalizada (${targetList.length} chefes)...`);
+                await sendAutoBossList(pageRef, targetList, 0).catch(() => null);
+              }
+              if (Array.isArray(bossState.list) && bossState.list.length > 0 && bossState.running !== true) {
+                const bossSend = await sendAutoBoss(pageRef, 'start').catch(() => null);
+                if (bossSend?.sent && bossSend.sent > 0) {
+                  console.log(`[${new Date().toLocaleTimeString()}] 👑 [AUTO-BOSS] Playlist nativa iniciada (${bossState.list.length} chefes)`);
+                }
+              }
+              await checkAndBuyBossGear(pageRef, config, now).catch(() => null);
+            }
           } else {
-            console.log(`[${new Date().toLocaleTimeString()}] ⚠️ [AUTO-BOSS] servidor não aceitou o início da playlist`);
+            // Software Auto Boss: executa a playlist individualmente consumindo cargas diárias
+            await softwareBossRunner.step(
+              pageRef,
+              config,
+              telemetry as any,
+              authoritativeHuntId || sessionHuntId,
+              isSafeForBoss,
+              now
+            ).catch(() => null);
           }
         }
 
@@ -1807,9 +1949,20 @@ async function main() {
           }
         } else if (!isCity && wave && wave !== "—" && wave !== "Conectando...") {
           const matched = matchHunt(wave);
-          const hId = matched ? matched.id : "current_hunt";
-          const hName = matched ? matched.name : wave;
-          if ((profiler as any).activeHuntId !== hId) {
+           const hId = matched ? matched.id : "current_hunt";
+           const hName = matched ? matched.name : wave;
+           if (sessionHuntId !== hId) {
+             sessionHuntId = hId;
+             sessionHuntStartedAt = Date.now();
+             sessionKillsBase = telemetry.kills;
+             sessionWavesBase = telemetry.waves;
+             hudXpLast = null;
+             hudXpAccumulated = 0;
+             sessionStartLevel = telemetry.level > 0 ? telemetry.level : null;
+             protocolMapper.resetLiveWindow(hId);
+             console.log(`[${new Date().toLocaleTimeString()}] 🧭 [SESSÃO RESET] hunt=${hId}`);
+           }
+           if ((profiler as any).activeHuntId !== hId) {
             try { (profiler as any).startSession(hId, hName, telemetry.gold, telemetry.kills); } catch (_) {}
             console.log(`[${new Date().toLocaleTimeString()}] 🏹 [SESSÃO INICIADA] Monitorando telemetria em ...`);
           } else {
@@ -1848,7 +2001,15 @@ async function main() {
 
         // Decisão de Hunt manual. O profiler continua coletando telemetria,
         // mas nunca escolhe/retoma uma hunt sozinho.
-        const forceId = manualHuntId || "";
+        // Comando manual de treino (painel): ao atingir 100% a flag é liberada
+        // sozinha e o bot retoma a caça; enquanto ativa, suspende o FORCE_HUNT.
+        if (forceTreino && staminaAtFull(telemetry.stamina)) {
+          forceTreino = false;
+          try { unlinkSync(join(dataDir, 'manual_treino.json')); } catch (_) {}
+          console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] Stamina voltou a 100% (${telemetry.stamina}) — comando de treino liberado, retomando a caça.`);
+        }
+        const forceTreinoActive = forceTreino && !staminaAtFull(telemetry.stamina);
+        const forceId = (forceTreinoActive ? "" : manualHuntId) || (config.jevAutoHunt ? automaticHuntId : null) || "";
         const liveId = !isCity ? ((profiler as any).activeHuntId || null) : null;
         const gameReady = watchdog.isConnected() || matchHunt(wave) !== null || telemetry.kills > 0;
         // Em alguns frames do VPS o overlay do treino some antes de a
@@ -1858,6 +2019,8 @@ async function main() {
         let shouldEnter = false;
         let reason = forceId ? `FORCE_HUNT=${forceId}` : 'Escolha manual aguardando alvo';
         const stamTransition = evaluateStaminaTransition(telemetry.stamina, trainingActive, config.autoTreino);
+        const forceTreinoNeedsEntry = forceTreinoActive && !trainingActive;
+        const enterTreinoWanted = forceTreinoNeedsEntry || stamTransition.action === "enter_treino";
         if (!gameReady) shouldEnter = false;
         if ((trainingActive && stamTransition.action !== "resume_hunt") || !config.autoHunt) shouldEnter = false;
 
@@ -1947,12 +2110,12 @@ async function main() {
               for (const [obj, field] of pairs) if (has(obj, field)) return Number(obj[field]) || 0;
               return 0;
             };
-            const xp = firstPresent(
+            let xp = firstPresent(
               [preview, 'xpPerHour'], ...(scoreUsable ? [[score, 'xpPerHour'] as [any, string]] : []),
               ...(matrixReliable ? [[matrix, 'avg_xp_h'] as [any, string]] : []),
               ...(isCurrent && selected.sample_ready === true ? [[selected, 'xp_per_hour'] as [any, string]] : []),
             );
-            const loot = firstPresent(
+            let loot = firstPresent(
               [preview, 'lootGoldPerHour'], ...(scoreUsable ? [[score, 'lootGoldPerHour'] as [any, string]] : []),
               ...(matrixReliable ? [[matrix, 'avg_loot_h'] as [any, string]] : []),
               ...(isCurrent && selected.sample_ready === true ? [[selected, 'loot_per_hour'] as [any, string]] : []),
@@ -1960,18 +2123,32 @@ async function main() {
             const supply = firstPresent([preview, 'supplyGoldPerHour'], [score, 'supplyGoldPerHour']);
             const previewHasNet = has(preview, 'netGoldPerHour');
             const scoreHasNet = scoreUsable && has(score, 'netGoldPerHour');
-            const net = previewHasNet ? Number(preview.netGoldPerHour) || 0
+            let net = previewHasNet ? Number(preview.netGoldPerHour) || 0
               : (scoreHasNet ? Number(score.netGoldPerHour) || 0
                 : (isCurrent && selected.gold_sample_ready === true
                   ? Number(selected.gold_per_hour) || 0
                   : (matrixReliable && Number(matrix.avg_gold_h) > 0
                     ? Number(matrix.avg_gold_h) || 0
                     : (Number(benchmark.gold_per_hour) || 0))));
-            const source = preview ? 'server-preview'
+            let source = preview ? 'server-preview'
               : scoreUsable ? 'live-observed'
                 : (matrixReliable ? 'matrix-observed'
                   : (isCurrent && selected.gold_sample_ready === true ? 'live-observed'
                     : (Number(benchmark.gold_per_hour) > 0 ? 'historical-observed' : 'unknown')));
+            let sampleReady = Boolean(preview || scoreUsable || matrixReliable || (isCurrent && (selected.sample_ready === true || selected.gold_sample_ready === true)));
+
+            // Validação determinística via motor quando não há amostra ao vivo suficiente:
+            if ((!sampleReady || xp <= 0) && telemetry.level > 0) {
+              const sim = simulateHunt(hunt.id, telemetry.level, magicState, 1.0);
+              if (sim && (Number(sim.exp_h) > 0 || Number(sim.gold_h) > 0)) {
+                xp = Math.round(Number(sim.exp_h) || 0);
+                loot = Math.round(Number(sim.gold_h) || 0);
+                net = Math.round(Number(sim.gold_h) || 0);
+                source = 'engine-deterministic';
+                sampleReady = true;
+              }
+            }
+
             return {
               id: hunt.id,
               name: hunt.name,
@@ -1980,9 +2157,9 @@ async function main() {
               lootGoldPerHour: loot,
               supplyGoldPerHour: supply,
               netGoldPerHour: net,
-              risk: preview?.risk || '',
+              risk: preview?.risk || (source === 'engine-deterministic' ? 'low' : ''),
               wipeMs: Number(preview?.msToWipe || score.wipeMs || 0) || 0,
-              sampleReady: Boolean(preview || scoreUsable || matrixReliable || (isCurrent && (selected.sample_ready === true || selected.gold_sample_ready === true))),
+              sampleReady,
               source,
             };
           });
@@ -1993,10 +2170,19 @@ async function main() {
             unlockedHunts: unlockedList,
             recentDeaths: 0,
             candidates,
+            goal: config.huntGoal,
           }).then((rec) => {
             jevRecommendation = rec;
             if (rec?.recommendedHuntName) {
-              console.log(`[${new Date().toLocaleTimeString()}] 🧠 [JEV ADVISORY] Sugestão analítica: ${rec.recommendedHuntName} (confiança: ${Math.round(rec.confidence * 100)}%) | [Operador no controle manual]`);
+              console.log(`[${new Date().toLocaleTimeString()}] 🧠 [JEV ${config.jevAutoHunt ? 'AUTO-HUNT' : 'ADVISORY'}] Sugestão: ${rec.recommendedHuntName} (confiança: ${Math.round(rec.confidence * 100)}%, source=${rec.source})`);
+            }
+            if (config.jevAutoHunt && !manualHuntId && rec?.source === 'jev_api' && rec.confidence >= 0.75) {
+              const target = candidates.find((candidate: any) => candidate.id === rec.recommendedHuntId && candidate.sampleReady);
+              if (target && target.id !== automaticHuntId) {
+                automaticHuntId = target.id;
+                pendingHuntChange = { id: target.id, name: target.name, requestedAt: new Date().toISOString() };
+                console.log(`[${new Date().toLocaleTimeString()}] 🧠 [JEV AUTO-HUNT] alvo selecionado: ${target.name} (${Math.round(rec.confidence * 100)}%)`);
+              }
             }
           }).catch(() => null);
         }
@@ -2005,21 +2191,23 @@ async function main() {
         // O tRPC pode entregar a stamina baixa antes de o WebSocket/teleporte
         // estar pronto. Não tente abrir o menu nesse intervalo: o botão de
         // Treino Online ainda não existe e a ação expira inutilmente.
-        if (stamTransition.action === "enter_treino" && gameReady && (now - lastTreinoTime >= 8000)) {
+        if (enterTreinoWanted && gameReady && (now - lastTreinoTime >= 8000)) {
           lastTreinoTime = now;
           subsystems.auto_treino = {
-            status: "VERIFICANDO",
-            detail: `Stamina <= 15% (${telemetry.stamina}) — aguardando confirmação do Treino Online`,
+            status: forceTreinoActive ? "FORCANDO" : "VERIFICANDO",
+            detail: forceTreinoActive
+              ? `Comando manual do operador — indo para Treino Online (stamina ${telemetry.stamina})`
+              : `Stamina <= 15% (${telemetry.stamina}) — aguardando confirmação do Treino Online`,
           };
           const queuedHunt = actionQueue.enqueue({
             id: "treino",
             name: "treino",
             priority: 10,
-            timeoutMs: 12000,
+            timeoutMs: 90000,
             run: async () => {
               try {
-                console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] Stamina <= 15% (${telemetry.stamina}). Teleportando para Treino Online...`);
-                const tr = await safeEval<any>(pageRef, "treino", { want: "train" }, 10000);
+                console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] ${forceTreinoActive ? `Comando manual do operador (stamina ${telemetry.stamina})` : `Stamina <= 15% (${telemetry.stamina})`}. Teleportando para Treino Online...`);
+                const tr = await safeEval<any>(pageRef, "treino", { want: "train" }, 80000);
                 if (tr?.events?.length) {
                   for (const ev of tr.events) console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] ${ev}`);
                 }
@@ -2027,7 +2215,7 @@ async function main() {
                 if (trainingConfirmed) {
                   telemetry.inTreino = true;
                   telemetry.updateHunt("Treino Online", "dom");
-                  subsystems.auto_treino = { status: "TREINANDO", detail: "Stamina <= 15% — Treino online ativo" };
+                  subsystems.auto_treino = { status: "TREINANDO", detail: forceTreinoActive ? "Comando manual do operador — Treino online ativo (libera em 100%)" : "Stamina <= 15% — Treino online ativo" };
                 } else if (!tr) {
                   console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [TREINO] sem confirmação do Treino Online; a hunt permanecerá bloqueada e haverá nova tentativa`);
                 } else {
@@ -2039,7 +2227,7 @@ async function main() {
             }
           });
           if (!queuedHunt) console.log(`[${new Date().toLocaleTimeString()}] [HUNT] ação já estava na fila: ${forceId || 'resume'}`);
-        } else if (stamTransition.action === "resume_hunt" && trainingActive) {
+        } else if (!forceTreinoActive && stamTransition.action === "resume_hunt" && trainingActive) {
           lastTreinoTime = now;
           // Se a seleção manual ainda não foi persistida, retome a última
           // hunt realmente jogada pelo profiler, em vez de cair sempre em
@@ -2049,7 +2237,7 @@ async function main() {
             id: "resume-treino",
             name: "treino",
             priority: 10,
-            timeoutMs: 15000,
+            timeoutMs: 90000,
             run: async () => {
               try {
                 console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] Stamina recuperou (${telemetry.stamina}) — saindo do treino para ${resumeTargetId}...`);
@@ -2062,7 +2250,7 @@ async function main() {
                   }
                 }
                 if (!entered) {
-                  const tr = await safeEval<any>(pageRef, "treino", { want: "resume" }, 10000);
+                  const tr = await safeEval<any>(pageRef, "treino", { want: "resume" }, 80000);
                   if (tr?.events?.length) for (const ev of tr.events) console.log(`[${new Date().toLocaleTimeString()}] 🧘 [TREINO] ${ev}`);
                 }
                 telemetry.inTreino = false;
@@ -2076,10 +2264,11 @@ async function main() {
         }
 
         // Fila de Ação: Seleção / Retorno de Hunt (Prioridade 10).
-        if (pendingHuntChange) {
-          activateManualHunt(pendingHuntChange);
-          pendingHuntChange = null;
-          writeStatusFile();
+         if (pendingHuntChange && (!config.jevAutoHunt || manualHuntId || huntFinishedForSwitch())) {
+           const automatic = config.jevAutoHunt && !manualHuntId;
+           activateManualHunt(pendingHuntChange, !automatic);
+           pendingHuntChange = null;
+           writeStatusFile();
         }
         const huntActionPending = actionQueue.pendingByLane.hunt > 0;
         const waitingManualHunt = false;
@@ -2101,7 +2290,8 @@ async function main() {
             // uma nova tentativa pode disputar a mesma reserva de sala.
             timeoutMs: 30000,
             run: async () => {
-              if (queuedRevision !== huntSelectionRevision || queuedTargetId !== manualHuntId) {
+               const controlledTarget = manualHuntId || automaticHuntId;
+               if (queuedRevision !== huntSelectionRevision || queuedTargetId !== controlledTarget) {
                 console.log(`[${new Date().toLocaleTimeString()}] 🏹 [HUNT IGNORADA] alvo antigo ${queuedTargetId}`);
                 return;
               }
@@ -2125,7 +2315,7 @@ async function main() {
                 try { (profiler as any).rememberPlayed(went, wentName); } catch (_) {}
               }
               console.log(`[${new Date().toLocaleTimeString()}] 🏹 [RESULTADO TELEPORTE] ${JSON.stringify(huntRes)}`);
-              if ((huntRes?.success || huntRes?.alreadyThere) && queuedRevision === huntSelectionRevision && queuedTargetId === manualHuntId) {
+               if ((huntRes?.success || huntRes?.alreadyThere) && queuedRevision === huntSelectionRevision && queuedTargetId === (manualHuntId || automaticHuntId)) {
                 needsHuntEntry = false;
                 telemetry.inTreino = false;
                 subsystems.auto_treino = { status: "FUNCIONAL", detail: "Caçando normalmente" };
@@ -2298,6 +2488,8 @@ async function main() {
           lastSpellSyncHunt = normTarget;
         }
         const optimal = getOptimalSpellRotation(currentHuntTarget);
+        const jevElement = String((magicState as any).recommended_element || '').toLowerCase();
+        const jevRotation = String((magicState as any).rotation_style || '');
 
         // JEV: Decisão de elemento e estilo de rotação por IA System One
         if (config.jevEnabled && (now - lastJevBuildTs >= 30000) && telemetry.level > 0) {
@@ -2357,7 +2549,8 @@ async function main() {
             timeoutMs: 30000,
             run: async () => {
               try {
-                console.log(`[${new Date().toLocaleTimeString()}] 🔮 [SPELL SYNC] Sincronizando magias para elemento ${optimal.preferredElement.toUpperCase()} (Hunt: ${currentHuntTarget})`);
+                 const selectedElement = jevElement || optimal.preferredElement;
+                 console.log(`[${new Date().toLocaleTimeString()}] 🔮 [SPELL SYNC] Sincronizando magias para elemento ${selectedElement.toUpperCase()} (Hunt: ${currentHuntTarget})`);
                 const partySlots = [0, 1, 2];
                 let anyChanged = false;
                 for (const sid of partySlots) {
@@ -2366,7 +2559,8 @@ async function main() {
                     metaStrike: optimal.metaStrike,
                     weaknesses: optimal.weaknesses,
                     resistances: optimal.resistances,
-                    preferredElement: optimal.preferredElement,
+                     preferredElement: selectedElement,
+                     rotationStyle: jevRotation,
                     job: "sync-element",
                     slot: sid,
                   }, 15000);
@@ -2510,13 +2704,29 @@ async function main() {
             timeoutMs: 20000,
             run: async () => {
               try {
-                const combatElements = Object.entries(protocolMapper.snapshot().combat?.byElement || {})
+                 const combatElements = Object.entries(protocolMapper.snapshot().combat?.byElement || {})
                   .filter(([el, row]: any) => el !== 'unknown' && Number(row?.damage || 0) > 0)
                   .sort((a: any, b: any) => Number(b[1]?.damage || 0) - Number(a[1]?.damage || 0));
                 const observedElement = String((magicState as any).observed_element || combatElements[0]?.[0] || '').toLowerCase();
+                 const equipArgs = {
+                  preferredElement: jevElement || observedElement,
+                  preferredProtection: jevElement || observedElement,
+                  vocation: (telemetry as any).vocation || 'unknown',
+                  level: telemetry.level,
+                };
+                const inspectRes = await safeEval<any>(pageRef, "equip", { ...equipArgs, job: "inspect" }, 16000);
+                const equipmentDecision = await jev.decideEquipmentBatch({
+                  vocation: equipArgs.vocation,
+                  level: equipArgs.level,
+                  huntId: String(currentHuntTarget || ''),
+                  preferredElement: equipArgs.preferredElement,
+                  candidates: Array.isArray(inspectRes?.candidates) ? inspectRes.candidates : [],
+                });
+                console.log(`[${new Date().toLocaleTimeString()}] 🛡️ [JEV-EQUIP] ${equipmentDecision.reason} (conf=${equipmentDecision.confidence.toFixed(2)}, source=${equipmentDecision.source})`);
                 const eqRes = await safeEval<any>(pageRef, "equip", {
-                  preferredElement: observedElement,
-                  preferredProtection: observedElement,
+                  ...equipArgs,
+                  job: "equip",
+                  approvedHashes: equipmentDecision.selectedHashes,
                 }, 16000);
                 if (eqRes?.events?.length) {
                   for (const ev of eqRes.events) console.log(`[${new Date().toLocaleTimeString()}] 🛡️ [AUTO-EQUIP] ${ev}`);
@@ -2543,8 +2753,14 @@ async function main() {
           actionQueue.enqueue({
             id: "extras",
             name: "extras",
-            priority: 2,
-            timeoutMs: 50000,
+            // O leilão precisa ter preferência sobre rotinas cosméticas e de
+            // manutenção; caso contrário a fila do navegador pode deixar o
+            // saldo parado por vários ciclos.
+            priority: 8,
+            // Venda de gold pode exigir reautenticação, Turnstile e duas
+            // confirmações nativas; não pode ser encerrada pelo timeout curto
+            // usado pelas rotinas comuns de extras.
+            timeoutMs: config.auctionEnabled && config.auctionLive ? 190000 : 50000,
             run: async () => {
               try {
                 const extraLogs = await extrasScheduler.tick(
@@ -2554,7 +2770,7 @@ async function main() {
                   telemetry.inTreino,
                   jev,
                   telemetry.gold,
-                  telemetry.coins
+                  telemetry.marketCoins
                 );
                 for (const log of extraLogs) console.log(`[${new Date().toLocaleTimeString()}] ⚡ ${log}`);
               } finally {
@@ -2566,6 +2782,36 @@ async function main() {
       }
 
       // Sincronização de Telemetria e status.json (Ciclo rápido 1.5s)
+      if (config.jevEnabled && now - lastFormulaCalibrationTs >= 900_000 && telemetry.level > 0) {
+        lastFormulaCalibrationTs = now;
+        const samples = protocolMapper.formulaSamples(
+          telemetry.level,
+          Number(magicState.power || 0),
+          Number(magicState.aoe || 0),
+          Boolean(magicState.party_ready || magicState.slot1_present),
+        );
+        void jev.evaluateFormulaCandidates(samples).then((result) => {
+          const version = formulaVersions.record(result);
+          formulaCalibrationStatus = {
+            status: result.adopted ? 'candidato validado' : 'aguardando validação',
+            rows: result.rows,
+            model: result.best?.name || null,
+            validationError: result.best?.validationError ?? null,
+            confidence: result.confidence,
+            source: result.source,
+            version: version?.id || null,
+            independentRuns: version?.independentRuns || 0,
+            activeVersion: formulaVersions.active?.id || null,
+            detail: result.detail,
+            updatedAt: new Date().toISOString(),
+          };
+          console.log(`[JEV-FORMULA] ${result.detail} | rows=${result.rows} | active=${formulaVersions.active?.id || 'nenhuma'}`);
+        }).catch((error) => {
+          formulaCalibrationStatus = {
+            status: 'erro', detail: String(error?.message || error), updatedAt: new Date().toISOString(),
+          };
+        });
+      }
       if (now - lastStatusWrite >= 1500) {
         lastStatusWrite = now;
         writeStatusFile();

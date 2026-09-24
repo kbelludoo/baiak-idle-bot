@@ -714,6 +714,7 @@ export class TelemetryStore {
     elapsed_seconds?: number | null;
     force_hunt?: boolean | null;
     force_hunt_id?: string | null;
+    force_treino?: boolean | null;
     hunt_control?: 'manual' | string | null;
     pending_hunt_id?: string | null;
     pending_hunt_name?: string | null;
@@ -770,6 +771,7 @@ export class TelemetryStore {
       session_xp_str: extra.session_xp_str ?? formatXpStr(sessionXp) ?? '0 XP',
       force_hunt: extra.force_hunt ?? false,
       force_hunt_id: extra.force_hunt_id ?? null,
+      force_treino: extra.force_treino ?? false,
       hunt_control: extra.hunt_control ?? 'manual',
       pending_hunt_id: extra.pending_hunt_id ?? null,
       pending_hunt_name: extra.pending_hunt_name ?? null,

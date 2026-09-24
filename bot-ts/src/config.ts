@@ -164,13 +164,24 @@ export function parseConfig(): BotConfig {
     auctionBudget: parseInt(getVal('--auction-budget', env.AUCTION_BUDGET || '100'), 10),
     auctionMinMarginPct: parseInt(getVal('--auction-margin', env.AUCTION_MARGIN || '20'), 10),
     auctionMaxItems: parseInt(getVal('--auction-max-items', env.AUCTION_MAX_ITEMS || '2'), 10),
-    auctionSniperMaxMinutes: clamp(parseInt(getVal('--auction-sniper-mins', env.AUCTION_SNIPER_MAX_MINS || '5'), 10) || 5, 1, 360),
+    auctionSniperMaxMinutes: clamp(parseInt(getVal('--auction-sniper-mins', env.AUCTION_SNIPER_MAX_MINS || '3'), 10) || 3, 1, 360),
     auctionSellGoldAmount: parseInt(getVal('--auction-sell-gold', env.AUCTION_SELL_GOLD || '800000000'), 10) || 800_000_000,
     auctionSellEnabled: has('--auction-sell') || envFlag('AUCTION_SELL_ENABLED', true),
+    auctionSellPassword: getVal('--auction-sell-password', env.AUCTION_SELL_PASSWORD || ''),
     jevEnabled: has('--no-jev') ? false : envFlag('JEV_ENABLED', true),
     jevApiKey: getVal('--jev-api-key', env.EXPERIENTIAL_API_KEY || env.TYPESAFE_API_KEY || env.JEV_API_KEY || ''),
-    jevEndpoint: getVal('--jev-endpoint', env.JEV_ENDPOINT || 'https://api.experientiallabs.ai/v1/systemone'),
+    jevEndpoint: getVal('--jev-endpoint', env.JEV_ENDPOINT || 'https://api.typesafe.ai/v1/systemone'),
     jevTimeoutMs: envInt('JEV_TIMEOUT_MS', 3000),
+    jevAutoHunt: envFlag('JEV_AUTO_HUNT', false),
+    huntGoal: (['level', 'gold', 'balanced'].includes(getVal('--goal', envStr('HUNT_GOAL', envStr('JEV_GOAL', 'level'))).toLowerCase())
+      ? getVal('--goal', envStr('HUNT_GOAL', envStr('JEV_GOAL', 'level'))).toLowerCase()
+      : 'level') as 'level' | 'gold' | 'balanced',
+    autoBossPlaylist: envStr('AUTO_BOSS_PLAYLIST', '')
+      ? envStr('AUTO_BOSS_PLAYLIST', '').split(',').map(s => s.trim()).filter(Boolean)
+      : ['black_vixen', 'sharpclaw', 'darkfang', 'bloodback', 'shadowpelt', 'utua_stone_sting', 'ahau', 'the_blazing_rose', 'the_lily_of_night', 'the_diamond_blossom', 'irgix_the_flimsy', 'amenef_the_burning'],
+    autoBuyBossItems: envStr('AUTO_BUY_BOSS_ITEMS', '')
+      ? envStr('AUTO_BUY_BOSS_ITEMS', '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+      : ['eldritch quiver', 'fabulous legs', 'death oyoroi', 'dark whispers', 'ghost chestplate', 'soulful legs', 'gnome helmet', 'toga mortis'],
   };
 }
 
@@ -187,6 +198,7 @@ export function describeFlags(c: BotConfig): string {
     `headless=${c.headless ? 'ON' : 'OFF'}`,
     `screenshot=${c.screenshot ? 'ON' : 'OFF'}`,
     `jev=${c.jevEnabled ? (c.jevApiKey ? 'ON(API)' : 'ON(local-fallback)') : 'OFF'}`,
+    `jev_auto_hunt=${c.jevAutoHunt ? 'ON' : 'OFF'}`,
     `auction=${c.auctionEnabled ? (c.auctionLive ? 'LIVE' : 'DRY') : 'OFF'}(budget=${c.auctionBudget}c,sell=${(c.auctionSellGoldAmount / 1_000_000).toFixed(0)}kk)`,
     c.stream ? `stream=${c.streamWidth}x${c.streamHeight}@${c.streamFps}q${c.streamQuality}` : 'stream=OFF',
   ];

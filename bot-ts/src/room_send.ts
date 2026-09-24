@@ -94,6 +94,7 @@ export const sendLoop = (page: Page | null, on: boolean) => roomSend(page, 'loop
 export const sendAutosellFull = (page: Page | null, on: boolean) => roomSend(page, 'autosellfull', { on });
 export const sendAutosellPct = (page: Page | null, pct: number) => roomSend(page, 'autosellpct', { pct });
 export const sendSellReward = (page: Page | null) => roomSend(page, 'sellreward', {});
+export const sendRewardCollectAll = (page: Page | null) => roomSend(page, 'reward', { action: 'collectall' });
 export const sendSellAll = (page: Page | null, prot: any) => roomSend(page, 'sellall', { protected: prot });
 export const sendBoss = (page: Page | null, bossId: string, fromCity: boolean) =>
   roomSend(page, 'boss', { bossId, fromCity });
@@ -113,3 +114,9 @@ export const sendTree = (page: Page | null, slot: number, action: string, nodeId
 export const sendPromote = (page: Page | null, slot: number) => roomSend(page, 'promote', { slot });
 export const sendUsePotion = (page: Page | null, name: string, from: string, count?: number) =>
   roomSend(page, 'usepotion', { name, from, count });
+export const sendCodexDeliver = (page: Page | null, id: string) =>
+  roomSend(page, 'codexdeliver', { id });
+export const sendCodexAuto = (page: Page | null, cfg: any) =>
+  roomSend(page, 'codexauto', cfg);
+export const sendCodexUnlock = (page: Page | null, id: string) =>
+  roomSend(page, 'codexunlock', { id });

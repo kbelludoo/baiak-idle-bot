@@ -9,6 +9,7 @@ export interface ServerContext {
   getCdp: () => CDPSession | null;
   getLatestFrame: () => Buffer | null;
   onSetHunt?: (huntId: string, auto: boolean) => Promise<{ ok: boolean; message?: string; error?: string }>;
+  onSetTreino?: (enabled: boolean) => Promise<{ ok: boolean; message?: string; error?: string }>;
   dataDir?: string;
 }
 
@@ -156,6 +157,26 @@ export function startServer(port: number, host: string, ctx: ServerContext) {
           }
 
           const res = await ctx.onSetHunt(huntId, auto);
+          return Response.json(res, { status: res.ok ? 200 : 400, headers: corsHeaders });
+        } catch (err: any) {
+          return Response.json({ ok: false, error: err?.message || String(err) }, { status: 500, headers: corsHeaders });
+        }
+      }
+
+      // API: Treino (Ativa/desativa Treino Online forçado via Web Dashboard)
+      if (path === '/api/treino' || path === '/api/treino/') {
+        if (req.method !== 'POST') {
+          return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
+        }
+        if (!isAuthorizedControl()) {
+          return Response.json({ ok: false, error: 'Forbidden: /api/treino requires authorization' }, { status: 403, headers: corsHeaders });
+        }
+        try {
+          const body = await req.json() as { enabled?: boolean };
+          if (!ctx.onSetTreino) {
+            return Response.json({ ok: false, error: 'onSetTreino handler not registered' }, { status: 501, headers: corsHeaders });
+          }
+          const res = await ctx.onSetTreino(body?.enabled !== false);
           return Response.json(res, { status: res.ok ? 200 : 400, headers: corsHeaders });
         } catch (err: any) {
           return Response.json({ ok: false, error: err?.message || String(err) }, { status: 500, headers: corsHeaders });

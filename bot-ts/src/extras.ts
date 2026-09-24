@@ -207,6 +207,11 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
     hasOwnActiveGold: false,
     listings: 0,
   };
+  // Cache do token Turnstile resolvido pelo widget persistente na página
+  private cachedTurnstileToken = '';
+  private cachedTurnstileTs = 0;
+  private turnstileWidgetReady = false;
+  private readonly TURNSTILE_TTL_MS = 4 * 60 * 1000; // tokens Cloudflare duram ~5min
 
   private unwrapTrpc(raw: any): any {
     const item = Array.isArray(raw) ? raw[0] : raw;
@@ -252,10 +257,14 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
     const logs: string[] = [];
     let busy = false;
 
-    // Leilão gerenciado via JEV (sem usar outra IA):
-    // 1. Escaneia dados do mercado via tRPC rápido (nativo Bun com fallback seguro)
+    // Não inicialize um widget invisível em segundo plano: nesta conta o
+    // servidor só aceita a prova emitida pelo widget visível do fluxo de
+    // publicação. O page_extra renderiza esse widget sob demanda e aguarda o
+    // token antes de repetir a mutação.
+
+    // Leilão gerenciado via JEV (sem usar outra IA):\n    // 1. Escaneia dados do mercado via tRPC rápido (nativo Bun com fallback seguro)
     // 2. Consulta o motor JEV para venda (decideGoldSellListing) e/ou compra (decideGoldAuction)
-    // 3. Executa a ação na página via auction_execute
+    // 3. Executa a ação diretamente via fetch Node.js
     if (config.auctionEnabled && this.due('auction', now, 60)) {
       this.lastTimes['auction'] = now;
       try {
@@ -283,7 +292,9 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
             }).then(r => r.json()).catch(() => null),
             fetch("https://baiakidle.com/api/trpc/auction.myBids?batch=1&input=%7B%7D", {
               headers: authHeaders,
-              signal: AbortSignal.timeout(6000),
+              // Essa consulta pode responder um pouco depois do browse; sem
+              // a folga, o bot perde as reservas e repete o mesmo lance.
+              signal: AbortSignal.timeout(12000),
             }).then(r => r.json()).catch(() => null),
           ]);
 
@@ -307,7 +318,10 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
               (r.status === 'active' || r.status === 'open' || r.status === 'pending') &&
               (r.myBidStatus === undefined || r.myBidStatus === 'active' || r.myBidStatus === 'leading')
             );
-             const activeBids = activeBidRows.length;
+            const activeBids = activeBidRows.length;
+             const activeBidListingIds = new Set(activeBidRows.map((r: any) =>
+               String(r.listingId ?? r.auctionId ?? r.id ?? '')
+             ).filter(Boolean));
              const reservedByCurrency = activeBidRows.reduce((acc: { market: number; normal: number }, r: any) => {
                const currency = r.myCurrency === 'normal' ? 'normal' : 'market';
                const amount = Number(r.maxAmount ?? r.myMaxAmount ?? r.currentPrice ?? r.bidAmount ?? r.amount ?? r.priceCoins ?? 0);
@@ -325,7 +339,7 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
           if (browseRows.length > 0) {
             const nowTs = Date.now();
             const listings = browseRows
-              .filter((r: any) => r.type === "gold" && Number(r.goldAmount) > 0 && Number(r.currentPrice) > 0 && !r.isOwn && !r.isLeading)
+              .filter((r: any) => r.type === "gold" && Number(r.goldAmount) > 0 && Number(r.currentPrice) > 0 && !r.isOwn && !r.isLeading && !activeBidListingIds.has(String(r.id)))
               .map((r: any) => ({
                 id: String(r.id),
                 goldAmount: Number(r.goldAmount),
@@ -403,15 +417,23 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
              this.lastAuctionStatus = {
                checkedAt: new Date().toISOString(),
                currentGold,
-                coinsAvailable: freeCoins,
+               coinsAvailable: freeCoins,
                reservedCoins,
                activeBids,
                walletCoins,
                marketCoins,
                hasOwnActiveGold,
                listings: listings.length,
+               referenceRate,
+               historyMedianRate,
+               marketMinRate,
+               marketMaxRate,
+               goldToSell,
+               sellStatus: hasOwnActiveGold
+                 ? 'Anúncio de Gold ativo no mercado'
+                 : (currentGold >= 105000000 ? 'Aguardando próxima janela de venda' : 'Acumulando saldo mín (105kk)'),
              };
-          }
+           }
          } catch (_) {}
 
          // Um mercado sem anúncios também é uma resposta válida. Preserve o
@@ -449,8 +471,18 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
               coinsAvailable: Number(scanRes.coinsAvailable) || Number(coinsAvailable) || 0,
               reservedCoins: Number(scanRes.reservedCoins) || 0,
               activeBids: Number(scanRes.activeBids) || 0,
+              walletCoins: Number(scanRes.walletCoins) || 0,
+              marketCoins: Number(scanRes.marketCoins) || 0,
               hasOwnActiveGold: Boolean(scanRes.hasOwnActiveGold),
               listings: Array.isArray(scanRes.listings) ? scanRes.listings.length : 0,
+              referenceRate: Number(scanRes.referenceRate) || 0,
+              historyMedianRate: Number(scanRes.historyMedianRate) || 0,
+              marketMinRate: Number(scanRes.marketMinRate) || 0,
+              marketMaxRate: Number(scanRes.marketMaxRate) || 0,
+              goldToSell: Number(scanRes.goldToSell) || 0,
+              sellStatus: scanRes.hasOwnActiveGold
+                ? 'Anúncio de Gold ativo no mercado'
+                : ((scanRes.currentGold || 0) >= 105000000 ? 'Aguardando próxima janela de venda' : 'Acumulando saldo mín (105kk)'),
             };
           }
            logs.push(`[AUCTION] Mercado: saldo=${Math.floor((scanRes.currentGold || 0) / 1e6)}kk | alvo=${Math.floor((scanRes.goldToSell || 0) / 1e6)}kk | faixa=${Math.round((scanRes.marketMinRate || 0) / 1e6)}-${Math.round((scanRes.marketMaxRate || 0) / 1e6)}kk/c | mediana=${Math.round((scanRes.referenceRate || 0) / 1e6)}kk/c | coins=${scanRes.coinsAvailable || 0}${scanRes.reservedCoins ? ` (reservados=${scanRes.reservedCoins})` : ''} | anuncio_ativo=${scanRes.hasOwnActiveGold}`);
@@ -492,9 +524,11 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
           // Um lance ativo reserva apenas a sua própria quantia. Continue
           // arbitrando com o saldo livre restante, sem bloquear o mercado
           // inteiro enquanto um lance aguarda liquidação.
-          // Publicação tem prioridade sobre compra: não deixe uma chamada JEV
-          // de sniper atrasar o anúncio do gold disponível.
-          if (!sellDecision?.shouldList && config.auctionLive && scanRes.listings && scanRes.listings.length > 0 && scanRes.coinsAvailable > 0) {
+          // Venda e compra usam saldos independentes: uma decisão de venda
+          // não pode bloquear um lote de compra comprovadamente lucrativo.
+          // Assim o gold pode ser anunciado enquanto coins livres aproveitam
+          // arbitragem, sem deixar uma das duas reservas parada.
+          if (config.auctionLive && scanRes.listings && scanRes.listings.length > 0 && scanRes.coinsAvailable > 0) {
             if (jev && config.jevEnabled) {
               buyDecision = await jev.decideGoldAuction({
                 coinsAvailable: scanRes.coinsAvailable,
@@ -507,8 +541,8 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
               });
               const bidAmount = Number(buyDecision?.targetMaxPrice || 0);
               if (bidAmount > 0) {
-                if (bidAmount <= Number(scanRes.freeMarketCoins || 0)) buyDecision.currency = 'market';
-                else if (bidAmount <= Number(scanRes.freeNormalCoins || 0)) buyDecision.currency = 'normal';
+                if (bidAmount <= Number(scanRes.freeMarketCoins ?? scanRes.coinsAvailable ?? 0)) buyDecision.currency = 'market';
+                else if (bidAmount <= Number(scanRes.freeNormalCoins ?? 0)) buyDecision.currency = 'normal';
                 else buyDecision.selectedListingId = null;
               }
               if (buyDecision?.selectedListingId) {
@@ -529,10 +563,21 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
           // O renderer do Chromium fica ocupado com HUD/potion e bloqueava o leilão.
           // A criação de anúncio e o lance usam a mesma API tRPC do scan acima.
           const execSellDecision = (sellDecision?.shouldList && sellDecision?.targetPriceCoins > 0) ? sellDecision : null;
-          const apiBuyDecision = buyDecision?.source === 'jev_api' && buyDecision.selectedListingId;
-          const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+          // O fallback local também é seguro quando o cálculo comprovou
+          // spread positivo; bloquear esse caso deixa coins paradas quando a
+          // API JEV está indisponível.
+          const apiBuyDecision = Boolean(
+            buyDecision?.selectedListingId &&
+            (buyDecision?.source === 'jev_api' ||
+              (buyDecision?.source === 'fallback' && buyDecision?.isProfitable === true))
+          );
+          const authHeaders: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36',
+          };
           if (config.token) authHeaders['authorization'] = `Bearer ${config.token}`;
 
+          let deferredBrowserSell: any = null;
           if (execSellDecision) {
             const sellMsg = `${Math.floor(scanRes.goldToSell / 1e6)}kk por ${execSellDecision.targetPriceCoins} coins`;
             logs.push(`[AUCTION] Iniciando publicação automática: ${sellMsg}`);
@@ -543,14 +588,24 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
                 const createBody = JSON.stringify({ '0': {
                   goldAmount: Math.floor(scanRes.goldToSell),
                   startPrice: Math.max(25, Math.floor(execSellDecision.targetPriceCoins)),
-                  durationHours: 12,
-                  password: '',
+                  // O bundle nativo envia a senha da conta nesta mesma
+                  // mutação. Sem ela o servidor responde com a mensagem
+                  // genérica de robô antes de abrir a confirmação visual.
+                  durationHours: 6,
+                  password: config.auctionSellPassword || '',
                   twofaCode: '',
                   smsCode: '',
                   pushProof: '',
                   confirmText: 'CONFIRMAR',
-                  captchaToken: '',
+                  captchaToken: this.cachedTurnstileToken || '',
                 }});
+                const tokenAge = Math.round((now - this.cachedTurnstileTs) / 1000);
+                if (this.cachedTurnstileToken) {
+                  logs.push(`[AUCTION] Usando token Turnstile (${tokenAge}s atrás)`);
+                } else {
+                  logs.push('[AUCTION] AVISO: sem token Turnstile cacheado — aguardando widget inicializar');
+                }
+
                 const createRes = await fetch('https://baiakidle.com/api/trpc/auction.createGold?batch=1', {
                   method: 'POST',
                   headers: authHeaders,
@@ -565,6 +620,25 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
                   logs.push(`[AUCTION] ANÚNCIO DE VENDA CRIADO (JEV): ${sellMsg}`);
                 } else {
                   logs.push(`[AUCTION] VENDA RECUSADA [${errMsg || 'falha'}]: ${sellMsg}`);
+                  // A API direta não consegue concluir o desafio Turnstile
+                  // quando o token não foi emitido ou já expirou. Nesse caso,
+                  // reutiliza o fluxo nativo da página, que abre o widget,
+                  // preenche a confirmação e tenta novamente com a sessão do
+                  // navegador. Não repete o anúncio para erros de saldo,
+                  // preço ou autenticação.
+                  const needsBrowserChallenge = /rob[oô]|robot|captcha|turnstile|challenge|bot/i.test(String(errMsg || ''));
+                  if (needsBrowserChallenge) {
+                    logs.push('[AUCTION] Desafio anti-bot detectado — confirmação nativa ficará após o lance');
+                    deferredBrowserSell = {
+                      job: 'auction_execute',
+                      sellDecision: execSellDecision,
+                      buyDecision: null,
+                      goldToSell: scanRes.goldToSell,
+                      live: true,
+                      token: config.token,
+                      accountPassword: config.auctionSellPassword,
+                    };
+                  }
                 }
               } catch (e: any) {
                 logs.push(`[AUCTION] ERRO VENDA (${String(e?.message || e)})`);
@@ -601,6 +675,17 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
             }
           } else if (buyDecision?.selectedListingId && !apiBuyDecision) {
             logs.push('[AUCTION] Ação bloqueada: JEV API não confirmou a compra; nenhum lance foi enviado.');
+          }
+
+          // Só tenta o formulário nativo depois do lance. Assim, um widget
+          // anti-robô lento não faz uma oportunidade rentável expirar.
+          if (deferredBrowserSell) {
+            const browserRes = await safeEval<any>(page, 'extra', deferredBrowserSell, 60000);
+            if (browserRes?.events && Array.isArray(browserRes.events)) {
+              logs.push(...browserRes.events.map((event: any) => `[AUCTION] ${String(event)}`));
+            } else {
+              logs.push(`[AUCTION] Fallback do navegador não concluiu a confirmação (${browserRes?.error || 'sem resposta do renderer'})`);
+            }
           }
           busy = true;
         }

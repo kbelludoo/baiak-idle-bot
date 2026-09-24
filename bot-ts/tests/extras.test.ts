@@ -90,6 +90,8 @@ describe('Extras Scheduler & All Subsystems', () => {
   });
 
   it('executa ciclo de leilão chamando JEV para decisão de venda e compra', async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify([{ result: { data: { json: { success: true } } } }]))) as any;
     const scheduler = new DefaultExtrasScheduler();
     let jevSellCalled = false;
     let jevBuyCalled = false;
@@ -100,7 +102,7 @@ describe('Extras Scheduler & All Subsystems', () => {
         return {
           shouldList: true,
           targetPriceCoins: 160,
-          reason: 'Lucro otimizado JEV',
+          reason: 'Venda aprovada enquanto há lote de compra lucrativo',
           source: 'jev_api',
         };
       },
@@ -108,6 +110,7 @@ describe('Extras Scheduler & All Subsystems', () => {
         jevBuyCalled = true;
         return {
           selectedListingId: '999',
+          targetMaxPrice: 40,
           isProfitable: true,
           reason: 'Sniper oportuno JEV',
           source: 'jev_api',
@@ -170,6 +173,7 @@ describe('Extras Scheduler & All Subsystems', () => {
         listingRates: [5_000_000],
         referenceRate: 5_000_000,
         coinsAvailable: 50,
+        freeMarketCoins: 50,
         hasOwnActiveGold: false,
         currentGold: 840_000_000,
         feeGold: 5_000_000,
@@ -179,9 +183,9 @@ describe('Extras Scheduler & All Subsystems', () => {
     };
 
     const logs = await scheduler.tick(mockPage, dummyConfig, Date.now(), false, mockJev, 840_000_000, 50);
+    globalThis.fetch = origFetch;
     expect(jevSellCalled).toBe(true);
     expect(jevBuyCalled).toBe(true);
-    expect(logs.some(l => l.includes('Decisão venda: shouldList=true'))).toBe(true);
+    expect(logs.some(l => l.includes('Decisão sniper: arrematar lote #999'))).toBe(true);
   });
 });
-

@@ -57,6 +57,11 @@ export async function safeEval<T = any>(
         ]);
       } catch (_) {}
     }
+    // Se o evaluate anterior ainda está pendurado (timeout externo cortou uma
+    // execução que o Chromium segue rodando), NÃO inicie outro evaluate agora:
+    // ele formaria uma fila de promises dentro do renderer e deixaria tudo mais
+    // lento. Retorna null e deixa a ação seja reenfileirada no próximo ciclo.
+    if (ACTIVE_EVAL_PAGES.has(pageObject)) return null;
   }
 
   const js = loadScript(name);
@@ -101,7 +106,12 @@ export async function safeEval<T = any>(
     ]);
     return result;
   } catch (err: any) {
-    ACTIVE_EVAL_PAGES.delete(pageObject);
+    // Não liberar o lock aqui: um timeout externo não cancela o
+    // Runtime.evaluate do Chromium, e o evaluate subjacente ainda pode estar
+    // em execução. Se o lock for removido agora, a próxima ação inicia outro
+    // evaluate concorrente e o renderer entra na cascata de timeouts. O
+    // `.finally` do trackedEvaluate remove o lock quando ele realmente
+    // terminar (resultado real ou timeout interno da página).
     if (!err?.message?.includes('Execution context was destroyed')) {
       console.warn(`[SAFE_EVAL AVISO] [${name}] ${err?.message || err}`);
     }

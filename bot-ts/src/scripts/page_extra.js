@@ -1,6 +1,15 @@
 async ({ job, ...auctionCfg }) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const vis = (el) => !!(el && el.offsetParent !== null);
+  // Modais do Market usam position:fixed; nesses elementos offsetParent pode
+  // ser null mesmo quando estão visíveis. O bundle nativo considera também
+  // getClientRects(), então usamos a mesma regra aqui.
+  const vis = (el) => {
+    if (!el || el.disabled) return false;
+    if (el.classList?.contains("hidden")) return false;
+    const style = getComputedStyle(el);
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      el.getClientRects().length > 0;
+  };
   const events = [];
   const txt = (el) => (el?.textContent || "").trim();
 
@@ -164,7 +173,7 @@ async ({ job, ...auctionCfg }) => {
     // Tenta primeiro sem Turnstile (VPS headless não resolve captcha interativo).
     // Se o servidor rejeitar por captcha, tenta resolver o Turnstile com até 20s.
     const tryCreate = async (captchaToken) => trpcPostAuction("auction.createGold", {
-      password: "",
+      password: auctionCfg.accountPassword || "",
       twofaCode: "",
       smsCode: "",
       pushProof: "",
@@ -189,22 +198,13 @@ async ({ job, ...auctionCfg }) => {
   };
 
   const nativeCreateGoldListing = async (goldAmount, startPrice, durationHours) => {
-    // A rota nativa é mais estável que os rótulos do modal, que mudam entre
-    // builds. Tenta primeiro com captcha; o fluxo visual permanece fallback.
-    const directRes = await createGoldListing({
-      goldAmount: Math.floor(goldAmount),
-      startPrice: Math.max(25, Math.floor(startPrice)),
-      durationHours: Math.floor(durationHours),
-    }, 'direct');
-    if (directRes?.data) return { ok: true, method: 'trpc', data: directRes.data };
-    // Log do motivo da falha antes de tentar fallback via DOM
-    console.warn(`[BOT AUCTION] tRPC direto falhou [HTTP ${directRes?.status || '?'}]: ${directRes?.error || 'sem resposta'} — tentando fallback DOM`);
+    // Começa pelo fluxo oficial da página. A mutação direta pode ficar
+    // pendente aguardando a prova de presença e impedir que o formulário
+    // nativo seja aberto; o cliente do jogo já sabe pedir senha, confirmação
+    // textual e Turnstile na ordem correta.
+    console.log("[BOT AUCTION] Abrindo confirmação pelo formulário nativo");
 
-    const modal = document.getElementById("auction-modal") || document.getElementById("leilao-modal");
-    const visible = (el) => !!(el && !el.disabled && (
-      (el.offsetParent !== null) ||
-      (getComputedStyle(el).position === "fixed" && el.getClientRects().length > 0)
-    ));
+    const visible = vis;
     const text = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
     const clickText = (root, re) => {
       const el = Array.from(root.querySelectorAll("button, [role=button], label"))
@@ -229,10 +229,29 @@ async ({ job, ...auctionCfg }) => {
       return null;
     };
 
-    if (!modal) return { ok: false, error: "modal do leilão não encontrado" };
-    const auctionTab = document.getElementById("tab-auction") || document.getElementById("tab-leilao");
-    if (auctionTab && !visible(modal)) auctionTab.click();
-    await waitFor(() => visible(modal), 10000);
+    // O motor cria o modal somente depois do clique na aba. A rotina antiga
+    // procurava o modal primeiro e abortava quando o Market ainda não tinha
+    // sido montado na página do jogo.
+    let modal = document.getElementById("auction-modal") || document.getElementById("leilao-modal");
+    let auctionTab = document.getElementById("tab-auction") || document.getElementById("tab-leilao") ||
+      document.querySelector('[data-tab="auction"], [data-tab="leilao"]');
+    if (!auctionTab) {
+      auctionTab = Array.from(document.querySelectorAll("button, [role=button], .tab-item, .tab-btn"))
+        .find((b) => visible(b) && /leil[aã]o|auction|market/i.test(text(b))) || null;
+    }
+    if (!modal || !visible(modal)) {
+      if (!auctionTab) {
+        const visibleTabs = Array.from(document.querySelectorAll("button, [role=button], .tab-item, .tab-btn"))
+          .filter(visible).map(text).filter(Boolean).slice(0, 25).join(" | ");
+        return { ok: false, error: `aba do leilão não encontrada; controles visíveis: ${visibleTabs || "nenhum"}` };
+      }
+      auctionTab.click();
+    }
+    modal = await waitFor(() => {
+      const candidate = document.getElementById("auction-modal") || document.getElementById("leilao-modal");
+      return visible(candidate) ? candidate : null;
+    }, 15000);
+    if (!modal) return { ok: false, error: "modal do leilão não abriu após clicar na aba oficial" };
 
     const naviCreate = await waitFor(() =>
       Array.from(modal.querySelectorAll("button, [role=button]")).find((b) => visible(b) &&
@@ -243,14 +262,47 @@ async ({ job, ...auctionCfg }) => {
     if (!naviCreate.classList.contains("on")) naviCreate.click();
     await sleep(400);
 
-    const goldTab = await waitFor(() =>
-      Array.from(modal.querySelectorAll("button, [role=button], label")).find((b) => visible(b) && /vender\s*(?:gold|ouro)|gold\s*(?:listing|sale)|ouro/i.test(text(b)))
-    );
-    if (!goldTab) return { ok: false, error: "aba Vender gold não encontrada" };
+    const goldTab = await waitFor(() => {
+      const roots = [modal, document].filter(Boolean);
+      for (const root of roots) {
+        const found = Array.from(root.querySelectorAll("button, [role=button], label"))
+          .find((b) => visible(b) && /vender\s*(?:gold|ouro)|gold\s*(?:listing|sale)|ouro/i.test(text(b)));
+        if (found) return found;
+      }
+      return null;
+    }, 15000);
+    if (!goldTab) {
+      const visibleButtons = Array.from(document.querySelectorAll("button, [role=button]"))
+        .filter(visible).map((b) => text(b)).filter(Boolean).slice(0, 20).join(" | ");
+      // Algumas sessões carregam o Market, mas falham ao renderizar a
+      // subaba de gold após a consulta de sellerStatus. Ainda assim podemos
+      // usar o fluxo oficial: widget Turnstile visível + mutação tRPC com a
+      // senha e a confirmação exigidas pelo servidor.
+      const token = await getTurnstileToken(45000);
+      if (token && auctionCfg.accountPassword) {
+        const fallbackRes = await trpcPostAuction("auction.createGold", {
+          goldAmount: Math.floor(goldAmount),
+          startPrice: Math.max(25, Math.floor(startPrice)),
+          durationHours: Math.floor(durationHours),
+          password: auctionCfg.accountPassword,
+          twofaCode: "",
+          smsCode: "",
+          pushProof: "",
+          confirmText: "CONFIRMAR",
+          captchaToken: token,
+        });
+        if (fallbackRes?.data) return { ok: true, method: "visible-turnstile-fallback", data: fallbackRes.data };
+        return { ok: false, error: `mutação oficial após Turnstile recusada: ${fallbackRes?.error || "falha"}` };
+      }
+      return { ok: false, error: `aba Vender gold não encontrada; Turnstile não confirmou; botões visíveis: ${visibleButtons || "nenhum"}` };
+    }
     if (!goldTab.classList.contains("on")) goldTab.click();
 
-    const fields = await waitFor(() => Array.from(modal.querySelectorAll("input, select, textarea"))
-      .filter((el) => visible(el)));
+    const fields = await waitFor(() => {
+      const visibleFields = Array.from(modal.querySelectorAll("input, select, textarea"))
+        .filter((el) => visible(el));
+      return visibleFields.length >= 2 ? visibleFields : null;
+    }, 15000);
     if (!fields || fields.length < 2) return { ok: false, error: `campos do anúncio não encontrados (${text(modal).slice(0, 180)})` };
 
     const numberInputs = fields.filter((el) => el.tagName === "INPUT" && (el.type === "number" || el.type === "text"));
@@ -667,6 +719,50 @@ async ({ job, ...auctionCfg }) => {
       if (sold >= 10) break;
     }
     return { ok: true, action: "lootfilter_sold_" + sold, sold, kept, skipped, events };
+  }
+
+  if (job === "turnstile_init") {
+    // Cria widget Turnstile persistente (faz apenas uma vez), aguarda token inicial.
+    // O token é renovado automaticamente pelo script Cloudflare — sem nova chamada.
+    if (!window.__bot_ts_widget_created) {
+      window.__bot_ts_widget_created = true;
+      window.__bot_ts_token = "";
+      const tryRender = (ts) => {
+        const c = document.createElement("div");
+        c.style.cssText = "position:fixed;bottom:0;right:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:1;overflow:hidden;";
+        document.body.appendChild(c);
+        try {
+          ts.render(c, {
+            sitekey: "0x4AAAAAAD1KLtRAtKEsbKdT",
+            theme: "dark",
+            language: "pt-br",
+            callback: (tok) => { window.__bot_ts_token = tok; console.log("[BOT TS] Token Turnstile renovado"); },
+            "expired-callback": () => { window.__bot_ts_token = ""; },
+            "error-callback": (code) => { console.warn("[BOT TS] Turnstile erro:", code); window.__bot_ts_token = ""; },
+          });
+        } catch (e) { console.warn("[BOT TS] render erro:", e); }
+      };
+      if (window.turnstile) {
+        tryRender(window.turnstile);
+      } else {
+        // Aguarda o script do Turnstile ser carregado pelo próprio jogo (já incluso na página)
+        for (let i = 0; i < 40; i++) {
+          await sleep(500);
+          if (window.turnstile) { tryRender(window.turnstile); break; }
+        }
+      }
+    }
+    // Aguarda token ficar disponível (até 22s)
+    const deadline = Date.now() + 22000;
+    while (Date.now() < deadline && !window.__bot_ts_token) {
+      await sleep(400);
+    }
+    return { ok: true, token: window.__bot_ts_token || "", ready: !!window.__bot_ts_token };
+  }
+
+  if (job === "turnstile_read") {
+    // Leitura instantânea do token cacheado no widget persistente
+    return { ok: true, token: window.__bot_ts_token || "", ready: !!window.__bot_ts_token };
   }
 
   if (job === "auction_scan") {
