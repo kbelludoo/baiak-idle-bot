@@ -161,18 +161,30 @@ async ({ job, ...auctionCfg }) => {
   };
 
   const createGoldListing = async (input, label) => {
-    // Tenta Turnstile (30s); se falhar usa token vazio como fallback (comportamento antigo que funcionava)
-    const token = await getTurnstileToken(30000);
-    if (!token) console.warn("[BOT AUCTION] Turnstile sem token — tentando com captchaToken vazio");
-    const res = await trpcPostAuction("auction.createGold", {
+    // Tenta primeiro sem Turnstile (VPS headless não resolve captcha interativo).
+    // Se o servidor rejeitar por captcha, tenta resolver o Turnstile com até 20s.
+    const tryCreate = async (captchaToken) => trpcPostAuction("auction.createGold", {
       password: "",
       twofaCode: "",
       smsCode: "",
       pushProof: "",
       ...input,
       confirmText: "CONFIRMAR",
-      captchaToken: token || ""
+      captchaToken: captchaToken || ""
     });
+    const res = await tryCreate("");
+    if (res?.data) return { ...res, label };
+    // Se falhou e o erro sugere captcha, tenta com Turnstile (timeout 20s)
+    const errMsg = String(res?.error || "").toLowerCase();
+    const needsCaptcha = /captcha|turnstile|challenge|bot/i.test(errMsg) || res?.status === 403;
+    if (needsCaptcha) {
+      console.warn(`[BOT AUCTION] Servidor pediu captcha (${res?.status}: ${res?.error}) — tentando Turnstile`);
+      const token = await getTurnstileToken(20000);
+      if (token) {
+        const res2 = await tryCreate(token);
+        return { ...res2, label };
+      }
+    }
     return { ...res, label };
   };
 
