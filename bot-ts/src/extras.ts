@@ -198,6 +198,25 @@ export interface ExtrasScheduler {
 
 export class DefaultExtrasScheduler implements ExtrasScheduler {
   private lastTimes: Record<string, number> = {};
+  public lastAuctionStatus: any = {
+    checkedAt: null,
+    currentGold: 0,
+    coinsAvailable: 0,
+    reservedCoins: 0,
+    activeBids: 0,
+    hasOwnActiveGold: false,
+    listings: 0,
+  };
+
+  private unwrapTrpc(raw: any): any {
+    const item = Array.isArray(raw) ? raw[0] : raw;
+    let data = item?.result?.data ?? item?.data ?? item;
+    // tRPC com transformer pode encapsular o payload mais uma vez em `json`.
+    if (data && typeof data === 'object' && Object.prototype.hasOwnProperty.call(data, 'json')) {
+      data = data.json;
+    }
+    return data;
+  }
 
   private due(key: string, now: number, cdSeconds: number): boolean {
     const last = this.lastTimes[key] || 0;
@@ -242,20 +261,66 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
       try {
         let scanRes: any = null;
         try {
-          const [browseRes, historyRes] = await Promise.all([
+          const authHeaders: Record<string, string> = { "User-Agent": "Mozilla/5.0" };
+            if (config.token) authHeaders["authorization"] = `Bearer ${config.token}`;
+
+            const [browseRes, historyRes, mineRes, coinsRes, myBidsRes] = await Promise.all([
             fetch("https://baiakidle.com/api/trpc/auction.browse?batch=1&input=%7B%220%22%3A%7B%22page%22%3A1%2C%22perPage%22%3A50%2C%22type%22%3A%22gold%22%7D%7D", {
-              headers: { "User-Agent": "Mozilla/5.0" },
+              headers: authHeaders,
               signal: AbortSignal.timeout(6000),
             }).then(r => r.json()).catch(() => null),
             fetch("https://baiakidle.com/api/trpc/auction.history?batch=1&input=%7B%220%22%3A%7B%22page%22%3A1%2C%22perPage%22%3A25%2C%22type%22%3A%22gold%22%7D%7D", {
-              headers: { "User-Agent": "Mozilla/5.0" },
+              headers: authHeaders,
+              signal: AbortSignal.timeout(6000),
+            }).then(r => r.json()).catch(() => null),
+            fetch("https://baiakidle.com/api/trpc/auction.mine?batch=1&input=%7B%7D", {
+              headers: authHeaders,
+              signal: AbortSignal.timeout(6000),
+            }).then(r => r.json()).catch(() => null),
+            fetch("https://baiakidle.com/api/trpc/coin.balances?batch=1&input=%7B%7D", {
+              headers: authHeaders,
+              signal: AbortSignal.timeout(6000),
+            }).then(r => r.json()).catch(() => null),
+            fetch("https://baiakidle.com/api/trpc/auction.myBids?batch=1&input=%7B%7D", {
+              headers: authHeaders,
               signal: AbortSignal.timeout(6000),
             }).then(r => r.json()).catch(() => null),
           ]);
 
-          const browseItem = Array.isArray(browseRes) ? browseRes[0] : browseRes;
-          const browseData = browseItem?.result?.data ?? browseItem?.data ?? browseItem;
-          const browseRows = Array.isArray(browseData?.rows) ? browseData.rows : [];
+           const browseData = this.unwrapTrpc(browseRes);
+           const browseRows = Array.isArray(browseData?.rows) ? browseData.rows : [];
+
+           const mineData = this.unwrapTrpc(mineRes);
+           const mineRows = Array.isArray(mineData?.rows) ? mineData.rows : (Array.isArray(mineData) ? mineData : (mineData?.items || []));
+
+           const coinsData = this.unwrapTrpc(coinsRes);
+            const marketCoins = Math.max(0, Number(coinsData?.marketCoins ?? coinsData?.market_coins) || 0);
+            const walletCoins = Math.max(0, Number(coinsData?.coins ?? coinsData?.walletCoins) || 0);
+            const hasApiBalance = Boolean(coinsData && typeof coinsData === 'object' &&
+              ('coins' in coinsData || 'walletCoins' in coinsData || 'marketCoins' in coinsData || 'market_coins' in coinsData));
+             // O lance aceita as duas carteiras. O saldo livre é o total menos
+             // as reservas já feitas, mantendo a moeda da reserva separada.
+             const arbitrageCoins = marketCoins + walletCoins;
+           const bidsData = this.unwrapTrpc(myBidsRes);
+            const bidRows = Array.isArray(bidsData) ? bidsData : (bidsData?.rows || bidsData?.items || []);
+            const activeBidRows = bidRows.filter((r: any) =>
+              (r.status === 'active' || r.status === 'open' || r.status === 'pending') &&
+              (r.myBidStatus === undefined || r.myBidStatus === 'active' || r.myBidStatus === 'leading')
+            );
+             const activeBids = activeBidRows.length;
+             const reservedByCurrency = activeBidRows.reduce((acc: { market: number; normal: number }, r: any) => {
+               const currency = r.myCurrency === 'normal' ? 'normal' : 'market';
+               const amount = Number(r.maxAmount ?? r.myMaxAmount ?? r.currentPrice ?? r.bidAmount ?? r.amount ?? r.priceCoins ?? 0);
+               if (Number.isFinite(amount) && amount > 0) acc[currency] += amount;
+               return acc;
+             }, { market: 0, normal: 0 });
+             const freeMarketCoins = Math.max(0, marketCoins - reservedByCurrency.market);
+             const freeNormalCoins = Math.max(0, walletCoins - reservedByCurrency.normal);
+             const freeCoins = freeMarketCoins + freeNormalCoins;
+            const reservedCoins = activeBidRows.reduce((sum: number, r: any) => {
+              const amount = Number(r.maxAmount ?? r.myMaxAmount ?? r.currentPrice ?? r.bidAmount ?? r.amount ?? r.priceCoins ?? 0);
+              return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
+            }, 0);
 
           if (browseRows.length > 0) {
             const nowTs = Date.now();
@@ -265,12 +330,12 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
                 id: String(r.id),
                 goldAmount: Number(r.goldAmount),
                 priceCoins: Number(r.currentPrice),
+                nextPriceCoins: Number(r.currentPrice) + (Number(r.bidCount) > 0 ? Math.max(1, Math.ceil(Number(r.currentPrice) * 0.10)) : 0),
                 bids: Number(r.bidCount) || 0,
                 minutesRemaining: Number.isFinite(Number(r.endsAt)) ? Math.max(0, Math.round((Number(r.endsAt) - nowTs) / 60000)) : null,
               }));
 
-            const histItem = Array.isArray(historyRes) ? historyRes[0] : historyRes;
-            const histData = histItem?.result?.data ?? histItem?.data ?? histItem;
+             const histData = this.unwrapTrpc(historyRes);
             const histRows = Array.isArray(histData?.rows) ? histData.rows : [];
             const historyRates = histRows
               .filter((r: any) => r.type === "gold" && Number(r.goldAmount) > 0 && Number(r.currentPrice) > 0)
@@ -278,37 +343,91 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
 
             const listingRates = listings.map((item: any) => item.goldAmount / item.priceCoins);
             const referenceRates = historyRates.length >= 2 ? historyRates : (listingRates.length >= 3 ? listingRates : []);
-            const referenceRate = referenceRates.length
-              ? referenceRates.slice().sort((a: number, b: number) => a - b)[Math.floor(referenceRates.length / 2)]
-              : 5500000;
+             const sortedRates = referenceRates.slice().sort((a: number, b: number) => a - b);
+             const referenceRate = sortedRates.length
+               ? sortedRates[Math.floor(sortedRates.length / 2)]
+               : 5500000;
+             const marketMinRate = sortedRates.length ? sortedRates[0] : referenceRate;
+             const marketMaxRate = sortedRates.length ? sortedRates[sortedRates.length - 1] : referenceRate;
 
-            const hasOwnActiveGold = browseRows.some((r: any) =>
-              (r.type === "gold" || /\bgold\b|ouro|kk\b/i.test(r.name || "")) &&
-              (r.isOwn === true || r.isOwner === true) &&
-              (r.status === "active" || Number(r.endsAt) > Date.now())
+            const hasOwnActiveGold = (
+              browseRows.some((r: any) =>
+                (r.type === "gold" || /\bgold\b|ouro|kk\b/i.test(r.name || "")) &&
+                (r.isOwn === true || r.isOwner === true) &&
+                (r.status === "active" || Number(r.endsAt) > Date.now())
+              ) ||
+              mineRows.some((r: any) =>
+                (r.type === "gold" || /\bgold\b|ouro|kk\b/i.test(r.name || "")) &&
+                (r.status === "active" || Number(r.endsAt) > Date.now())
+              )
             );
 
             const currentGold = Number(telemetryGold || 0);
             const feeGold = 5000000;
-            const minGoldAmount = 25000000;
+             const minGoldAmount = 100000000;
             const maxToSell = Math.max(0, Number(config.auctionSellGoldAmount) || 800000000);
             const goldToSell = Math.min(maxToSell, Math.max(0, Math.floor(currentGold - feeGold)));
 
-            scanRes = {
+            let historyMedianRate = referenceRate;
+            const historyRatesSorted = historyRates.length
+              ? historyRates.slice().filter((r: number) => r > 0).sort((a: number, b: number) => a - b) : [];
+            if (historyRatesSorted.length >= 2) {
+              // Mediana do histórico de vendas entregues (DADOS REAIS de negócio
+              // fechado), não dos anúncios ativos que podem estar encalhados.
+              historyMedianRate = historyRatesSorted[Math.floor(historyRatesSorted.length / 2)];
+            }
+
+           scanRes = {
               ok: true,
               listings,
               historyRates,
               listingRates,
-              referenceRate,
-              coinsAvailable: coinsAvailable ?? 0,
+               referenceRate,
+               marketMinRate,
+               marketMaxRate,
+              historyMedianRate,
+               coinsAvailable: hasApiBalance ? freeCoins : Math.max(0, Number(coinsAvailable) || 0),
+               activeBids,
+               reservedCoins,
+               walletCoins,
+               marketCoins,
+               freeMarketCoins,
+               freeNormalCoins,
+               reservedByCurrency,
               hasOwnActiveGold,
               currentGold,
               feeGold,
               minGoldAmount,
-              goldToSell,
-            };
+               goldToSell,
+             };
+             this.lastAuctionStatus = {
+               checkedAt: new Date().toISOString(),
+               currentGold,
+                coinsAvailable: freeCoins,
+               reservedCoins,
+               activeBids,
+               walletCoins,
+               marketCoins,
+               hasOwnActiveGold,
+               listings: listings.length,
+             };
           }
-        } catch (_) {}
+         } catch (_) {}
+
+         // Um mercado sem anúncios também é uma resposta válida. Preserve o
+         // saldo de coins e os lances consultados, em vez de deixar o painel
+         // aparentar que o leilão nunca foi verificado.
+         if (!scanRes) {
+           this.lastAuctionStatus = {
+             checkedAt: new Date().toISOString(),
+             currentGold: Number(telemetryGold) || 0,
+             coinsAvailable: Math.max(0, Number(coinsAvailable) || 0),
+             reservedCoins: 0,
+             activeBids: 0,
+             hasOwnActiveGold: false,
+             listings: 0,
+           };
+         }
 
         if (!scanRes || !scanRes.ok) {
           scanRes = await safeEval<any>(page, 'extra', {
@@ -323,7 +442,18 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
           this.lastTimes['auction'] = now - 45000; // Tenta novamente em 15s se o scan falhou
           logs.push(`[AUCTION] Scan de leilão falhou: ${scanRes?.error || (scanRes === null ? 'safeEval nulo/ocupado' : 'retornou falso')}`);
         } else {
-          logs.push(`[AUCTION] Scan mercado: saldo=${Math.floor((scanRes.currentGold || 0) / 1e6)}kk | venda_alvo=${Math.floor((scanRes.goldToSell || 0) / 1e6)}kk | anuncio_ativo=${scanRes.hasOwnActiveGold} | lotes_abertos=${scanRes.listings?.length || 0}`);
+          if (!this.lastAuctionStatus.checkedAt) {
+            this.lastAuctionStatus = {
+              checkedAt: new Date().toISOString(),
+              currentGold: Number(scanRes.currentGold) || Number(telemetryGold) || 0,
+              coinsAvailable: Number(scanRes.coinsAvailable) || Number(coinsAvailable) || 0,
+              reservedCoins: Number(scanRes.reservedCoins) || 0,
+              activeBids: Number(scanRes.activeBids) || 0,
+              hasOwnActiveGold: Boolean(scanRes.hasOwnActiveGold),
+              listings: Array.isArray(scanRes.listings) ? scanRes.listings.length : 0,
+            };
+          }
+           logs.push(`[AUCTION] Mercado: saldo=${Math.floor((scanRes.currentGold || 0) / 1e6)}kk | alvo=${Math.floor((scanRes.goldToSell || 0) / 1e6)}kk | faixa=${Math.round((scanRes.marketMinRate || 0) / 1e6)}-${Math.round((scanRes.marketMaxRate || 0) / 1e6)}kk/c | mediana=${Math.round((scanRes.referenceRate || 0) / 1e6)}kk/c | coins=${scanRes.coinsAvailable || 0}${scanRes.reservedCoins ? ` (reservados=${scanRes.reservedCoins})` : ''} | anuncio_ativo=${scanRes.hasOwnActiveGold}`);
           let sellDecision: any = null;
           let buyDecision: any = null;
 
@@ -335,18 +465,22 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
               sellDecision = await jev.decideGoldSellListing({
                 goldToSell: scanRes.goldToSell,
                 currentMarketRates: rates,
+                durationHours: 6,
               });
               logs.push(`[JEV-AUCTION] Decisão venda: shouldList=${sellDecision.shouldList}, ${Math.floor(scanRes.goldToSell / 1e6)}kk por ${sellDecision.targetPriceCoins} coins (${sellDecision.reason})`);
             } else {
-              const ref = scanRes.referenceRate || 5_500_000;
-              const targetCoins = Math.max(25, Math.round(scanRes.goldToSell / (ref * 0.85)));
+              // Heurística de mercado real: mediana do histórico de vendas
+              // entregues (gold/coin). Preço no meio-alto do que já foi pago:
+              // acima dos lotes baratos encalhados, abaixo do teto lento.
+              const ref = scanRes.historyMedianRate || scanRes.referenceRate || 5_500_000;
+              const targetCoins = Math.max(25, Math.round(scanRes.goldToSell / ref));
               sellDecision = {
                 shouldList: true,
                 targetPriceCoins: targetCoins,
-                reason: 'Heurística sem JEV',
+                reason: `Heurística mercado real: ${Math.floor(scanRes.goldToSell / 1e6)}kk por ${targetCoins} coins (mediana histórica ${Math.round(ref / 1e6)}kk/c)`,
                 source: 'fallback',
               };
-              logs.push(`[AUCTION] Venda heurística: targetPriceCoins=${targetCoins}`);
+              logs.push(`[AUCTION] Venda heurística: targetPriceCoins=${targetCoins} (ref=${Math.round(ref / 1e6)}kk/c)`);
             }
           } else if (scanRes.hasOwnActiveGold) {
             logs.push('[AUCTION] Anúncio próprio de gold já ativo no leilão');
@@ -355,33 +489,118 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
           }
 
           // Compra / Sniper de Gold: JEV avalia lotes encerrando
-          if (config.auctionLive && scanRes.listings && scanRes.listings.length > 0 && scanRes.coinsAvailable > 0) {
+          // Um lance ativo reserva apenas a sua própria quantia. Continue
+          // arbitrando com o saldo livre restante, sem bloquear o mercado
+          // inteiro enquanto um lance aguarda liquidação.
+          // Publicação tem prioridade sobre compra: não deixe uma chamada JEV
+          // de sniper atrasar o anúncio do gold disponível.
+          if (!sellDecision?.shouldList && config.auctionLive && scanRes.listings && scanRes.listings.length > 0 && scanRes.coinsAvailable > 0) {
             if (jev && config.jevEnabled) {
               buyDecision = await jev.decideGoldAuction({
                 coinsAvailable: scanRes.coinsAvailable,
                 budget: config.auctionBudget,
                 minMarginPct: config.auctionMinMarginPct,
                 maxMinutesRemaining: config.auctionSniperMaxMinutes,
+                referenceRate: scanRes.historyMedianRate || scanRes.referenceRate,
+                preferredCurrency: 'market',
                 listings: scanRes.listings,
               });
+              const bidAmount = Number(buyDecision?.targetMaxPrice || 0);
+              if (bidAmount > 0) {
+                if (bidAmount <= Number(scanRes.freeMarketCoins || 0)) buyDecision.currency = 'market';
+                else if (bidAmount <= Number(scanRes.freeNormalCoins || 0)) buyDecision.currency = 'normal';
+                else buyDecision.selectedListingId = null;
+              }
               if (buyDecision?.selectedListingId) {
                 logs.push(`[JEV-AUCTION] Decisão sniper: arrematar lote #${buyDecision.selectedListingId} (${buyDecision.reason})`);
+              }
+              if (buyDecision?.source === 'fallback') {
+                logs.push(`[JEV-AUCTION] JEV API indisponível (${buyDecision.apiError || 'sem resposta'}) — usando fallback local`);
+              }
+              if (buyDecision?.source === 'jev_api' && !buyDecision.isProfitable) {
+                logs.push(`[JEV-AUCTION] JEV API avaliou o lote e não confirmou a compra (${buyDecision.reason})`);
+              }
+            } else if (scanRes.activeBids) {
+              logs.push(`[AUCTION] ${scanRes.activeBids} lance(s) ativo(s); usando apenas ${scanRes.coinsAvailable} coins livres`);
+            }
+          }
+
+          // Executa a ação diretamente via fetch Node.js — NÃO usa safeEval/browser.
+          // O renderer do Chromium fica ocupado com HUD/potion e bloqueava o leilão.
+          // A criação de anúncio e o lance usam a mesma API tRPC do scan acima.
+          const execSellDecision = (sellDecision?.shouldList && sellDecision?.targetPriceCoins > 0) ? sellDecision : null;
+          const apiBuyDecision = buyDecision?.source === 'jev_api' && buyDecision.selectedListingId;
+          const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (config.token) authHeaders['authorization'] = `Bearer ${config.token}`;
+
+          if (execSellDecision) {
+            const sellMsg = `${Math.floor(scanRes.goldToSell / 1e6)}kk por ${execSellDecision.targetPriceCoins} coins`;
+            logs.push(`[AUCTION] Iniciando publicação automática: ${sellMsg}`);
+            if (!config.auctionLive) {
+              logs.push(`[AUCTION] DRY-RUN VENDA: ${sellMsg}`);
+            } else {
+              try {
+                const createBody = JSON.stringify({ '0': {
+                  goldAmount: Math.floor(scanRes.goldToSell),
+                  startPrice: Math.max(25, Math.floor(execSellDecision.targetPriceCoins)),
+                  durationHours: 12,
+                  password: '',
+                  twofaCode: '',
+                  smsCode: '',
+                  pushProof: '',
+                  confirmText: 'CONFIRMAR',
+                  captchaToken: '',
+                }});
+                const createRes = await fetch('https://baiakidle.com/api/trpc/auction.createGold?batch=1', {
+                  method: 'POST',
+                  headers: authHeaders,
+                  body: createBody,
+                  signal: AbortSignal.timeout(30000),
+                }).then(r => r.json()).catch(() => null);
+                const item = Array.isArray(createRes) ? createRes[0] : createRes;
+                const data = item?.result?.data?.json ?? item?.result?.data ?? item?.data ?? null;
+                const errMsg = item?.error?.json?.message || item?.error?.json?.data?.message ||
+                  item?.error?.message || item?.error?.data?.message || null;
+                if (data && !errMsg) {
+                  logs.push(`[AUCTION] ANÚNCIO DE VENDA CRIADO (JEV): ${sellMsg}`);
+                } else {
+                  logs.push(`[AUCTION] VENDA RECUSADA [${errMsg || 'falha'}]: ${sellMsg}`);
+                }
+              } catch (e: any) {
+                logs.push(`[AUCTION] ERRO VENDA (${String(e?.message || e)})`);
               }
             }
           }
 
-          // Executa a ação se houver decisão
-          if (sellDecision?.shouldList || buyDecision?.selectedListingId) {
-            const execRes = await safeEval<any>(page, 'extra', {
-              job: 'auction_execute',
-              sellDecision,
-              buyDecision,
-              goldToSell: scanRes.goldToSell,
-              live: config.auctionLive,
-            }, 60000);
-            if (execRes?.events && Array.isArray(execRes.events)) {
-              for (const ev of execRes.events) logs.push(`[AUCTION] ${ev}`);
+          if (apiBuyDecision && buyDecision) {
+            const lid = Number(buyDecision.selectedListingId);
+            const maxPrice = Number(buyDecision.targetMaxPrice || buyDecision.priceCoins || 100);
+            const bidCurrency = buyDecision.currency || 'market';
+            const buyMsg = `Lote #${lid} por até ${maxPrice} coins`;
+            if (!config.auctionLive) {
+              logs.push(`[AUCTION] DRY-RUN COMPRA: ${buyMsg}`);
+            } else {
+              try {
+                const bidRes = await fetch('https://baiakidle.com/api/trpc/auction.bid?batch=1', {
+                  method: 'POST',
+                  headers: authHeaders,
+                  body: JSON.stringify({ '0': { listingId: lid, maxAmount: maxPrice, currency: bidCurrency } }),
+                  signal: AbortSignal.timeout(15000),
+                }).then(r => r.json()).catch(() => null);
+                const bidItem = Array.isArray(bidRes) ? bidRes[0] : bidRes;
+                const bidData = bidItem?.result?.data?.json ?? bidItem?.result?.data ?? bidItem?.data ?? null;
+                const bidErr = bidItem?.error?.json?.message || bidItem?.error?.message || null;
+                if (bidData && !bidErr) {
+                  logs.push(`[AUCTION] LANCE REGISTRADO (JEV): ${buyMsg}`);
+                } else {
+                  logs.push(`[AUCTION] LANCE RECUSADO [${bidErr || 'falha'}]: ${buyMsg}`);
+                }
+              } catch (e: any) {
+                logs.push(`[AUCTION] ERRO LANCE (${String(e?.message || e)})`);
+              }
             }
+          } else if (buyDecision?.selectedListingId && !apiBuyDecision) {
+            logs.push('[AUCTION] Ação bloqueada: JEV API não confirmou a compra; nenhum lance foi enviado.');
           }
           busy = true;
         }
