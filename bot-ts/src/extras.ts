@@ -680,7 +680,19 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
           // Só tenta o formulário nativo depois do lance. Assim, um widget
           // anti-robô lento não faz uma oportunidade rentável expirar.
           if (deferredBrowserSell) {
-            const browserRes = await safeEval<any>(page, 'extra', deferredBrowserSell, 60000);
+            let browserRes: any = null;
+            // O renderer também atende HUD, telemetria e efeitos. Se houver
+            // uma avaliação concorrente, safeEval retorna nulo para não
+            // formar uma fila de promises. Dê ao fluxo oficial algumas
+            // janelas para pegar o navegador livre antes de desistir.
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              browserRes = await safeEval<any>(page, 'extra', deferredBrowserSell, 20000);
+              if (browserRes?.events && Array.isArray(browserRes.events)) break;
+              if (attempt < 3) {
+                logs.push(`[AUCTION] Navegador ocupado; nova tentativa oficial em 25s (${attempt}/3)`);
+                await new Promise((resolve) => setTimeout(resolve, 25000));
+              }
+            }
             if (browserRes?.events && Array.isArray(browserRes.events)) {
               logs.push(...browserRes.events.map((event: any) => `[AUCTION] ${String(event)}`));
             } else {
