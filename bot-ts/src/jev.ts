@@ -283,7 +283,14 @@ export class JevEngine {
     reason: string;
     source: 'jev_api' | 'fallback';
   }> {
-    const candScore = (state.candidateRarity * 1000) + (state.candidateTier * 10) + state.candidateUp;
+    let attrBonus = 0;
+    if (state.candidateAttrs) {
+      const ml = state.candidateAttrs.match(/(?:magic level|magic|ml)\s*[:+]?\s*(\d+)/i);
+      if (ml) attrBonus += (parseInt(ml[1], 10) || 0) * 35;
+      const sk = state.candidateAttrs.match(/(?:sword|axe|club|distance|shielding)\s*[:+]?\s*(\d+)/i);
+      if (sk) attrBonus += (parseInt(sk[1], 10) || 0) * 20;
+    }
+    const candScore = (state.candidateRarity * 1000) + (state.candidateTier * 10) + state.candidateUp + attrBonus;
     const fallbackShouldEquip = candScore > state.equippedScore;
     const fallbackReason = fallbackShouldEquip
       ? `Upgrade detectado (score ${candScore} > ${state.equippedScore})`

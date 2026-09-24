@@ -350,7 +350,7 @@ function botProxyAuthorized(request: Request): boolean {
 async function forwardBotCommand(endpointPath: string, request: Request) {
   const body = await request.json() as JsonRecord;
   const targetBot = String(body?.bot || 'vps1').toLowerCase() === 'vps2' ? 'vps2' : 'vps1';
-  const targetAdminToken = botAdminToken || (targetBot === 'vps2' ? vps2Token : vps1Token);
+  const targetAdminToken = (targetBot === 'vps2' ? vps2Token : vps1Token) || botAdminToken;
   const response = await fetch(`${bots[targetBot].replace(/\/$/, '')}${endpointPath}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${targetAdminToken}` },

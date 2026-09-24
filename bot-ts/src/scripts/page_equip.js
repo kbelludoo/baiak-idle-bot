@@ -180,6 +180,15 @@ async (args) => {
       d?.cmp?.name || "", d?.cmp?.stats || "",
     ].join(" "));
     let bonus = 0;
+    // Bônus de Magic Level e Skills de combate (+1 ML = +35 de score ponderado)
+    const mlMatch = blob.match(/(?:magic level|magic|ml)\s*[:+]?\s*(\d+)/i);
+    if (mlMatch) {
+      bonus += (parseInt(mlMatch[1], 10) || 0) * 35;
+    }
+    const skillMatch = blob.match(/(?:sword|axe|club|distance|shielding)\s*[:+]?\s*(\d+)/i);
+    if (skillMatch) {
+      bonus += (parseInt(skillMatch[1], 10) || 0) * 20;
+    }
     // Usa o elemento observado apenas como preferência de desempate: não
     // inventa uma resistência que o servidor não forneceu.
     if (profileElement && blob.includes(profileElement)) bonus += 60;
