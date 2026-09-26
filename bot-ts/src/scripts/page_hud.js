@@ -513,7 +513,41 @@
   };
 
   const pHunt = parsePanelRows("panel-hunt");
-  if (pHunt) res.analyzers.hunt = pHunt;
+  if (pHunt) {
+    res.analyzers.hunt = pHunt;
+    const rawH = pHunt._raw || "";
+    const mXph = rawH.match(/xp\/h\s*[:\s]?\s*([0-9.,]+)/i)?.[1];
+    if (mXph && (!res.analyzers.xp_per_hour || res.analyzers.xp_per_hour === "0")) {
+      res.analyzers.xp_per_hour = mXph;
+    }
+    const mSess = rawH.match(/session\s*[:\s]?\s*([0-9]{2}:[0-9]{2}:[0-9]{2})/i)?.[1];
+    if (mSess && (!res.analyzers.session_time || res.analyzers.session_time === "—")) {
+      res.analyzers.session_time = mSess;
+    }
+    const mGain = rawH.match(/xp gain\s*[:\s]?\s*([0-9.,]+)/i)?.[1];
+    if (mGain && !res.analyzers.session_xp) {
+      const gv = parseGoldAmount(mGain);
+      if (gv != null) {
+        res.analyzers.session_xp = gv;
+        res.analyzers.raw_xp = gv;
+      }
+    }
+    const mKills = rawH.match(/kills\s*[:\s]?\s*([0-9.,]+)/i)?.[1];
+    if (mKills && !res.analyzers.hunt_kills) {
+      const kv = parseGoldAmount(mKills);
+      if (kv != null) res.analyzers.hunt_kills = kv;
+    }
+    const mLoot = rawH.match(/loot\s*[:\s]?\s*([0-9.,]+)/i)?.[1];
+    if (mLoot && !res.analyzers.loot_value) {
+      const lv = parseGoldAmount(mLoot);
+      if (lv != null) res.analyzers.loot_value = lv;
+    }
+    const mBal = rawH.match(/balance\s*[:\s]?\s*([0-9.,]+)/i)?.[1];
+    if (mBal && !res.analyzers.balance) {
+      const bv = parseGoldAmount(mBal);
+      if (bv != null) res.analyzers.balance = bv;
+    }
+  }
 
   const pDmg = parsePanelRows("panel-dmg");
   if (pDmg) res.analyzers.damage = pDmg;
@@ -522,7 +556,14 @@
   if (pTaken) res.analyzers.taken = pTaken;
 
   const pLoot = parsePanelRows("panel-loot");
-  if (pLoot) res.analyzers.loot = pLoot;
+  if (pLoot) {
+    res.analyzers.loot = pLoot;
+    const rawL = pLoot._raw || "";
+    const mLooth = rawL.match(/per hour\s*[:\s]?\s*([0-9.,]+)/i)?.[1];
+    if (mLooth && (!res.analyzers.loot_per_hour || res.analyzers.loot_per_hour === "0")) {
+      res.analyzers.loot_per_hour = mLooth;
+    }
+  }
 
   const pSupply = parsePanelRows("panel-supply");
   if (pSupply) res.analyzers.supply = pSupply;

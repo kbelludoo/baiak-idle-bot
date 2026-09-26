@@ -1587,23 +1587,21 @@ function card(id, b) {
 
   // XP / hora da nova medição
   const rawXpRate = selected.xp_per_hour ?? an.xp_per_hour;
-  const provisionalXpReady = !currentSampleReady && Number(parseHuntMetric(rawXpRate)) > 0
-    && (selected.source === 'matrix-observed' || selected.source === 'live-observed' || selected.source === 'profiler-live');
-  let parsedXpRate = (currentSampleReady || provisionalXpReady) ? parseHuntMetric(rawXpRate) : 0;
-  if (currentSampleReady && !(parsedXpRate > 0) && !hasSampleFlag) {
+  const parsedRawXp = parseHuntMetric(rawXpRate);
+  let parsedXpRate = parsedRawXp > 0 ? parsedRawXp : 0;
+  if (!(parsedXpRate > 0)) {
     parsedXpRate = liveXpPerHour || huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'xp');
   }
-  const displayXpHour = !(currentSampleReady || provisionalXpReady) ? 'Calculando…' : (parsedXpRate > 0 ? `${formatXp(parsedXpRate)}/h` : '0 XP/h');
+  const displayXpHour = parsedXpRate > 0 ? `${formatXp(parsedXpRate)}/h` : (currentSampleReady ? '0 XP/h' : 'Calculando…');
 
   // Loot / hora da nova medição
   const rawLootRate = selected.loot_per_hour ?? an.loot_per_hour;
-  const provisionalLootReady = !currentSampleReady && Number(parseHuntMetric(rawLootRate)) > 0
-    && (selected.source === 'matrix-observed' || selected.source === 'live-observed' || selected.source === 'profiler-live');
-  let parsedLootRate = (currentSampleReady || provisionalLootReady) ? parseHuntMetric(rawLootRate) : 0;
-  if (currentSampleReady && !(parsedLootRate > 0) && !hasSampleFlag) {
+  const parsedRawLoot = parseHuntMetric(rawLootRate);
+  let parsedLootRate = parsedRawLoot > 0 ? parsedRawLoot : 0;
+  if (!(parsedLootRate > 0)) {
     parsedLootRate = huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'loot');
   }
-  const displayLootHour = !(currentSampleReady || provisionalLootReady) ? 'Calculando…' : (parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : '0/h');
+  const displayLootHour = parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : (currentSampleReady ? '0/h' : 'Calculando…');
 
   // Gold / hora
   const rawGoldHour = Number(selected.gold_per_hour ?? a.goldPerHour ?? an.net_gold_per_hour ?? 0) || 0;
@@ -1653,11 +1651,11 @@ function card(id, b) {
 
           <div class="hero-stat xp">
             <div class="hero-label">
-              <span>XP TOTAL DESTA HUNT</span>
+              <span>XP / HORA</span>
               <span style="font-size:12px;">⚡</span>
             </div>
-            <strong class="hero-val">${esc(sessionXpStr)}</strong>
-            <small>Taxa da hunt: ${esc(displayXpHourFinal)}</small>
+            <strong class="hero-val">${esc(displayXpHourFinal)}</strong>
+            <small>Ganho total nesta hunt: ${esc(sessionXpStr)}</small>
           </div>
         </div>
 
