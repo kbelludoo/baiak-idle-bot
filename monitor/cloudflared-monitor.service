@@ -1,0 +1,13 @@
+[Unit]
+Description=Cloudflare Tunnel for Baiak Monitor (127.0.0.1:8081)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:8081 --logfile /home/ubuntu/cloudflared.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

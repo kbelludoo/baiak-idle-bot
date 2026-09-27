@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { selectNextBoss, SoftwareBossRunner } from '../src/boss_runner';
+import { buildAutoPlaylist, selectNextBoss, SoftwareBossRunner } from '../src/boss_runner';
 
 describe('SoftwareBossRunner', () => {
   it('selects the first available boss when no cooldowns exist', () => {
@@ -52,5 +52,18 @@ describe('SoftwareBossRunner', () => {
     expect(status.state).toBe('IDLE');
     expect(status.activeBossId).toBeNull();
     expect(status.killsToday).toBe(0);
+  });
+
+  it('monta playlist de software sem depender do passe nativo', () => {
+    const playlist = buildAutoPlaylist(100, { darkfang: { canWin: false } });
+
+    expect(playlist).toContain('brokul');
+    expect(playlist).toContain('scarlett');
+    expect(playlist).not.toContain('darkfang');
+  });
+
+  it('mantém a seleção disponível enquanto a carga for positiva', () => {
+    const now = 1_000_000;
+    expect(selectNextBoss(['brokul'], {}, 1, now)).toBe('brokul');
   });
 });

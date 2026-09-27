@@ -324,6 +324,28 @@ export class SoftwareBossRunner {
       }
     }
 
+    // O loop principal também recebe bossgate/autobossstate diretamente pelo
+    // WebSocket. Isso mantém o modo software funcional sem passe mesmo quando
+    // o espelho da página ainda não processou o pacote correspondente.
+    if (telemetry) {
+      const telemBossgate = (telemetry as any).bossgate;
+      if (pageSnap.bossChargesLeft === null && telemBossgate?.chargesLeft !== undefined) {
+        pageSnap.bossChargesLeft = Number(telemBossgate.chargesLeft);
+      }
+      if (pageSnap.bossChargesMax <= 0 && telemBossgate?.chargesMax !== undefined) {
+        pageSnap.bossChargesMax = Number(telemBossgate.chargesMax);
+      }
+      if (Object.keys(pageSnap.bossCooldowns).length === 0 && telemBossgate?.cooldowns) {
+        pageSnap.bossCooldowns = telemBossgate.cooldowns;
+      }
+      const telemAutoBoss = (telemetry as any).autoBossState;
+      if (telemAutoBoss && typeof telemAutoBoss === 'object') {
+        pageSnap.autoBossUntil = Number(telemAutoBoss.until ?? pageSnap.autoBossUntil);
+        pageSnap.autoBossRunning = Boolean(telemAutoBoss.running);
+        pageSnap.isVipAccount = pageSnap.autoBossUntil > Date.now();
+      }
+    }
+
     // Atualiza cache interno de cargas do servidor (quando disponivel)
     if (pageSnap.bossChargesLeft !== null) {
       this.lastChargesLeft = pageSnap.bossChargesLeft;
@@ -471,7 +493,9 @@ export class SoftwareBossRunner {
       playlist = config.autoBossPlaylist;
     } else {
       // Extrair dados de dificuldade e historico do autobossstate (vindo do servidor via WebSocket)
-      const absState = (telemetry as any).autobossstate || {};
+      const absState = (telemetry as any).autoBossState
+        || (telemetry as any).autobossstate
+        || {};
       const serverDifficulty: Record<string, any> = absState.difficulty || {};
       // kills/deaths vem no autobossstate como { bossId: { kills, deaths } } ou flat kills/deaths por boss
       const serverKillDeaths: Record<string, { kills: number; deaths: number }> = absState.bossHistory || {};
@@ -496,11 +520,9 @@ export class SoftwareBossRunner {
       return { handled: false, detail: 'todos_em_recarga' };
     }
 
-    // 7. So desafia se estiver em zona segura (cidade/templo) ou entre waves da hunt
-    if (!snapshot.isCity && !isSafeTransition) {
-      return { handled: false, detail: 'aguardando_transicao_segura' };
-    }
-
+    // 7. O modo software deve consumir a carga assim que ela existir.
+    // Diferente do Auto Boss nativo, ele não depende de passe nem de estar na
+    // cidade; o comando boss faz a transição para a sala do chefe.
     this.lastAttemptAt = now;
     if (currentHuntId && currentHuntId !== 'city' && currentHuntId !== 'templo') {
       this.previousHuntId = currentHuntId;

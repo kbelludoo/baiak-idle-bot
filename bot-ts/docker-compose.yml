@@ -8,6 +8,8 @@ services:
     ipc: host
     shm_size: "256m"
     user: "0:0"
+    extra_hosts:
+      - "brunhild.challenges.cloudflare.com:104.18.16.146"
     env_file:
       - path: .env
         required: false
@@ -19,7 +21,8 @@ services:
     environment:
       - PORT=${PORT:-8080}
       - HOST=0.0.0.0
-      - HEADLESS=${HEADLESS:-true}
+      - HEADLESS=${HEADLESS:-false}
+      - DISPLAY=${DISPLAY:-:99}
       - STREAM=false
       - SCREENSHOT_INTERVAL=0
       # Permite configurar HUNT_MODE e FORCE_HUNT via .env ou padrão engine
@@ -54,3 +57,4 @@ services:
     volumes:
       - ./data-ts:/app/data
       - ./src:/app/src
+      - /tmp/.X11-unix:/tmp/.X11-unix

@@ -102,19 +102,16 @@ ssh -i "$KEY" -o StrictHostKeyChecking=accept-new ubuntu@$VPS1 '
 wait_for_monitor "$VPS1"
 
 echo "=================================================="
-echo "🔗 Garantindo túnel ngrok persistente (VPS 1)..."
+echo "🔗 Garantindo túnel Cloudflare persistente (VPS 1)..."
 echo "=================================================="
 ssh -i "$KEY" -o StrictHostKeyChecking=accept-new ubuntu@$VPS1 '
-  if [ -f /home/ubuntu/baiak-monitor/ngrok-monitor.service ]; then
-    sudo cp /home/ubuntu/baiak-monitor/ngrok-monitor.service /etc/systemd/system/ngrok-monitor.service
+  if [ -f /home/ubuntu/baiak-monitor/cloudflared-monitor.service ]; then
+    sudo cp /home/ubuntu/baiak-monitor/cloudflared-monitor.service /etc/systemd/system/cloudflared-monitor.service
     sudo systemctl daemon-reload
-    sudo systemctl enable --now ngrok-monitor
-  else
-    # Fallback: processo simples com restart se não houver systemd instalado
-    pgrep -f "ngrok http 127.0.0.1:8081" >/dev/null || (nohup /usr/local/bin/ngrok http 127.0.0.1:8081 --log /home/ubuntu/ngrok-monitor.log >/dev/null 2>&1 &)
+    sudo systemctl enable --now cloudflared-monitor
   fi
   sleep 3
-  curl -s -m 5 http://127.0.0.1:4040/api/tunnels | grep -o "https://[^\"]*ngrok[^\"]*" | head -n1 || echo "(túnel ainda iniciando)"
+  grep -o "https://[a-zA-Z0-9.-]*trycloudflare\.com" /home/ubuntu/cloudflared.log 2>/dev/null | tail -n 1 || echo "(túnel Cloudflare iniciando)"
 '
 
 stop_legacy_py "$VPS2"

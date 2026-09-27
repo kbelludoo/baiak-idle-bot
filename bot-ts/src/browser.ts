@@ -109,6 +109,10 @@ export async function launchBrowser(
   const browser = await puppeteer.launch({
     executablePath: config.chromePath,
     headless: config.headless,
+    // O fluxo oficial do leilão usa Turnstile visível. O argumento padrão do
+    // Puppeteer marca o navegador como automatizado e impede a emissão do
+    // token mesmo quando o Chromium está rodando em tela virtual.
+    ignoreDefaultArgs: ['--enable-automation'],
     userDataDir: config.userDataDir,
     // VPS com CPU compartilhada pode levar mais de 30s para expor o
     // endpoint CDP na primeira inicialização do Chromium.
@@ -128,7 +132,7 @@ export async function launchBrowser(
   const page = pages.length > 0 ? pages[0] : await browser.newPage();
   await page.setViewport({ width: browserWidth, height: browserHeight });
   await page.setUserAgent(
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.82 Safari/537.36',
   );
 
   // Injeta autenticação se fornecido token

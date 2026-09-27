@@ -1,7 +1,7 @@
 FROM oven/bun:1-debian
 
 # Instala o Chromium e fontes mínimas necessárias
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     chromium \
     fonts-liberation \
     fonts-noto-color-emoji \
@@ -30,7 +30,5 @@ ENV USER_DATA_DIR=/app/data/chrome_profile
 
 EXPOSE 8080
 
-# Execução direta em memória RAM (JIT) com o Bun
-# Turnstile e o modal nativo do leilão precisam de um contexto visual real.
-# O Xvfb fornece uma tela virtual dentro da VPS, sem depender de monitor.
-CMD ["xvfb-run", "-a", "--server-args=-screen 0 800x600x24 -ac", "bun", "run", "src/index.ts"]
+# A tela virtual é fornecida pela VPS e compartilhada pelo compose.
+CMD ["bun", "run", "src/index.ts"]

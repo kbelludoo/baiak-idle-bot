@@ -1199,6 +1199,14 @@ async function main() {
       } else if (typ === "takeover" || typ === "serverdrop") {
         console.log(`[${new Date().toLocaleTimeString()}] ⚠️ [${typ.toUpperCase()}] ${JSON.stringify(pay)?.slice(0, 200)}`);
         (telemetry as any)[typ] = pay;
+      } else if (typ === "bossgate") {
+        (telemetry as any).bossgate = pay;
+        if (pay && typeof pay === 'object') {
+          if (pay.chargesLeft !== undefined) (telemetry as any).bossChargesLeft = pay.chargesLeft;
+          if (pay.chargesMax !== undefined) (telemetry as any).bossChargesMax = pay.chargesMax;
+          if (pay.cooldowns !== undefined) (telemetry as any).bossCooldowns = pay.cooldowns;
+        }
+        writeStatusFile();
       } else if (typ === "autobossstate") {
         // Estado autoritativo da feature: `until=0`/playlist vazia significa
         // que a conta ainda não tem o Auto Boss liberado, não que a rotação
@@ -1636,6 +1644,19 @@ async function main() {
                 authoritativeHuntId = null;
               } else if (ev.type === 'reconnectOk') {
                 (telemetry as any).reconnectOk = true;
+              } else if (ev.type === 'bossgate' && ev.payload && typeof ev.payload === 'object') {
+                (telemetry as any).bossgate = ev.payload;
+                if (ev.payload.chargesLeft !== undefined) {
+                  (telemetry as any).bossChargesLeft = ev.payload.chargesLeft;
+                }
+                if (ev.payload.chargesMax !== undefined) {
+                  (telemetry as any).bossChargesMax = ev.payload.chargesMax;
+                }
+                if (ev.payload.cooldowns !== undefined) {
+                  (telemetry as any).bossCooldowns = ev.payload.cooldowns;
+                }
+              } else if (ev.type === 'autobossstate') {
+                (telemetry as any).autoBossState = ev.payload;
               } else if (ev.type === 'mine' && ev.payload && typeof ev.payload === 'object') {
                 if (ev.payload.bossChargesLeft !== undefined) {
                   (telemetry as any).bossChargesLeft = ev.payload.bossChargesLeft;
@@ -1906,17 +1927,22 @@ async function main() {
         const bossState = (telemetry as any).autoBossState;
         if (config.autoBoss) {
           const isSafeForBoss = isCity || huntFinishedForSwitch();
-          if (bossState && typeof bossState === 'object' && Number(bossState.until || 0) > Date.now()) {
+          const nativeBossList = bossState && typeof bossState === 'object' && Array.isArray(bossState.list)
+            ? bossState.list : [];
+          const nativeBossAvailable = bossState && typeof bossState === 'object'
+            && Number(bossState.until || 0) > Date.now()
+            && (bossState.running === true || nativeBossList.length > 0);
+          if (nativeBossAvailable) {
             if (isCity && now - lastBossNativeAttempt >= 60000) {
               lastBossNativeAttempt = now;
               const targetList = config.autoBossPlaylist || [];
-              const currentList = Array.isArray(bossState?.list) ? bossState.list : [];
+              const currentList = nativeBossList;
               const needsSync = targetList.length > 0 && JSON.stringify(targetList) !== JSON.stringify(currentList);
               if (needsSync) {
                 console.log(`[${new Date().toLocaleTimeString()}] 👑 [AUTO-BOSS] Sincronizando playlist personalizada (${targetList.length} chefes)...`);
                 await sendAutoBossList(pageRef, targetList, 0).catch(() => null);
               }
-              if (Array.isArray(bossState.list) && bossState.list.length > 0 && bossState.running !== true) {
+              if (nativeBossList.length > 0 && bossState.running !== true) {
                 const bossSend = await sendAutoBoss(pageRef, 'start').catch(() => null);
                 if (bossSend?.sent && bossSend.sent > 0) {
                   console.log(`[${new Date().toLocaleTimeString()}] 👑 [AUTO-BOSS] Playlist nativa iniciada (${bossState.list.length} chefes)`);

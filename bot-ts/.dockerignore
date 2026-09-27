@@ -1,0 +1,9 @@
+data/
+data-ts/
+node_modules/
+*.log
+.env
+.git/
+tests/
+ENGINE_COVERAGE.md
+learn-*.mjs

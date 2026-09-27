@@ -4,12 +4,12 @@ import time
 import urllib.request
 import os
 
-API_URL = "https://disfigure-tribune-silo.ngrok-free.dev/api/public/overview"
+API_URL = "https://nato-citysearch-members-robinson.trycloudflare.com/api/public/overview"
 LOG_FILE = "logs/soak_tracker.json"
 SUMMARY_FILE = "logs/soak_summary.txt"
 
 def fetch_overview():
-    req = urllib.request.Request(API_URL, headers={"ngrok-skip-browser-warning": "true"})
+    req = urllib.request.Request(API_URL)
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read().decode("utf-8"))
