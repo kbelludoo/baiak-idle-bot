@@ -77,6 +77,20 @@ Inventário da cobertura do cliente TS. `covered` significa que há leitura e a�
 | Net gold/h observed | covered | `protocol_map.scores` |
 | Damage per vocation/element/target | covered | `combatlog` mapper |
 | Healing per vocation | covered | `combatlog` mapper |
+| Level XP curve (Sj) | covered | `game_formula.ts` (`floor(50/3 * (l^3 - 6l^2 + 17l - 12))`) |
+| Blessing cost (Dye) | covered | `game_formula.ts` (`5000 * 2^max(0, l - 8)`) |
+| Item value with tier & upgrade (KL) | covered | `game_formula.ts` (`round(val * (1 + 0.5*t + 0.1*u))`) |
+| Vocation progression (F0) | covered | `game_formula.ts` (HP/MP per level: EK 15/5, RP 10/15, Mage 5/30, Monk 13/8) |
+| Addon stats & skill bonuses (Lk/W$) | covered | `game_formula.ts` (+HP, +MP, +1 skill per 5 addons) |
+| Mount perks rotation (Ree/Dee) | covered | `game_formula.ts` (cycle: stamina, pouch, offlineHunt, exerciseRegen, offlineExercise) |
+| Forge tier polynomial perks (d4e/ql) | covered | `game_formula.ts` (quadratic curves for onslaught, momentum, ruse, trans, amp) |
+| Forge resource conversion (wa) | covered | `game_formula.ts` (dust -> sliver -> core, success 50%/65%) |
+| Bestiary / Charms cost & discount (n6e/i6e/xae) | covered | `game_formula.ts` (25t^2 + 25t + 50, VIP 25% discount) |
+| Spells damage & healing catalog (eo/Mj) | covered | `game_formula.ts` (exact formulas for Knight, Paladin, Mage, Runes) |
+| Global spell cooldowns (Lr) | covered | `game_formula.ts` (attack 2s, heal 1s, support 2s, base crit 5%/10%) |
+| Monster ECR & effective HP (K4e) | covered | `game_formula.ts` (`eHP^0.4 * dps^0.6`) |
+| Estimated hunt level (X4e/J4e) | covered | `game_formula.ts` (`0.12296 * ECR^1.1494`, quantized rounding) |
+| Hunt aggregation & lean (Z4e) | covered | `game_formula.ts` (`0.6*avg + 0.4*max`, expRate vs goldRate) |
 | Incoming damage | partial | só quando o evento traz campos `taken/received/incoming` |
 | Enemy resistance | partial | captura se payload expuser `resistances/resists/elements`; base atual não possui valores |
 | Player defense/armor | missing | não foi observado campo confiável no payload atual |
