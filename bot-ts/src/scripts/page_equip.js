@@ -1,8 +1,98 @@
 async (args) => {
-  const { preferredElement = "", preferredProtection = "", job = "equip", approvedHashes = [] } = args || {};
+  const {
+    preferredElement = "",
+    preferredProtection = "",
+    job = "equip",
+    approvedHashes = [],
+    vocation = "",
+    level = 100,
+    skills = {},
+    magicLevel = 0,
+    weaknesses = [],
+    resistances = []
+  } = args || {};
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const vis = (el) => !!(el && el.offsetParent !== null);
   const events = [];
+
+  const charVoc = norm(vocation || "");
+  const charLevel = Number(level || 100);
+  const charML = Number(magicLevel || skills?.magic?.level || 1);
+  const charDist = Number(skills?.distance?.level || 10);
+  const charMelee = Number(skills?.melee?.level || skills?.sword?.level || skills?.axe?.level || skills?.club?.level || 10);
+
+  const weakSet = new Set((weaknesses || []).map(norm));
+  const resistSet = new Set((resistances || []).map(norm));
+
+  const profileElement = norm(preferredElement);
+  const profileProtection = norm(preferredProtection || preferredElement);
+  const buildBonus = (d) => {
+    const blob = norm([
+      d?.name || "", d?.tip?.typeText || "", d?.cmp?.attrs || "",
+      d?.cmp?.name || "", d?.cmp?.stats || "",
+    ].join(" "));
+    let bonus = 0;
+
+    // 1. Extração de atributos numéricos do item
+    const atkMatch = blob.match(/(?:atk|ataque|attack)\s*[:=]?\s*\+?\s*(\d+)/i);
+    const defMatch = blob.match(/(?:def|defesa|defense)\s*[:=]?\s*\+?\s*(\d+)/i);
+    const mlMatch = blob.match(/(?:magic level|magic|ml)\s*[:=]?\s*\+?\s*(\d+)/i);
+    const distMatch = blob.match(/(?:distance|dist|distancia)\s*[:=]?\s*\+?\s*(\d+)/i);
+    const meleeMatch = blob.match(/(?:sword|axe|club|melee|espada|machado|clava)\s*[:=]?\s*\+?\s*(\d+)/i);
+    const critMatch = blob.match(/(?:crit|critico|critical)\s*[:=]?\s*\+?\s*(\d+)/i);
+
+    const itemAtk = atkMatch ? parseInt(atkMatch[1], 10) : 0;
+    const itemDef = defMatch ? parseInt(defMatch[1], 10) : 0;
+    const bonusML = mlMatch ? parseInt(mlMatch[1], 10) : 0;
+    const bonusDist = distMatch ? parseInt(distMatch[1], 10) : 0;
+    const bonusMelee = meleeMatch ? parseInt(meleeMatch[1], 10) : 0;
+    const bonusCrit = critMatch ? parseInt(critMatch[1], 10) : 0;
+
+    // 2. Elemento do item / ataque
+    let elemMult = 1.0;
+    for (const w of weakSet) { if (w && blob.includes(w)) { elemMult = 1.25; break; } }
+    for (const r of resistSet) { if (r && blob.includes(r)) { elemMult = 0.65; break; } }
+
+    // 3. Cálculo de Projeção de Dano Real (DPS)
+    if (d?.slot === "weapon") {
+      const baseAtk = itemAtk > 0 ? itemAtk : (25 + (d.rarity || 0) * 12 + (d.up || 0) * 3);
+      let skill = 10;
+      if (/paladin|pally/.test(charVoc)) {
+        skill = charDist + bonusDist;
+      } else if (/knight/.test(charVoc)) {
+        skill = charMelee + bonusMelee;
+      } else {
+        skill = charML + bonusML;
+      }
+      const maxHit = 0.085 * skill * baseAtk + charLevel / 5;
+      const upMult = 1 + (d.up || 0) * 0.04;
+      const ftierMult = 1 + (d.ftier || 0) * 0.025;
+      const critMult = 1 + (bonusCrit / 100) * 0.5;
+      const weaponDps = (maxHit * 0.52 * upMult * ftierMult * elemMult * critMult) / 2.0;
+
+      bonus += Math.round(weaponDps * 10);
+    } else {
+      // Para slots secundários (armadura, amuleto, anel, pernas, capacete)
+      // Cada ponto de Skill ofensiva escala com o ataque da arma base
+      if (/paladin|pally/.test(charVoc)) {
+        bonus += bonusDist * 40;
+        bonus += bonusML * 35;
+      } else if (/knight/.test(charVoc)) {
+        bonus += bonusMelee * 40;
+        bonus += bonusML * 15;
+      } else {
+        bonus += bonusML * 50;
+      }
+      if (bonusCrit > 0) bonus += bonusCrit * 25;
+      if (itemDef > 0) bonus += itemDef * 2;
+    }
+
+    if (profileElement && blob.includes(profileElement)) bonus += 60;
+    if (profileProtection && blob.includes(profileProtection)) bonus += 30;
+    if (/resist|resistencia|defense|defesa|armor|armadura|health|hp/.test(blob)) bonus += 12;
+
+    return bonus;
+  };
 
   // --- Formato real do jogo (extraído do bundle /jogar/assets/index-*.js) ---
   // Item instância: { name, tier (raridade 0-5), ftier (forja 0-10), upLevel (0-12), attrs[], hash, uid }
@@ -172,30 +262,7 @@ async (args) => {
     return { name, rarity, ftier, up, slot, tip, cmp };
   };
 
-  const profileElement = norm(preferredElement);
-  const profileProtection = norm(preferredProtection || preferredElement);
-  const buildBonus = (d) => {
-    const blob = norm([
-      d?.name || "", d?.tip?.typeText || "", d?.cmp?.attrs || "",
-      d?.cmp?.name || "", d?.cmp?.stats || "",
-    ].join(" "));
-    let bonus = 0;
-    // Bônus de Magic Level e Skills de combate (+1 ML = +35 de score ponderado)
-    const mlMatch = blob.match(/(?:magic level|magic|ml)\s*[:+]?\s*(\d+)/i);
-    if (mlMatch) {
-      bonus += (parseInt(mlMatch[1], 10) || 0) * 35;
-    }
-    const skillMatch = blob.match(/(?:sword|axe|club|distance|shielding)\s*[:+]?\s*(\d+)/i);
-    if (skillMatch) {
-      bonus += (parseInt(skillMatch[1], 10) || 0) * 20;
-    }
-    // Usa o elemento observado apenas como preferência de desempate: não
-    // inventa uma resistência que o servidor não forneceu.
-    if (profileElement && blob.includes(profileElement)) bonus += 60;
-    if (profileProtection && blob.includes(profileProtection)) bonus += 30;
-    if (/resist|resistencia|defense|defesa|armor|armadura|health|hp/.test(blob)) bonus += 12;
-    return bonus;
-  };
+
   const scoreOf = (d) => (d.rarity ?? -1) * 1000 + (d.ftier || 0) * 10 + (d.up || 0) + buildBonus(d);
   const fmtItem = (d) => {
     const r = d.rarity != null ? `${RARITY_NAME[d.rarity] ?? "R" + d.rarity}` : "?";

@@ -2734,11 +2734,15 @@ async function main() {
                   .filter(([el, row]: any) => el !== 'unknown' && Number(row?.damage || 0) > 0)
                   .sort((a: any, b: any) => Number(b[1]?.damage || 0) - Number(a[1]?.damage || 0));
                 const observedElement = String((magicState as any).observed_element || combatElements[0]?.[0] || '').toLowerCase();
-                 const equipArgs = {
+                const equipArgs = {
                   preferredElement: jevElement || observedElement,
                   preferredProtection: jevElement || observedElement,
                   vocation: (telemetry as any).vocation || 'unknown',
                   level: telemetry.level,
+                  magicLevel: telemetry.magicLevel,
+                  skills: telemetry.skills,
+                  weaknesses: (magicState as any).weaknesses || [],
+                  resistances: (magicState as any).resistances || [],
                 };
                 const inspectRes = await safeEval<any>(pageRef, "equip", { ...equipArgs, job: "inspect" }, 16000);
                 const equipmentDecision = await jev.decideEquipmentBatch({
@@ -2796,7 +2800,8 @@ async function main() {
                   telemetry.inTreino,
                   jev,
                   telemetry.gold,
-                  telemetry.marketCoins
+                  telemetry.marketCoins,
+                  (telemetry as any).vocation
                 );
                 for (const log of extraLogs) console.log(`[${new Date().toLocaleTimeString()}] ⚡ ${log}`);
               } finally {

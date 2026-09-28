@@ -252,7 +252,8 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
     inTreino: boolean,
     jev?: any,
     telemetryGold?: number,
-    coinsAvailable?: number
+    coinsAvailable?: number,
+    vocation?: string
   ): Promise<string[]> {
     const logs: string[] = [];
     let busy = false;
@@ -757,7 +758,7 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
       ['codex', 55, { job: 'codex' }],
       ['event', 120, { job: 'event' }],
       ['arena', 150, { job: 'arena' }],
-      ['tree', 180, { job: 'tree' }],
+      ['tree', 180, { job: 'tree', vocation }],
       ['charms', 240, { job: 'charms' }],
       ['cyclopedia', 240, { job: 'cyclopedia' }],
       ['bp', 180, { job: 'battlepass' }],

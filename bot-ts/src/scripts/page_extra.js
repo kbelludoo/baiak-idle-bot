@@ -515,27 +515,69 @@ async ({ job, ...auctionCfg }) => {
   }
 
   if (job === "tree") {
+    const vocation = String(args?.vocation || "").toLowerCase();
     const miss = await openThen("tab-tree", "tree-modal", async (root) => {
-      const pts = txt(root.querySelector(".tree-chip.pts"));
+      const pts = txt(root.querySelector(".tree-chip.pts, .tree-pts, [class*='pts']"));
       const nPts = parseInt((pts.match(/\d+/) || ["0"])[0], 10);
       if (!nPts) {
         events.push("sem pontos");
         return;
       }
-      const nodes = Array.from(root.querySelectorAll("button.tree-node.available")).filter((b) => vis(b) && !b.disabled);
+      const rawNodes = Array.from(root.querySelectorAll("button.tree-node, .tree-node")).filter((b) => vis(b) && !b.disabled);
+      const availableNodes = rawNodes.filter((n) => !n.classList.contains("locked") && !n.classList.contains("maxed"));
+
+      // Função de pontuação ofensiva para nós da árvore
+      const scoreNode = (el) => {
+        const text = [
+          el.getAttribute("title") || "",
+          el.getAttribute("aria-label") || "",
+          el.dataset?.tip || "",
+          el.dataset?.tiphtml || "",
+          el.textContent || "",
+        ].join(" ").toLowerCase();
+
+        let s = 10;
+        // Prioridade Ofensiva Máxima
+        if (/dano|damage|ataque|attack|crit|critico|critical/.test(text)) s += 200;
+        if (/penetrac|ignore def|perfurac/.test(text)) s += 150;
+        if (/velocidade|speed|cooldown|recarga/.test(text)) s += 120;
+
+        // Bônus específico de vocação
+        if (/paladin|pally/.test(vocation)) {
+          if (/dist|flecha|sagrado|holy|arrow|bolt|besta|arco/.test(text)) s += 250;
+          if (/magic|ml/.test(text)) s += 100;
+        } else if (/knight/.test(vocation)) {
+          if (/melee|sword|axe|club|espada|machado|clava|area/.test(text)) s += 250;
+          if (/berserk|furia/.test(text)) s += 150;
+        } else {
+          if (/magic|spell|poder magico/.test(text)) s += 250;
+        }
+
+        // Nós de Vida/Defesa secundários
+        if (/vida|health|hp|armadura|armor|defesa|defense/.test(text)) s += 40;
+        if (/regeneracao|regen|mana regen|leech/.test(text)) s += 50;
+
+        return s;
+      };
+
+      // Ordena nós disponíveis por maior pontuação ofensiva
+      availableNodes.sort((a, b) => scoreNode(b) - scoreNode(a));
+
       let clicked = 0;
-      for (const node of nodes.slice(0, 6)) {
-        if (node.classList.contains("locked") || node.classList.contains("maxed")) continue;
+      for (const node of availableNodes.slice(0, Math.min(nPts, 8))) {
         node.click();
         clicked += 1;
-        await sleep(120);
+        await sleep(150);
       }
-      const ok = root.querySelector("button.tree-confirm-ok");
+      const ok = root.querySelector("button.tree-confirm-ok, button.btn-confirm, button.confirm-tree");
       if (ok && vis(ok) && !ok.disabled) {
         ok.click();
-        events.push("confirmou " + clicked + " nos");
-      } else if (clicked) events.push("alocou " + clicked + " sem confirmar (botao off)");
-      else events.push("nos locked / sem available");
+        events.push(`confirmou ${clicked} nós ofensivos`);
+      } else if (clicked) {
+        events.push(`alocou ${clicked} nós ofensivos sem confirmar`);
+      } else {
+        events.push("nos locked / sem available");
+      }
     });
     return { ok: true, skip: miss?.skip, events };
   }
