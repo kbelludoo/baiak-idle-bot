@@ -1,4 +1,4 @@
-async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot, weaknesses, resistances, preferredElement }) => {
+async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot, weaknesses, resistances, preferredElement, charLevel }) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // offsetParent é nulo para controles position:fixed (justamente o dock
   // usado na viewport móvel/headless). Use a geometria/estilo real para não
@@ -135,6 +135,8 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot, weaknesses,
     for (const word of prefer) {
       for (const row of rows) {
         if (row.classList.contains("lock")) continue;
+        const reqLvl = levelOf(row);
+        if (charLevel && charLevel > 0 && reqLvl > charLevel) continue;
         const blob = txt(row);
         if (!blob.includes(word) || /n[aã]o bebe|nenhuma \(/.test(blob)) continue;
         const btn = useOf(row);
@@ -150,7 +152,13 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot, weaknesses,
 
   const pickFirstUse = (method) => {
     const rows = Array.from(picker.querySelectorAll(".sp-book-row, .im-row, .stage-row, [class*='sp-']"))
-      .filter((row) => !row.classList.contains("lock") && !/n[aã]o bebe|nenhuma \(/.test((row.textContent || "").toLowerCase()));
+      .filter((row) => {
+        if (row.classList.contains("lock")) return false;
+        if (/n[aã]o bebe|nenhuma \(/.test((row.textContent || "").toLowerCase())) return false;
+        const reqLvl = levelOf(row);
+        if (charLevel && charLevel > 0 && reqLvl > charLevel) return false;
+        return true;
+      });
     const levelOf = (row) => {
       const m = (row.textContent || "").match(/lvl\s*(\d+)/i);
       return m ? parseInt(m[1], 10) : 0;
@@ -270,15 +278,18 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot, weaknesses,
       if (!el) continue;
       const title = String(el.getAttribute("title") || el.getAttribute("aria-label") || el.textContent || "").trim();
       const isEmpty = !title || !!el.querySelector("small") || /slot \d+ \+|escolher magia|choose spell/i.test(title);
+      const reqLvl = (title.match(/lvl\s*(\d+)/i) ? parseInt(title.match(/lvl\s*(\d+)/i)[1], 10) : 0);
+      const isOverLevel = charLevel && charLevel > 0 && reqLvl > charLevel;
       const curElem = detectElem(title);
       const isResistant = curElem && resistSet.has(curElem);
       const isWeakness = curElem && weakList.includes(curElem);
 
       // Sincroniza se:
       // 1. O slot está vazio; OU
-      // 2. A magia atual bate no elemento resistente da criatura; OU
-      // 3. É o slot principal (u=0) e não é do elemento de fraqueza recomendado
-      const needChange = isEmpty || isResistant || (u === 0 && !isWeakness && weakList.length > 0);
+      // 2. A magia atual exige nível superior ao do personagem (ex: lvl 300 num EK 207); OU
+      // 3. A magia atual bate no elemento resistente da criatura; OU
+      // 4. É o slot principal (u=0) e não é do elemento de fraqueza recomendado
+      const needChange = isEmpty || isOverLevel || isResistant || (u === 0 && !isWeakness && weakList.length > 0);
       if (!needChange) continue;
 
       el.click();
@@ -322,16 +333,34 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot, weaknesses,
         hit = pickByWords([...(metaAoe || []), ...(metaStrike || [])], "sync-all");
       }
 
+      // Fallback de dano máximo: se nenhuma palavra-chave bateu com o elemento,
+      // escolhe a melhor magia utilizável liberada para garantir DPS máximo (nunca deixa slot vazio)
+      if (!hit) {
+        clickTab(isAoePreferred ? /^(área|area)$/i : /^(ataque|strike)$/i);
+        await sleep(100);
+        hit = pickFirstUse("sync-first-pref");
+      }
+      if (!hit) {
+        clickTab(!isAoePreferred ? /^(área|area)$/i : /^(ataque|strike)$/i);
+        await sleep(100);
+        hit = pickFirstUse("sync-first-alt");
+      }
+      if (!hit) {
+        clickTab(/^(todas|all)$/i);
+        await sleep(100);
+        hit = pickFirstUse("sync-first-all");
+      }
+
       if (hit) {
         events.push(`SYNC_EQUIPOU_SLOT_${s}_${u}: ${hit.picked}`);
         totalChanged++;
-      } else if (isResistant) {
+      } else if (isResistant || isOverLevel) {
         const clearBtn = Array.from(picker.querySelectorAll("button, .btn")).find((b) =>
           /^(limpar|remover|clear|remove)$/i.test((b.textContent || "").trim())
         );
         if (clearBtn && vis(clearBtn)) {
           clearBtn.click();
-          events.push(`SYNC_REMOVEU_RESISTENTE_SLOT_${s}_${u}`);
+          events.push(`SYNC_REMOVEU_INVALIDA_SLOT_${s}_${u}`);
           totalChanged++;
         }
       }

@@ -2528,6 +2528,11 @@ async function main() {
           needsSpellSync = true;
           lastSpellSyncHunt = normTarget;
         }
+        // Dispara sincronização de dano máximo se houver qualquer slot de magia vazio ou incompleto na party
+        const hasEmptySpellSlots = (magicState.empty || 0) > 0 || Object.values((magicState as any).slots || {}).some((s: any) => (s?.empty || 0) > 0);
+        if (hasEmptySpellSlots && now - lastSpellSyncAttempt >= 15000) {
+          needsSpellSync = true;
+        }
         const optimal = getOptimalSpellRotation(currentHuntTarget);
         const jevElement = String((magicState as any).recommended_element || '').toLowerCase();
         const jevRotation = String((magicState as any).rotation_style || '');
@@ -2595,6 +2600,8 @@ async function main() {
                 const partySlots = [0, 1, 2];
                 let anyChanged = false;
                 for (const sid of partySlots) {
+                  const member = partyMembersOut.find((m: any) => m.slot === sid);
+                  const charLevel = Number(member?.level || cachedAccountCharsList[sid]?.level || telemetry.level) || 0;
                   const res = await safeEval<any>(pageRef, "spell", {
                     metaAoe: optimal.metaAoe,
                     metaStrike: optimal.metaStrike,
@@ -2604,6 +2611,7 @@ async function main() {
                      rotationStyle: jevRotation,
                     job: "sync-element",
                     slot: sid,
+                    charLevel,
                   }, 15000);
                   if (res?.changed > 0) anyChanged = true;
                   if (res?.events?.length) {
