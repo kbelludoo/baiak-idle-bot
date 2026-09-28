@@ -91,6 +91,15 @@ async (target) => {
   }
 
   // Fecha modais bloqueantes indesejados antes de abrir teleporte
+  for (const modalId of ["changelog-modal", "offline-modal", "daily-modal"]) {
+    const m = document.getElementById(modalId);
+    if (m && !m.classList.contains("hidden")) {
+      const c = m.querySelector(`[id*='${modalId}-close'], #changelog-modal-close, .im-close, .close-btn, .modal-close, [data-close]`);
+      if (c) c.click();
+      else m.classList.add("hidden");
+    }
+  }
+
   const picker0 = document.getElementById("picker-modal");
   const title0 = (picker0?.querySelector(".im-title")?.textContent || "").toLowerCase();
   const isStage = /fase|hunt|caçar|sequência|sequencia/.test(title0);
@@ -134,10 +143,9 @@ async (target) => {
     const tpBtn = document.querySelector('#teleport-menu .tp-opt[data-tp="hunts"]')
       || (tpScope.querySelector ? tpScope.querySelector('.tp-opt[data-tp="hunts"]') : null)
       || Array.from(tpScope.querySelectorAll('#teleport-menu .tp-opt, button, .tp-opt, [class*="tp-opt" i]'))
-        .find((b) => /hunts|fases/i.test((b.textContent || "").trim()))
-      || Array.from(document.querySelectorAll("button, [role='button']"))
-        .find((b) => /^(hunts|fases|caçar)$/i.test((b.textContent || "").trim()));
+        .find((b) => /hunts|fases/i.test((b.textContent || "").trim()));
     if (!tpBtn) return { success: false, reason: "no-hunts-btn", dbg, rows: 0, unlocked: [] };
+    if (tpBtn.disabled) return { success: false, reason: "hunts-btn-disabled", dbg, rows: 0, unlocked: [] };
     tpBtn.click();
   }
 

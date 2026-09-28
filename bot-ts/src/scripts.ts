@@ -10,7 +10,7 @@ const SCRIPTS: Record<string, string> = {};
 // for liberado no finally, a próxima ação inicia outro evaluate enquanto o
 // anterior ainda está pendente e o renderer entra numa cascata de timeouts.
 // Mantemos o promise vivo no lock até ele realmente terminar.
-const ACTIVE_EVAL_PAGES = new WeakMap<object, Promise<unknown>>();
+const ACTIVE_EVAL_PAGES = new WeakMap<object, { promise: Promise<unknown>; startedAt: number }>();
 
 export function loadScript(name: string): string {
   if (SCRIPTS[name]) return SCRIPTS[name];
@@ -47,21 +47,22 @@ export async function safeEval<T = any>(
   if (!page) return null;
   const pageObject = page as unknown as object;
 
-  // Se já houver um evaluate em andamento na página, aguarde até 6s para ele liberar
+  // Se já houver um evaluate em andamento na página, aguarde até waitExistingMs para ele liberar
   if (ACTIVE_EVAL_PAGES.has(pageObject)) {
     const existing = ACTIVE_EVAL_PAGES.get(pageObject);
     if (existing) {
-      try {
-        await Promise.race([
-          existing,
-          new Promise((r) => setTimeout(r, waitExistingMs))
-        ]);
-      } catch (_) {}
+      if (Date.now() - existing.startedAt > 25000) {
+        // Evaluate anterior travou por mais de 25s — limpa o lock para não travar o bot
+        ACTIVE_EVAL_PAGES.delete(pageObject);
+      } else {
+        try {
+          await Promise.race([
+            existing.promise,
+            new Promise((r) => setTimeout(r, waitExistingMs))
+          ]);
+        } catch (_) {}
+      }
     }
-    // Se o evaluate anterior ainda está pendurado (timeout externo cortou uma
-    // execução que o Chromium segue rodando), NÃO inicie outro evaluate agora:
-    // ele formaria uma fila de promises dentro do renderer e deixaria tudo mais
-    // lento. Retorna null e deixa a ação seja reenfileirada no próximo ciclo.
     if (ACTIVE_EVAL_PAGES.has(pageObject)) return null;
   }
 
@@ -92,12 +93,15 @@ export async function safeEval<T = any>(
     ) as Promise<T>;
 
     let trackedEvaluate: Promise<T>;
+    const entry = { promise: Promise.resolve(), startedAt: Date.now() };
     trackedEvaluate = evaluatePromise.finally(() => {
-      if (ACTIVE_EVAL_PAGES.get(pageObject) === trackedEvaluate) {
+      const cur = ACTIVE_EVAL_PAGES.get(pageObject);
+      if (cur && cur.promise === trackedEvaluate) {
         ACTIVE_EVAL_PAGES.delete(pageObject);
       }
     });
-    ACTIVE_EVAL_PAGES.set(pageObject, trackedEvaluate);
+    entry.promise = trackedEvaluate;
+    ACTIVE_EVAL_PAGES.set(pageObject, entry);
 
     const result = await Promise.race([
       trackedEvaluate,

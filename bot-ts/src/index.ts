@@ -770,6 +770,18 @@ async function main() {
             if (c) (c as HTMLElement).click();
             else helper.classList.add("hidden");
           }
+          const changelog = document.getElementById("changelog-modal");
+          if (changelog && !changelog.classList.contains("hidden")) {
+            const c = changelog.querySelector("#changelog-modal-close, .im-close, .close-btn, .modal-close, [data-close]");
+            if (c) (c as HTMLElement).click();
+            else changelog.classList.add("hidden");
+          }
+          const offlineModal = document.getElementById("offline-modal");
+          if (offlineModal && !offlineModal.classList.contains("hidden")) {
+            const c = offlineModal.querySelector("#offline-modal-close, .im-close, .close-btn, .modal-close, [data-close]");
+            if (c) (c as HTMLElement).click();
+            else offlineModal.classList.add("hidden");
+          }
           const confirm = document.getElementById("confirm-modal");
           if (confirm && !confirm.classList.contains("hidden") && !/comprar|buy|lance|bid|leil|loja|store|pix|vip|premium|donate/i.test(confirm.textContent || "")) {
             const yes = Array.from(confirm.querySelectorAll("button, .btn")).find((b) =>
@@ -1304,8 +1316,8 @@ async function main() {
     if (telemetry.inTreino) {
       telemetry.inTreino = false;
       subsystems.auto_treino = { status: "FUNCIONAL", detail: "Comando manual do operador — saindo do treino" };
-      sendStage(pageRef, target.id).catch(() => null);
     }
+    sendStage(pageRef, target.id).catch(() => null);
     spellSlotCooldown.clear();
     lastSpellGear = 0;
     needsSpellSync = true;
@@ -1395,6 +1407,9 @@ async function main() {
       pendingHuntChange = null;
       activateManualHunt(request);
       writeStatusFile();
+      sendStage(pageRef, targetId).then((ok) => {
+        if (ok) console.log(`[${new Date().toLocaleTimeString()}] 🏹 [API HUNT] Disparo direto de stage para ${targetName} (${targetId})`);
+      }).catch(() => null);
       return { ok: true, message: `Hunt ${targetName} iniciada com sucesso.`, pending: false };
     },
     onSetTreino: async (enabled: boolean) => {

@@ -698,6 +698,22 @@ export const KERNEL_SOURCE = `
 
   try {
     var NativeWS = window.WebSocket;
+    if (NativeWS && !NativeWS.__baiakConstructPatched) {
+      try {
+        var PatchedWS = function(url, protocols) {
+          var ws = protocols !== undefined ? new NativeWS(url, protocols) : new NativeWS(url);
+          try { sockets.add(ws); } catch (_) {}
+          return ws;
+        };
+        PatchedWS.prototype = NativeWS.prototype;
+        PatchedWS.CONNECTING = NativeWS.CONNECTING;
+        PatchedWS.OPEN = NativeWS.OPEN;
+        PatchedWS.CLOSING = NativeWS.CLOSING;
+        PatchedWS.CLOSED = NativeWS.CLOSED;
+        PatchedWS.__baiakConstructPatched = true;
+        window.WebSocket = PatchedWS;
+      } catch (_) {}
+    }
     if (NativeWS && NativeWS.prototype && !NativeWS.prototype.__baiakRoomHooked) {
       Object.defineProperty(NativeWS.prototype, '__baiakRoomHooked', { value: true });
       var nativeSend = NativeWS.prototype.send;
@@ -716,9 +732,11 @@ export const KERNEL_SOURCE = `
       };
       var nativeAdd = NativeWS.prototype.addEventListener;
       NativeWS.prototype.addEventListener = function(evType, fn, opts) {
+        try { sockets.add(this); } catch (_) {}
         if (evType === 'message' && typeof fn === 'function' && !fn.__baiakRoomWrapped) {
           var wrapped = function(ev) {
             try {
+              try { sockets.add(this); } catch (_) {}
               if (ev && ev.data instanceof ArrayBuffer) observe(ev.data);
               else if (ev && ev.data instanceof Blob) { ev.data.arrayBuffer().then(observe).catch(function(){}); }
               else if (ev && toU8(ev.data)) observe(ev.data);
@@ -744,6 +762,7 @@ export const KERNEL_SOURCE = `
                 var self = this;
                 var wrapped = function(ev) {
                   try {
+                    try { sockets.add(self); } catch (_) {}
                     if (ev && ev.data instanceof ArrayBuffer) observe(ev.data);
                     else if (ev && ev.data instanceof Blob) { ev.data.arrayBuffer().then(observe).catch(function(){}); }
                     else if (ev && toU8(ev.data)) observe(ev.data);
@@ -788,6 +807,12 @@ export const KERNEL_SOURCE = `
     return { sent: n, bytes: bytes.length };
   }
 
+  function directSendHunt(huntId) {
+    var m = directSend('mode', { mode: 'hunt' });
+    var s = directSend('stage', { huntId: huntId });
+    return { modeSent: m.sent, stageSent: s.sent, ok: s.sent > 0 };
+  }
+
   // Lê NWe() indiretamente: o jogo renderiza players/hp/huntId/wave no overlay
   // battery-save a partir do ROOM_STATE. Espelha para leitura O(1) sem DOM walk.
   function snapshotBatterySave() {
@@ -820,6 +845,7 @@ export const KERNEL_SOURCE = `
   setInterval(snapshotBatterySave, 2000);
 
   try { Object.defineProperty(window, '__baiak_send', { value: directSend, configurable: true }); } catch (_) { window.__baiak_send = directSend; }
+  try { Object.defineProperty(window, '__baiak_send_hunt', { value: directSendHunt, configurable: true }); } catch (_) { window.__baiak_send_hunt = directSendHunt; }
   try { Object.defineProperty(window, '__room', { value: { send: directSend }, configurable: true }); } catch (_) { window.__room = { send: directSend }; }
   try { Object.defineProperty(window, '__baiak_state', { value: state, configurable: true }); } catch (_) { window.__baiak_state = state; }
   try { Object.defineProperty(window, '__baiak_events', { value: events, configurable: true }); } catch (_) { window.__baiak_events = events; }

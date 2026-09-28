@@ -79,7 +79,37 @@ export async function roomDrainEvents(page: Page | null): Promise<Array<{ t: num
 
 // --- Atalhos tipados para os sends críticos (nomes idênticos ao bundle) ---
 
-export const sendStage = (page: Page | null, huntId: string) => roomSend(page, 'stage', { huntId });
+export const sendMode = (page: Page | null, mode: string) => roomSend(page, 'mode', { mode });
+
+export const sendStage = async (page: Page | null, huntId: string): Promise<boolean> => {
+  if (!page) return false;
+  try {
+    const res = await page.evaluate(
+      (hId: string) => {
+        const w = window as any;
+        if (typeof w.__baiak_send_hunt === 'function') {
+          try {
+            const r = w.__baiak_send_hunt(hId);
+            return Boolean(r && r.ok);
+          } catch (_) {}
+        }
+        const fn = w.__baiak_send || (w.__room && w.__room.send);
+        if (typeof fn !== 'function') return false;
+        try {
+          fn('mode', { mode: 'hunt' });
+          const r = fn('stage', { huntId: hId });
+          return !!r && r.sent > 0;
+        } catch (_) {
+          return false;
+        }
+      },
+      huntId
+    ).catch(() => false);
+    return Boolean(res);
+  } catch {
+    return false;
+  }
+};
 export const sendHelper = (page: Page | null, slot: number, cfg: any) => roomSend(page, 'helper', { slot, cfg });
 export const sendRotation = (page: Page | null, slot: number, spells: any) => roomSend(page, 'rotation', { slot, spells });
 export const sendSpellMinMobs = (page: Page | null, slot: number, words: string, minMobs: number) =>
