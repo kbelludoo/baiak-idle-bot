@@ -22,6 +22,12 @@ export interface ActionTask<T = any> {
   lane?: ActionLane;
 }
 
+/**
+ * Callback chamado toda vez que uma tarefa expira por timeout.
+ * Usado pelo detector de browser travado para acionar reload automático.
+ */
+export type TaskTimeoutCallback = (taskName: string, consecutiveCount: number) => void;
+
 function laneOf(task: ActionTask): ActionLane {
   if (task.lane) return task.lane;
   if (task.name === 'hunt' || task.name === 'force-hunt' || task.name === 'treino' || task.name === 'boss') return 'hunt';
@@ -34,6 +40,11 @@ export class ActionQueue {
   private inFlight: ActionTask | null = null;
   private scheduled: boolean = false;
   private isProcessing: boolean = false;
+
+  /** Quantos timeouts consecutivos ocorreram sem nenhum sucesso entre eles. */
+  public consecutiveTimeouts: number = 0;
+  /** Callback opcional chamado a cada timeout consecutivo. */
+  public onTaskTimeout: TaskTimeoutCallback | null = null;
 
   enqueue<T>(task: ActionTask<T>): boolean {
     const lane = laneOf(task);
@@ -90,8 +101,19 @@ export class ActionQueue {
             setTimeout(() => reject(new Error(`Action '${task.name}' timed out after ${task.timeoutMs}ms`)), task.timeoutMs)
           ),
         ]);
+        // Sucesso: reseta o contador de timeouts consecutivos
+        this.consecutiveTimeouts = 0;
       } catch (err: any) {
-        console.warn(`[ACTION_QUEUE] ⚠️ Tarefa '${task.name}' falhou ou expirou: ${err?.message || err}`);
+        const msg: string = err?.message || String(err);
+        const isTimeout = msg.includes('timed out');
+        if (isTimeout) {
+          this.consecutiveTimeouts += 1;
+          this.onTaskTimeout?.(task.name, this.consecutiveTimeouts);
+        } else {
+          // Erros que não são timeout também resetam (browser respondeu, só falhou)
+          this.consecutiveTimeouts = 0;
+        }
+        console.warn(`[ACTION_QUEUE] ⚠️ Tarefa '${task.name}' falhou ou expirou: ${msg}`);
       } finally {
         this.inFlight = null;
       }
@@ -103,6 +125,7 @@ export class ActionQueue {
   clear(): void {
     this.queue = [];
     this.inFlight = null;
+    this.consecutiveTimeouts = 0;
   }
 
   /** Remove apenas ações ainda enfileiradas de uma lane, preservando gear e extras. */

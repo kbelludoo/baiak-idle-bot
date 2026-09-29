@@ -14,6 +14,8 @@ export class Watchdog {
   private lastRecoveryAt = 0;
   private recoveryAttempts = 0;
   private consecutiveInactive = 0;
+  /** Último reload disparado pelo detector de browser travado. */
+  private lastStuckReloadAt = 0;
 
   public onWsOpen() {
     this.wsConnected = true;
@@ -43,6 +45,37 @@ export class Watchdog {
   public getInactiveSecs(): number {
     return Math.round((Date.now() - this.lastWsFrameTime) / 1000);
   }
+
+  /**
+   * Chamado pelo detector de browser travado quando N timeouts consecutivos
+   * ocorrem na ActionQueue. Dispara um page.reload() com cooldown de 2 minutos
+   * para evitar loops. Threshold: 4 timeouts consecutivos.
+   */
+  public async notifyStuckBrowser(
+    taskName: string,
+    count: number,
+    page: Page,
+  ): Promise<void> {
+    const THRESHOLD = 4;
+    const COOLDOWN_MS = 120_000; // 2 minutos entre reloads por stuck
+    if (count < THRESHOLD) return;
+    const now = Date.now();
+    if (now - this.lastStuckReloadAt < COOLDOWN_MS) {
+      console.warn(`[WATCHDOG] 🧱 Browser stuck (${count}x timeout em '${taskName}') — cooldown ativo, aguardando`);
+      return;
+    }
+    this.lastStuckReloadAt = now;
+    console.warn(`[WATCHDOG] 🔴 Browser travado detectado: ${count} timeouts consecutivos em '${taskName}'. Forçando reload...`);
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+      this.lastWsFrameTime = Date.now();
+      this.bootStartedAt = Date.now();
+      console.log(`[WATCHDOG] ✅ Reload por browser stuck concluído`);
+    } catch (err: any) {
+      console.warn(`[WATCHDOG] ⚠️ Reload por stuck falhou: ${err?.message || err}`);
+    }
+  }
+
 
   public async checkAndRecover(page: Page, cdp: CDPSession): Promise<WatchdogResult> {
     const result: WatchdogResult = { reconnected: false, clearedModals: 0 };

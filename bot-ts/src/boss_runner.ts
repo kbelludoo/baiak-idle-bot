@@ -243,8 +243,8 @@ export class SoftwareBossRunner {
    * Se o servidor enviar bossgate.chargesMax, usa esse valor diretamente.
    */
   private resolveChargesMax(snapshot: BossPageSnapshot): number {
-    // Se o servidor forneceu o maximo explicitamente via bossgate (valor diferente do padrao legacy 20)
-    if (snapshot.bossChargesMax > 0 && snapshot.bossChargesMax !== 20) {
+    // Se o servidor forneceu o maximo explicitamente (via bossgate ou window.m)
+    if (snapshot.bossChargesMax > 0) {
       return snapshot.bossChargesMax;
     }
     // Inferido: conta VIP tem 5 tentativas/dia; Free tem 3
@@ -253,7 +253,7 @@ export class SoftwareBossRunner {
 
   /**
    * Extrai o estado dos chefes do contexto do jogo no navegador.
-   * Le: __baiak_state (kernel hook) que ja captura bossgate e autobossstate.
+   * Le: __baiak_state (kernel hook) e window.m (bundle nativo) que capturam bossgate e autobossstate.
    */
   public async getSnapshot(page: Page | null, telemetry?: TelemetryState): Promise<BossPageSnapshot | null> {
     if (!page) return null;
@@ -261,24 +261,29 @@ export class SoftwareBossRunner {
       try {
         const w = window as any;
         const bs = w.__baiak_state || {};
+        const m = w.m || {};
         const cds: Record<string, number> = {};
 
         // Cooldowns vindos do bossgate (via kernel hook) ou do mine (fallback legado)
-        const rawCds = bs.bossCooldowns;
+        const rawCds = bs.bossCooldowns || m.bossCooldowns;
         if (rawCds && typeof rawCds === 'object') {
           for (const [k, v] of Object.entries(rawCds)) {
             if (typeof v === 'number') cds[k] = v;
           }
         }
 
-        // Cargas vindas do bossgate (pacote real do servidor, capturado pelo kernel)
+        // Cargas vindas do bossgate (pacote real do servidor, capturado pelo kernel ou window.m)
         const bossgate = bs.bossgate || {};
         const rawCharges = (bs.bossChargesLeft !== null && bs.bossChargesLeft !== undefined)
           ? Number(bs.bossChargesLeft)
-          : (bossgate.chargesLeft !== undefined ? Number(bossgate.chargesLeft) : null);
+          : (bossgate.chargesLeft !== undefined
+            ? Number(bossgate.chargesLeft)
+            : (m.bossChargesLeft !== undefined ? Number(m.bossChargesLeft) : null));
         const rawChargesMax = (bs.bossChargesMax !== null && bs.bossChargesMax !== undefined)
           ? Number(bs.bossChargesMax)
-          : (bossgate.chargesMax !== undefined ? Number(bossgate.chargesMax) : 0);
+          : (bossgate.chargesMax !== undefined
+            ? Number(bossgate.chargesMax)
+            : (m.bossChargesMax !== undefined ? Number(m.bossChargesMax) : 0));
 
         // autobossstate: until > now = conta tem passe VIP Auto Boss da Store
         const abs = bs.autobossstate || {};
@@ -399,9 +404,14 @@ export class SoftwareBossRunner {
       this.currentBossId = snapshot.activeBossId;
       if (!this.fightStartedAt) this.fightStartedAt = now;
 
-      // Timeout de seguranca: se o combate durar mais de 4 minutos, avisa
+      // Timeout de seguranca: se o combate durar mais de 4 minutos, reseta para nao travar o bot
       if (now - this.fightStartedAt > 240_000) {
-        console.warn(`[${new Date().toLocaleTimeString()}] [BOSS-RUNNER] Combate contra ${this.currentBossId} excedeu 4min - possivel travamento`);
+        console.warn(`[${new Date().toLocaleTimeString()}] [BOSS-RUNNER] Combate contra ${this.currentBossId} excedeu 4min - forçando recuperação e saída`);
+        this.runnerState = 'COLLECTING';
+        this.currentBossId = null;
+        this.fightStartedAt = 0;
+        await roomSend(page, 'reward', { action: 'collectall' }).catch(() => null);
+        return { handled: true, action: 'boss_timeout_recovered' };
       }
       return { handled: true, action: 'fighting_boss', detail: this.currentBossId };
     }

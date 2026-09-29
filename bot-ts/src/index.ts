@@ -21,6 +21,7 @@ import { simulateHunt } from "./hunt_sim";
 import { FormulaVersionStore } from "./formula_versions";
 import { checkAndBuyBossGear } from "./boss_collector";
 import { SoftwareBossRunner } from "./boss_runner";
+import { AutoRestoreEngine } from "./auto_restore";
 import type { TelemetryState, SubsystemInfo } from "./types";
 
 // ===================================================================
@@ -507,6 +508,7 @@ async function main() {
     cyclopedia_bestiary: { status: "FUNCIONAL", detail: "Auto-claim de bestiário e catálogo de monstros" },
     forge_imbue: { status: "FUNCIONAL", detail: "Auto-tier dust conv e imbuements seguros" },
     watchdog: { status: "FUNCIONAL", detail: "Auto-Reconnect + Hunt Resume ativo" },
+    auto_restore: { status: "FUNCIONAL", detail: "Modo Sempre Ativo (Farm, Treino e Chefe)" },
     hunt_analyzer: { status: "FUNCIONAL", detail: "Coleta de telemetria contínua ativa" },
     daily_reward: { status: "VERIFICANDO", detail: "Monitorando recompensas diárias" },
     auto_promote: { status: "AGUARDANDO_REQUISITO", detail: "Aguardando nível 20 e 20.000 gold" },
@@ -515,6 +517,8 @@ async function main() {
       detail: config.jevEnabled ? (config.jevApiKey ? "JEV System One (API Conectada)" : "JEV System One (Fallback Determinístico Local)") : "Desativado",
     },
   };
+
+  const autoRestore = new AutoRestoreEngine();
 
   const jev = getJevEngine({
     apiKey: config.jevApiKey,
@@ -532,6 +536,15 @@ async function main() {
   const protocolMapper = new ProtocolMapper(dataDir);
   const formulaVersions = new FormulaVersionStore(dataDir);
   const actionQueue = new ActionQueue();
+  // Detector de browser travado: quando 4+ ações consecutivas expiram por
+  // timeout (sem nenhum sucesso entre elas), o Chromium provavelmente está
+  // com um modal bloqueante ou o renderer congelou. O watchdog força reload.
+  actionQueue.onTaskTimeout = (taskName, count) => {
+    if (pageRef) {
+      watchdog.notifyStuckBrowser(taskName, count, pageRef).catch(() => null);
+    }
+  };
+
   // Alvo manual autoritativo. O valor do ambiente vale apenas como alvo
   // inicial; uma escolha do painel invalida ações antigas da fila.
   let manualHuntId: string | null = persistedManualHuntId
@@ -608,9 +621,12 @@ async function main() {
     const activeText = telemetry.hunt && telemetry.hunt !== 'Conectando...' && telemetry.hunt !== '—'
       ? telemetry.hunt : '';
     const activeMatch = matchHunt(activeText);
-    const selectedHuntId = activeMatch?.id
-      || manualHuntId
+    // manualHuntId e authoritativeHuntId têm prioridade máxima sobre telemetry
+    // transitório para evitar que pacotes WebSocket de outras salas (ou de
+    // chat/eventos paralelos) façam a hunt exibida no painel piscar brevemente.
+    const selectedHuntId = manualHuntId
       || authoritativeHuntId
+      || activeMatch?.id
       || (profiler as any).activeHuntId
       || null;
     const selectedHunt = selectedHuntId
@@ -619,7 +635,15 @@ async function main() {
     const mapSnapshot = protocolMapper.snapshot();
     const selectedScore: any = selectedHuntId ? (mapSnapshot.scores as any)?.[selectedHuntId] || {} : {};
     const selectedMatrix: any = selectedHuntId ? ((huntMatrix as any).matrix?.[selectedHuntId] || {}) : {};
-    const analyzerBelongsToSelected = !!selectedHuntId && activeMatch?.id === selectedHuntId;
+    // O analyzer pertence à hunt se o jogo estiver em qualquer um dos IDs
+    // conhecidos: o alvo manual, o authoritativo ou o selectedHuntId de display.
+    // Não pode usar apenas selectedHuntId porque manualHuntId tem prioridade de
+    // display mas o activeMatch pode diferir brevemente durante teleportes.
+    const analyzerBelongsToSelected = !!activeMatch?.id && (
+      activeMatch.id === selectedHuntId ||
+      activeMatch.id === manualHuntId ||
+      activeMatch.id === authoritativeHuntId
+    );
     const analyzer = analyzerBelongsToSelected ? latestAnalyzers : {};
     const analyzerSessionTime = String((analyzer as any).session_time || '');
     const analyzerWindowSeconds = (() => {
@@ -1045,6 +1069,7 @@ async function main() {
         if (n >= 1_000) return `+${(n / 1_000).toFixed(1)}k XP`;
         return `+${n} XP`;
       };
+      subsystems.auto_restore = { status: "FUNCIONAL", detail: autoRestore.getStatus().detail };
       const snap = telemetry.snapshot({
         character: primaryChar?.name || partyMembersOut[0]?.name || null,
         subsystems,
@@ -1108,6 +1133,7 @@ async function main() {
          market_coins: telemetry.marketCoins,
          auction_status: extrasScheduler.lastAuctionStatus,
          boss_status: softwareBossRunner.getStatus(),
+         auto_restore: autoRestore.getStatus(),
          jev_recommendation: jevRecommendation,
       };
       writeFileSync(join(dataDir, "status.json"), JSON.stringify(statusData, null, 2), "utf-8");
@@ -1159,6 +1185,7 @@ async function main() {
         }
         if (newKills > 0) {
           profiler.recordKill(newKills);
+          autoRestore.reportProgress('combatlog');
           writeStatusFile();
         }
       } else if (typ === "log" || typ === "notify") {
@@ -1184,6 +1211,7 @@ async function main() {
           authoritativeHuntId = hid;
           telemetry.updateHunt(hid, 'websocket');
           protocolMapper.setActiveHunt(hid);
+          autoRestore.reportProgress('joined');
           if (manualHuntId && hid !== manualHuntId) {
             enforceManualHunt(hid, 'Sala conectada');
           }
@@ -2391,46 +2419,43 @@ async function main() {
           needsHuntEntry = false;
         }
 
-        // Heartbeat anti-stall: hunt conhecida sem progresso (kills/waves/gold)
-        // por 150s indica teleporte perdido / wave travada — força re-entrada.
-        // State-aware: ROOM_STATE/PATCH recente prova sala viva (farm lento ou
-        // boss longo gera poucos ROOM_DATA mas PATCH continua). Hunt de boss
-        // nunca dispara stall por heurística de kills.
-        if (isKnownHunt && !isCity && !telemetry.inTreino && now - lastStallCheck >= 15000) {
-          lastStallCheck = now;
-          const progressed = telemetry.kills !== lastProgressKills
-            || telemetry.waves !== lastProgressWaves
-            || telemetry.gold !== lastProgressGold;
-          if (progressed) {
-            lastProgressKills = telemetry.kills;
-            lastProgressWaves = telemetry.waves;
-            lastProgressGold = telemetry.gold;
-            lastProgressTime = now;
-          } else if (now - lastProgressTime >= 150000 && telemetry.online && !pendingHuntChange) {
-            const roomAliveMs = (telemetry as any).lastRoomStateAt ? now - (telemetry as any).lastRoomStateAt : Infinity;
-            const waveLow = String(wave || '').toLowerCase();
-            const looksBoss = /boss|chefe|final|últim|ultim/.test(waveLow);
-            if (roomAliveMs < 60000) {
-              // Sala viva (PATCH < 60s): só rearma, não re-entra.
-              lastProgressTime = now;
-            } else if (looksBoss) {
-              lastProgressTime = now;
-              console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [STALL] boss longo sem kills em ${wave} — sala viva, sem re-entrada`);
-            } else {
-              needsHuntEntry = true;
-              lastProgressTime = now;
-              console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [STALL] 150s sem progresso em ${wave} (k=${telemetry.kills} w=${telemetry.waves} g=${telemetry.gold}) — forçando re-entrada`);
+        // Auto-Restore Engine: monitoramento ativo de progresso (FARM, TREINO, CHEFE).
+        // Se detectar stall real (sem kills/waves/gold) ou se o personagem estiver
+        // preso na cidade/templo ou com o navegador congelado, aciona recuperação
+        // progressiva (fechar modais -> re-enviar stage -> limpar fila -> reload).
+        const autoRestoreTarget = forceId || sessionHuntId || (profiler as any).lastPlayedId || 'glooth-cave';
+        const autoRestoreResult = await autoRestore.evaluate(
+          now,
+          {
+            online: telemetry.online,
+            isCity,
+            inTreino: trainingActive,
+            stamina: telemetry.stamina,
+            wave,
+            kills: telemetry.kills,
+            waves: telemetry.waves,
+            gold: telemetry.gold,
+            level: telemetry.level,
+            bossActive: Boolean(softwareBossRunner.getStatus().activeBossId),
+            bossChargesLeft: softwareBossRunner.getStatus().chargesLeft,
+          },
+          autoRestoreTarget,
+          pageRef,
+          async (targetId) => {
+            const ok = await sendStage(pageRef, targetId);
+            return Boolean(ok);
+          },
+          closeStuckModals,
+          () => actionQueue.clear(),
+          async (reason) => {
+            if (pageRef) {
+              console.warn(`[AUTO-RESTORE] 🔄 Executando recarga da página (motivo: ${reason})...`);
+              await pageRef.reload({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
             }
           }
-        } else if (!isKnownHunt || isCity) {
-          // Fora de hunt: não conta stall, só rearma a base
-          if (now - lastStallCheck >= 15000) {
-            lastStallCheck = now;
-            lastProgressKills = telemetry.kills;
-            lastProgressWaves = telemetry.waves;
-            lastProgressGold = telemetry.gold;
-            lastProgressTime = now;
-          }
+        );
+        if (autoRestoreResult.needsHuntEntry) {
+          needsHuntEntry = true;
         }
 
         // Fila de Ação: Anti-encher (lootfilter 50% + sell-all no limiar).
@@ -2599,8 +2624,9 @@ async function main() {
                  console.log(`[${new Date().toLocaleTimeString()}] 🔮 [SPELL SYNC] Sincronizando magias para elemento ${selectedElement.toUpperCase()} (Hunt: ${currentHuntTarget})`);
                 const partySlots = [0, 1, 2];
                 let anyChanged = false;
+                const partyList = (telemetry as any).party_members || [];
                 for (const sid of partySlots) {
-                  const member = partyMembersOut.find((m: any) => m.slot === sid);
+                  const member = partyList.find((m: any) => m.slot === sid);
                   const charLevel = Number(member?.level || cachedAccountCharsList[sid]?.level || telemetry.level) || 0;
                   const res = await safeEval<any>(pageRef, "spell", {
                     metaAoe: optimal.metaAoe,

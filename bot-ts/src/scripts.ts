@@ -34,6 +34,13 @@ export function loadScript(name: string): string {
   return '';
 }
 
+export function forceResetEvalLocks(page?: Page | null): void {
+  if (!page) return;
+  try {
+    ACTIVE_EVAL_PAGES.delete(page as unknown as object);
+  } catch (_) {}
+}
+
 /**
  * Executa um script injetado de forma segura com timeout de proteção (padrão 12s).
  */
@@ -51,8 +58,8 @@ export async function safeEval<T = any>(
   if (ACTIVE_EVAL_PAGES.has(pageObject)) {
     const existing = ACTIVE_EVAL_PAGES.get(pageObject);
     if (existing) {
-      if (Date.now() - existing.startedAt > 25000) {
-        // Evaluate anterior travou por mais de 25s — limpa o lock para não travar o bot
+      if (Date.now() - existing.startedAt > 10000) {
+        // Evaluate anterior travou por mais de 10s — limpa o lock para não travar o bot
         ACTIVE_EVAL_PAGES.delete(pageObject);
       } else {
         try {
@@ -93,14 +100,14 @@ export async function safeEval<T = any>(
     ) as Promise<T>;
 
     let trackedEvaluate: Promise<T>;
-    const entry = { promise: Promise.resolve(), startedAt: Date.now() };
+    const entry: { promise: Promise<unknown>; startedAt: number } = { promise: Promise.resolve(), startedAt: Date.now() };
     trackedEvaluate = evaluatePromise.finally(() => {
       const cur = ACTIVE_EVAL_PAGES.get(pageObject);
       if (cur && cur.promise === trackedEvaluate) {
         ACTIVE_EVAL_PAGES.delete(pageObject);
       }
     });
-    entry.promise = trackedEvaluate;
+    entry.promise = trackedEvaluate as Promise<unknown>;
     ACTIVE_EVAL_PAGES.set(pageObject, entry);
 
     const result = await Promise.race([
@@ -111,12 +118,6 @@ export async function safeEval<T = any>(
     ]);
     return result;
   } catch (err: any) {
-    // Não liberar o lock aqui: um timeout externo não cancela o
-    // Runtime.evaluate do Chromium, e o evaluate subjacente ainda pode estar
-    // em execução. Se o lock for removido agora, a próxima ação inicia outro
-    // evaluate concorrente e o renderer entra na cascata de timeouts. O
-    // `.finally` do trackedEvaluate remove o lock quando ele realmente
-    // terminar (resultado real ou timeout interno da página).
     if (!err?.message?.includes('Execution context was destroyed')) {
       console.warn(`[SAFE_EVAL AVISO] [${name}] ${err?.message || err}`);
     }
