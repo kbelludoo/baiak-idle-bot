@@ -2,6 +2,13 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { TelemetryState } from './types';
 import type { Page, CDPSession } from 'puppeteer-core';
+import {
+  BEST_EQUIPMENT_CATALOG,
+  RECOMMENDED_FARMING_ROADMAP,
+  getRecommendedGear,
+  getBestInSlotBySlot,
+  getFarmingRecommendationForLevel,
+} from './best_in_slot';
 
 export interface ServerContext {
   getState: () => TelemetryState;
@@ -181,6 +188,34 @@ export function startServer(port: number, host: string, ctx: ServerContext) {
         } catch (err: any) {
           return Response.json({ ok: false, error: err?.message || String(err) }, { status: 500, headers: corsHeaders });
         }
+      }
+
+      // API: Best in Slot (BiS) recommendations per vocation
+      if (path === '/api/bis' || path === '/api/bis/') {
+        const state: any = ctx.getState();
+        const vocParam = url.searchParams.get('vocation') || state?.character?.vocation || state?.vocation || 'paladin';
+        const voc = (vocParam.toLowerCase()) as any;
+        const lvl = parseInt(url.searchParams.get('level') || state?.character?.level || state?.level || '3000', 10);
+        const bySlot = getBestInSlotBySlot(voc, lvl);
+        const allGear = getRecommendedGear(voc, lvl);
+        return Response.json({
+          vocation: voc,
+          level: lvl,
+          best_by_slot: bySlot,
+          all_recommended: allGear,
+        }, { headers: corsHeaders });
+      }
+
+      // API: Optimal Farming Hunts Roadmap
+      if (path === '/api/farming' || path === '/api/farming/') {
+        const state: any = ctx.getState();
+        const lvl = parseInt(url.searchParams.get('level') || state?.character?.level || state?.level || '1', 10);
+        const currentTier = getFarmingRecommendationForLevel(lvl);
+        return Response.json({
+          current_level: lvl,
+          current_phase: currentTier,
+          all_phases: RECOMMENDED_FARMING_ROADMAP,
+        }, { headers: corsHeaders });
       }
 
       // API: Live MJPEG Video Stream (rotas compat com server.py)
