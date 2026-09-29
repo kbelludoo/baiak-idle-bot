@@ -322,11 +322,9 @@ export class SoftwareBossRunner {
         pageSnap.bossCooldowns = telemCds;
       }
     }
-    if (!pageSnap.activeBossId && telemetry) {
-      const telemBoss = (telemetry as any).activeBossId;
-      if (typeof telemBoss === 'string' && telemBoss) {
-        pageSnap.activeBossId = telemBoss;
-      }
+    // activeBossId só é adotado se o espelho da página ou bossgate tiverem valor válido
+    if (!pageSnap.activeBossId && telemetry && (telemetry as any).activeBossId === null) {
+      pageSnap.activeBossId = '';
     }
 
     // O loop principal também recebe bossgate/autobossstate diretamente pelo

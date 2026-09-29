@@ -95,7 +95,7 @@ async ({ job, ...auctionCfg }) => {
     }
   };
 
-  const getTurnstileToken = async (timeoutMs = 30000) => {
+  const getTurnstileToken = async (timeoutMs = 5000) => {
     return new Promise((resolve) => {
       let resolved = false;
       const timer = setTimeout(() => {
@@ -188,7 +188,7 @@ async ({ job, ...auctionCfg }) => {
     const needsCaptcha = /captcha|turnstile|challenge|bot/i.test(errMsg) || res?.status === 403;
     if (needsCaptcha) {
       console.warn(`[BOT AUCTION] Servidor pediu captcha (${res?.status}: ${res?.error}) — tentando Turnstile`);
-      const token = await getTurnstileToken(20000);
+      const token = await getTurnstileToken(5000);
       if (token) {
         const res2 = await tryCreate(token);
         return { ...res2, label };
@@ -278,7 +278,7 @@ async ({ job, ...auctionCfg }) => {
       // subaba de gold após a consulta de sellerStatus. Ainda assim podemos
       // usar o fluxo oficial: widget Turnstile visível + mutação tRPC com a
       // senha e a confirmação exigidas pelo servidor.
-      const token = await getTurnstileToken(45000);
+      const token = await getTurnstileToken(5000);
       if (token && auctionCfg.accountPassword) {
         const fallbackRes = await trpcPostAuction("auction.createGold", {
           goldAmount: Math.floor(goldAmount),

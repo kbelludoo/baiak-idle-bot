@@ -363,6 +363,11 @@ async ({ metaAoe, metaStrike, healWords, manaWords, need, job, slot, weaknesses,
           events.push(`SYNC_REMOVEU_INVALIDA_SLOT_${s}_${u}`);
           totalChanged++;
         }
+      } else if (isEmpty) {
+        // Sem mais magias utilizáveis no grimório para este char — encerra slots vazios restantes
+        closePicker();
+        await sleep(100);
+        break;
       }
 
       closePicker();

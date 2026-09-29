@@ -36,7 +36,7 @@ export function startServer(port: number, host: string, ctx: ServerContext) {
     port,
     hostname: host,
     async fetch(req, srv) {
-      const url = new URL(req.url);
+      const url = new URL(req.url, 'http://127.0.0.1:8080');
       const path = url.pathname;
 
       const corsHeaders = {
@@ -158,8 +158,8 @@ export function startServer(port: number, host: string, ctx: ServerContext) {
           return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
         }
         try {
-          const body = await req.json() as { hunt_id?: string; auto?: boolean };
-          const huntId = String(body?.hunt_id || '').trim();
+          const body = await req.json() as { hunt_id?: string; huntId?: string; auto?: boolean };
+          const huntId = String(body?.hunt_id || (body as any)?.huntId || '').trim();
           const auto = Boolean(body?.auto || huntId === 'auto');
 
           if (!ctx.onSetHunt) {

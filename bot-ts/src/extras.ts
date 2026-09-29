@@ -629,16 +629,9 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
                   // preço ou autenticação.
                   const needsBrowserChallenge = /rob[oô]|robot|captcha|turnstile|challenge|bot/i.test(String(errMsg || ''));
                   if (needsBrowserChallenge) {
-                    logs.push('[AUCTION] Desafio anti-bot detectado — confirmação nativa ficará após o lance');
-                    deferredBrowserSell = {
-                      job: 'auction_execute',
-                      sellDecision: execSellDecision,
-                      buyDecision: null,
-                      goldToSell: scanRes.goldToSell,
-                      live: true,
-                      token: config.token,
-                      accountPassword: config.auctionSellPassword,
-                    };
+                    logs.push('[AUCTION] Desafio anti-bot (Turnstile/captcha) detectado no servidor — venda pausada por 30m para não travar o bot');
+                    this.lastTimes['auction'] = now + 1800000; // 30 min cooldown
+                    deferredBrowserSell = null;
                   }
                 }
               } catch (e: any) {
@@ -678,25 +671,9 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
             logs.push('[AUCTION] Ação bloqueada: JEV API não confirmou a compra; nenhum lance foi enviado.');
           }
 
-          // Só tenta o formulário nativo depois do lance. Assim, um widget
-          // anti-robô lento não faz uma oportunidade rentável expirar.
+          // Fallback nativo: apenas se houver deferredBrowserSell (com timeout seguro de 15s)
           if (deferredBrowserSell) {
-            let browserRes: any = null;
-            // O renderer também atende HUD, telemetria e efeitos. Se houver
-            // uma avaliação concorrente, safeEval retorna nulo para não
-            // formar uma fila de promises. Dê ao fluxo oficial algumas
-            // janelas para pegar o navegador livre antes de desistir.
-            for (let attempt = 1; attempt <= 2; attempt++) {
-              // Espera até 30s por uma avaliação anterior e deixa o fluxo
-              // oficial ter tempo para abrir modal, reautenticar e aguardar
-              // a confirmação nativa do jogo.
-              browserRes = await safeEval<any>(page, 'extra', deferredBrowserSell, 60000, 30000);
-              if (browserRes?.events && Array.isArray(browserRes.events)) break;
-              if (attempt < 2) {
-                logs.push(`[AUCTION] Navegador ocupado; nova tentativa oficial em 10s (${attempt}/2)`);
-                await new Promise((resolve) => setTimeout(resolve, 10000));
-              }
-            }
+            const browserRes = await safeEval<any>(page, 'extra', deferredBrowserSell, 15000, 5000);
             if (browserRes?.events && Array.isArray(browserRes.events)) {
               logs.push(...browserRes.events.map((event: any) => `[AUCTION] ${String(event)}`));
             } else {

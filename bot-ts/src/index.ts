@@ -1411,9 +1411,9 @@ async function main() {
       if (!matched) return { ok: false, error: `Hunt não encontrada: ${huntId}` };
       const targetId = matched?.id || huntId;
       const targetName = matched?.name || huntId;
-      const activeId = matchHunt(telemetry.hunt)?.id || authoritativeHuntId || manualHuntId || (profiler as any).activeHuntId || null;
-      const alreadyPending = pendingHuntChange?.id === targetId;
-      if (activeId === targetId && !pendingHuntChange && !telemetry.inTreino) {
+      const currentPhysicalHunt = matchHunt(telemetry.hunt)?.id;
+      if (currentPhysicalHunt === targetId && manualHuntId === targetId && !pendingHuntChange && !telemetry.inTreino) {
+        sendStage(pageRef, targetId).catch(() => null);
         return { ok: true, message: `${targetName} já é a hunt ativa.` };
       }
 
@@ -1429,16 +1429,17 @@ async function main() {
         requestedAt: new Date().toISOString(),
       };
 
-      // Quando o operador escolhe uma hunt no painel web, o comando tem prioridade máxima.
+      // Quando o operador escolhe uma hunt no painel web ou API, o comando tem prioridade máxima.
       // Ativa imediatamente e encerra qualquer estado de treino bloqueante.
       telemetry.inTreino = false;
       pendingHuntChange = null;
       activateManualHunt(request);
       writeStatusFile();
-      sendStage(pageRef, targetId).then((ok) => {
-        if (ok) console.log(`[${new Date().toLocaleTimeString()}] 🏹 [API HUNT] Disparo direto de stage para ${targetName} (${targetId})`);
-      }).catch(() => null);
-      return { ok: true, message: `Hunt ${targetName} iniciada com sucesso.`, pending: false };
+      const stageSent = await sendStage(pageRef, targetId).catch(() => false);
+      if (stageSent) {
+        console.log(`[${new Date().toLocaleTimeString()}] 🏹 [API HUNT] Disparo direto de stage para ${targetName} (${targetId})`);
+      }
+      return { ok: true, message: `Hunt ${targetName} iniciada com sucesso.`, pending: false, stageSent };
     },
     onSetTreino: async (enabled: boolean) => {
       forceTreino = Boolean(enabled);
@@ -1733,6 +1734,9 @@ async function main() {
                   if (manualHuntId && roomHuntId !== manualHuntId) {
                     enforceManualHunt(roomHuntId, 'Estado da sala');
                   }
+                }
+                if (rs.activeBossId !== undefined) {
+                  (telemetry as any).activeBossId = rs.activeBossId || null;
                 }
                 if (rs.queue?.admitToken) { queueFlow.admitToken = String(rs.queue.admitToken); }
                 if (rs.queue?.pos !== null && rs.queue?.pos !== undefined) { queueFlow.pos = rs.queue.pos; }
@@ -2553,9 +2557,12 @@ async function main() {
           needsSpellSync = true;
           lastSpellSyncHunt = normTarget;
         }
-        // Dispara sincronização de dano máximo se houver qualquer slot de magia vazio ou incompleto na party
-        const hasEmptySpellSlots = (magicState.empty || 0) > 0 || Object.values((magicState as any).slots || {}).some((s: any) => (s?.empty || 0) > 0);
-        if (hasEmptySpellSlots && now - lastSpellSyncAttempt >= 15000) {
+        // Dispara sincronização se houver personagem com 0 magias de ataque configuradas
+        const slotsObj = (magicState as any).slots || {};
+        const hasUnarmedMember = Object.keys(slotsObj).length > 0 && Object.values(slotsObj).some((s: any) =>
+          s && s.ready !== false && ((s.aoe || 0) + (s.strike || 0) === 0)
+        );
+        if (hasUnarmedMember && now - lastSpellSyncAttempt >= 60000) {
           needsSpellSync = true;
         }
         const optimal = getOptimalSpellRotation(currentHuntTarget);
@@ -2617,7 +2624,7 @@ async function main() {
             id: "spell_element_sync",
             name: "spell",
             priority: 4,
-            timeoutMs: 30000,
+            timeoutMs: 45000,
             run: async () => {
               try {
                  const selectedElement = jevElement || optimal.preferredElement;

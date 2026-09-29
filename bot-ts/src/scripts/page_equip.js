@@ -14,6 +14,7 @@ async (args) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const vis = (el) => !!(el && el.offsetParent !== null);
   const events = [];
+  const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
   const charVoc = norm(vocation || "");
   const charLevel = Number(level || 100);
@@ -115,7 +116,6 @@ async (args) => {
     mythical: 5, mythic: 5, mitico: 5, "mítico": 5, mitica: 5, "mítica": 5,
   };
   const RARITY_NAME = ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical"];
-  const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
   const rarityFromName = (s) => {
     const n = norm(s);

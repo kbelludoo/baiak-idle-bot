@@ -91,7 +91,8 @@ export class AutoRestoreEngine {
     }
 
     // 1. Determina modo atual
-    if (snap.bossActive) {
+    const isBossFight = snap.bossActive && (!snap.wave || /boss|chefe/i.test(snap.wave) || snap.wave === '—' || snap.wave === 'Conectando...');
+    if (isBossFight) {
       this.currentMode = 'BOSS';
       this.currentActivity = `Chefe ativo (${snap.wave})`;
       this.cityStartedAt = 0;
