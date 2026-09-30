@@ -91,12 +91,13 @@ export class AutoRestoreEngine {
     }
 
     // 1. Determina modo atual
-    const isBossFight = snap.bossActive && (!snap.wave || /boss|chefe/i.test(snap.wave) || snap.wave === '—' || snap.wave === 'Conectando...');
+    const isBossFight = Boolean(snap.bossActive || (snap.wave && /boss|chefe|sala do chefe/i.test(snap.wave)));
     if (isBossFight) {
       this.currentMode = 'BOSS';
-      this.currentActivity = `Chefe ativo (${snap.wave})`;
+      this.currentActivity = `Chefe ativo (${snap.wave || 'Boss'})`;
       this.cityStartedAt = 0;
       this.fullStaminaInTreinoAt = 0;
+      this.lastProgressTime = now;
     } else if (snap.inTreino || /treino|training/i.test(snap.wave)) {
       this.currentMode = 'TRAINING';
       this.currentActivity = `Treino Online (stamina ${snap.stamina})`;

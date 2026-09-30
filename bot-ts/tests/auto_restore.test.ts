@@ -133,4 +133,36 @@ describe('AutoRestoreEngine', () => {
     expect(mockSendStage).toHaveBeenCalledWith('glooth-cave');
     expect(engine.getStatus().totalRecoveries).toBe(1);
   });
+
+  it('Guardião de Chefe: nunca interrompe o combate nem dispara recuperação de stall na sala do chefe', async () => {
+    const t0 = 2000000;
+    const bossSnap: AutoRestoreSnapshot = {
+      ...baseSnapshot,
+      bossActive: true,
+      wave: 'Sala do Chefe',
+    };
+
+    // Entra na sala do chefe
+    await engine.evaluate(t0, bossSnap, 'naga-lair', null, mockSendStage, mockCloseModals, mockClearQueue, mockReloadPage);
+    expect(engine.getStatus().mode).toBe('BOSS');
+
+    // 300s (5min) depois sem kills nem waves extras
+    const res = await engine.evaluate(t0 + 300000, bossSnap, 'naga-lair', null, mockSendStage, mockCloseModals, mockClearQueue, mockReloadPage);
+    expect(res.needsHuntEntry).toBe(false);
+    expect(mockSendStage).not.toHaveBeenCalled();
+    expect(mockReloadPage).not.toHaveBeenCalled();
+    expect(engine.getStatus().mode).toBe('BOSS');
+  });
+
+  it('Guardião de Chefe: detecta sala do chefe mesmo se bossActive for inferido pelo nome da wave', async () => {
+    const t0 = 3000000;
+    const bossSnapByName: AutoRestoreSnapshot = {
+      ...baseSnapshot,
+      bossActive: false,
+      wave: 'Sala do Chefe (Brokul)',
+    };
+
+    await engine.evaluate(t0, bossSnapByName, 'naga-lair', null, mockSendStage, mockCloseModals, mockClearQueue, mockReloadPage);
+    expect(engine.getStatus().mode).toBe('BOSS');
+  });
 });

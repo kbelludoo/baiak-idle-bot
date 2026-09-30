@@ -85,6 +85,74 @@ export interface HuntSimulatorReview {
   detail: string;
 }
 
+export function estimateItemMarketValueCoins(item?: {
+  name?: string;
+  tier?: number;
+  attrs?: Array<{ id?: number; level?: number }>;
+  upLevel?: number;
+  [k: string]: any;
+} | null): number {
+  if (!item || !item.name) return 0;
+  const name = String(item.name).toLowerCase().trim();
+  let baseValue = 40;
+
+  // 1. Famílias de Itens Nobres / BiS
+  if (/soulbleeder|soulhexer|soulshredder|soultainter|soulcutter|soulbiter|soulcrusher|soulpiercer|soulful\s+legs|ring\s+of\s+souls|\bsoul\b/i.test(name)) {
+    baseValue = 350;
+  } else if (/inferniarch/i.test(name)) {
+    baseValue = 250;
+  } else if (/falcon/i.test(name)) {
+    baseValue = 220;
+  } else if (/naga/i.test(name)) {
+    baseValue = 180;
+  } else if (/ghost\s+chestplate/i.test(name)) {
+    baseValue = 160;
+  } else if (/eldritch/i.test(name) || /fabulous\s+legs/i.test(name)) {
+    baseValue = 150;
+  } else if (/cobra/i.test(name) || /death\s+oyoroi/i.test(name) || /toga\s+mortis/i.test(name)) {
+    baseValue = 140;
+  } else if (/lion/i.test(name) || /dark\s+whispers/i.test(name)) {
+    baseValue = 130;
+  } else if (/gnome/i.test(name)) {
+    baseValue = 120;
+  } else if (/collar\s+of\s+(?:blue|red)\s+plasma/i.test(name) || /ring\s+of\s+(?:blue|red)\s+plasma/i.test(name)) {
+    baseValue = 100;
+  } else if (/prismatic|ornate|depth|yalahari|depth\s+galea|alicorn/i.test(name)) {
+    baseValue = 70;
+  }
+
+  // 2. Bônus por Tier (Forja)
+  const tier = Math.max(0, Number(item.tier) || 0);
+  let tierBonus = 0;
+  if (tier === 1) tierBonus = 40;
+  else if (tier === 2) tierBonus = 120;
+  else if (tier === 3) tierBonus = 300;
+  else if (tier === 4) tierBonus = 700;
+  else if (tier >= 5) tierBonus = 1500 + (tier - 5) * 1000;
+
+  // 3. Bônus por Attributes (Rolls de nível alto)
+  let attrBonus = 0;
+  if (Array.isArray(item.attrs)) {
+    for (const a of item.attrs) {
+      const lvl = Number(a?.level || 0);
+      if (lvl >= 10) attrBonus += 100;
+      else if (lvl >= 8) attrBonus += 50;
+      else if (lvl >= 6) attrBonus += 20;
+    }
+  }
+
+  // 4. Bônus por Upgrade Level (+1 a +12)
+  const upLevel = Math.max(0, Number(item.upLevel) || 0);
+  let upBonus = 0;
+  if (upLevel >= 11) upBonus = 500;
+  else if (upLevel >= 9) upBonus = 200;
+  else if (upLevel >= 7) upBonus = 80;
+  else if (upLevel >= 5) upBonus = 30;
+  else if (upLevel >= 3) upBonus = 10;
+
+  return Math.round(baseValue + tierBonus + attrBonus + upBonus);
+}
+
 function canonicalHuntId(value: unknown): string {
   return String(value || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -682,6 +750,153 @@ export class JevEngine {
       source: 'jev_api',
     };
   }
+
+  /**
+   * 4c. Decisão de Compra (Sniping) de Itens Valiosos em Leilão
+   * 
+   * Limite de orçamento: até 100 coins (ou configurado).
+   * Alvo: Itens valiosos cujo valor de mercado estimado seja >= 150 coins.
+   * Prioridade: Itens com maior margem/spread de lucro e tempo menor de encerramento.
+   */
+  async decideItemAuction(state: {
+    coinsAvailable: number;
+    budget?: number;
+    minEstimatedValue?: number;
+    maxMinutesRemaining?: number;
+    listings: Array<{
+      id: string;
+      item: {
+        name: string;
+        tier?: number;
+        attrs?: Array<{ id?: number; level?: number }>;
+        upLevel?: number;
+        [k: string]: any;
+      };
+      priceCoins: number;
+      nextPriceCoins?: number;
+      bidCount?: number;
+      minutesRemaining?: number | null;
+    }>;
+  }): Promise<{
+    selectedListingId: string | null;
+    isProfitable: boolean;
+    targetMaxPrice?: number;
+    estimatedValue?: number;
+    expectedProfitCoins?: number;
+    itemName?: string;
+    itemDetails?: any;
+    reason: string;
+    source: 'jev_api' | 'fallback';
+    apiError?: string;
+  }> {
+    if (!state.listings || !state.listings.length) {
+      return { selectedListingId: null, isProfitable: false, reason: 'Nenhum leilão de item listado', source: 'fallback' };
+    }
+
+    const budget = Math.max(1, Number(state.budget ?? 100));
+    const minEstVal = Math.max(1, Number(state.minEstimatedValue ?? 150));
+    const maxMins = state.maxMinutesRemaining ?? 3;
+
+    // Filtra ofertas dentro do orçamento e de valor expressivo (>= 150 coins)
+    const candidates = state.listings.map(l => {
+      const bidPrice = Math.max(l.priceCoins, Number(l.nextPriceCoins) || l.priceCoins);
+      const estValue = estimateItemMarketValueCoins(l.item);
+      const spreadCoins = estValue - bidPrice;
+      const profitMarginPct = bidPrice > 0 ? (spreadCoins / bidPrice) * 100 : 0;
+      const mins = l.minutesRemaining !== null && l.minutesRemaining !== undefined ? l.minutesRemaining : 360;
+      const timeBonus = mins <= maxMins ? 1.5 : (mins <= 30 ? 1.2 : 1.0);
+      const sniperScore = spreadCoins * 1000 + timeBonus * 100;
+      return {
+        ...l,
+        bidPrice,
+        estValue,
+        spreadCoins,
+        profitMarginPct,
+        mins,
+        sniperScore,
+      };
+    }).filter(c => {
+      return c.bidPrice <= budget &&
+             c.bidPrice <= state.coinsAvailable &&
+             c.estValue >= minEstVal &&
+             c.spreadCoins >= 35 && // Spread de no mínimo 35 coins de lucro
+             c.profitMarginPct >= 35; // Margem de no mínimo 35%
+    }).sort((a, b) => b.sniperScore - a.sniperScore);
+
+    if (!candidates.length) {
+      return {
+        selectedListingId: null,
+        isProfitable: false,
+        reason: `Nenhum item BiS/valioso listado dentro do limite de ${budget}c com valor estimado >= ${minEstVal}c`,
+        source: 'fallback' as const,
+      };
+    }
+
+    const best = candidates[0];
+    const fallbackProfitable = Boolean(best && best.spreadCoins > 0);
+
+    const fallbackResult = {
+      selectedListingId: fallbackProfitable ? best.id : null,
+      isProfitable: fallbackProfitable,
+      targetMaxPrice: best.bidPrice,
+      estimatedValue: best.estValue,
+      expectedProfitCoins: Math.round(best.spreadCoins),
+      itemName: best.item?.name,
+      itemDetails: best.item,
+      reason: fallbackProfitable
+        ? `Sniper Item: "${best.item?.name}${best.item?.tier ? ` T${best.item.tier}` : ''}" por ${best.bidPrice}c (valor est. ~${best.estValue}c, lucro ~${best.spreadCoins}c, ~${best.mins}m restantes)`
+        : 'Nenhum item vantajoso no momento',
+      source: 'fallback' as const,
+      apiError: undefined,
+    };
+
+    if (!this.enabled || !this.apiKey || !best) return fallbackResult;
+
+    const req: JevRequest = {
+      state: {
+        budget_coins: budget,
+        coins_available: state.coinsAvailable,
+        candidate_item: {
+          id: best.id,
+          name: best.item?.name,
+          tier: best.item?.tier || 0,
+          up_level: best.item?.upLevel || 0,
+          bid_price_coins: best.bidPrice,
+          estimated_market_value_coins: best.estValue,
+          expected_profit_coins: best.spreadCoins,
+          profit_margin_pct: Math.round(best.profitMarginPct),
+          minutes_remaining: best.mins,
+        },
+        other_candidates_count: candidates.length - 1,
+      },
+      questions: {
+        is_worth_sniping: {
+          type: 'noul',
+          instructions: 'Maximize o ganho em coins. O item é raro, poderoso (BiS/upgrade) ou altamente lucrativo para revenda, compensando o custo do lance?',
+        },
+      },
+    };
+
+    const res = await this.systemOne(req);
+    if (!res.ok) return { ...fallbackResult, apiError: res.error };
+
+    const prob = res.answers?.is_worth_sniping?.noul;
+    const isProfitable = typeof prob === 'number' ? prob > 0.5 : fallbackProfitable;
+
+    return {
+      selectedListingId: isProfitable ? best.id : null,
+      isProfitable,
+      targetMaxPrice: isProfitable ? best.bidPrice : undefined,
+      estimatedValue: best.estValue,
+      expectedProfitCoins: Math.round(best.spreadCoins),
+      itemName: best.item?.name,
+      itemDetails: best.item,
+      reason: `JEV sniper item: ${isProfitable ? 'Arrematar' : 'Pular'} "${best.item?.name}" por ${best.bidPrice}c (est ~${best.estValue}c, lucro ~${best.spreadCoins}c, prob=${prob !== undefined ? prob.toFixed(2) : '-'})`,
+      source: 'jev_api',
+      apiError: isProfitable ? undefined : 'prob<=0.5',
+    };
+  }
+
 
   /**
    * 5. Avaliação Analítica e Recomendação de Hunt

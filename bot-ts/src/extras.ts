@@ -1,7 +1,7 @@
 import type { Page } from 'puppeteer-core';
 import type { BotConfig } from './types';
 import { safeEval } from './scripts';
-import { getJevEngine } from './jev';
+import { getJevEngine, estimateItemMarketValueCoins } from './jev';
 
 const STAM_CLOCK = /(\d{1,2})\s*:\s*(\d{2})/;
 const STAM_PCT = /(\d+)\s*%/;
@@ -206,7 +206,15 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
     activeBids: 0,
     hasOwnActiveGold: false,
     listings: 0,
+    itemSellAdvisories: [],
   };
+  public knownEquipment: any[] = [];
+  public knownEquippedSlots: Record<string, any> = {};
+
+  public setKnownEquipment(candidates: any[], equippedSlots: Record<string, any>) {
+    this.knownEquipment = Array.isArray(candidates) ? candidates : [];
+    this.knownEquippedSlots = equippedSlots || {};
+  }
   // Cache do token Turnstile resolvido pelo widget persistente na página
   private cachedTurnstileToken = '';
   private cachedTurnstileTs = 0;
@@ -274,8 +282,12 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
           const authHeaders: Record<string, string> = { "User-Agent": "Mozilla/5.0" };
             if (config.token) authHeaders["authorization"] = `Bearer ${config.token}`;
 
-            const [browseRes, historyRes, mineRes, coinsRes, myBidsRes] = await Promise.all([
+            const [browseRes, itemBrowseRes, historyRes, mineRes, coinsRes, myBidsRes] = await Promise.all([
             fetch("https://baiakidle.com/api/trpc/auction.browse?batch=1&input=%7B%220%22%3A%7B%22page%22%3A1%2C%22perPage%22%3A50%2C%22type%22%3A%22gold%22%7D%7D", {
+              headers: authHeaders,
+              signal: AbortSignal.timeout(6000),
+            }).then(r => r.json()).catch(() => null),
+            fetch("https://baiakidle.com/api/trpc/auction.browse?batch=1&input=%7B%220%22%3A%7B%22page%22%3A1%2C%22perPage%22%3A50%2C%22type%22%3A%22item%22%7D%7D", {
               headers: authHeaders,
               signal: AbortSignal.timeout(6000),
             }).then(r => r.json()).catch(() => null),
@@ -301,6 +313,9 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
 
            const browseData = this.unwrapTrpc(browseRes);
            const browseRows = Array.isArray(browseData?.rows) ? browseData.rows : [];
+
+           const itemBrowseData = this.unwrapTrpc(itemBrowseRes);
+           const itemBrowseRows = Array.isArray(itemBrowseData?.rows) ? itemBrowseData.rows : [];
 
            const mineData = this.unwrapTrpc(mineRes);
            const mineRows = Array.isArray(mineData?.rows) ? mineData.rows : (Array.isArray(mineData) ? mineData : (mineData?.items || []));
@@ -337,7 +352,7 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
               return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
             }, 0);
 
-          if (browseRows.length > 0) {
+          if (browseRows.length > 0 || itemBrowseRows.length > 0) {
             const nowTs = Date.now();
             const listings = browseRows
               .filter((r: any) => r.type === "gold" && Number(r.goldAmount) > 0 && Number(r.currentPrice) > 0 && !r.isOwn && !r.isLeading && !activeBidListingIds.has(String(r.id)))
@@ -349,6 +364,67 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
                 bids: Number(r.bidCount) || 0,
                 minutesRemaining: Number.isFinite(Number(r.endsAt)) ? Math.max(0, Math.round((Number(r.endsAt) - nowTs) / 60000)) : null,
               }));
+
+            const itemListings = itemBrowseRows
+              .filter((r: any) => (r.type === "item" || r.item) && Number(r.currentPrice) > 0 && !r.isOwn && !r.isLeading && !activeBidListingIds.has(String(r.id)))
+              .map((r: any) => ({
+                id: String(r.id),
+                name: String(r.item?.name || r.name || ''),
+                item: r.item || { name: r.name, tier: r.tier, attrs: r.attrs, upLevel: r.upLevel },
+                priceCoins: Number(r.currentPrice),
+                nextPriceCoins: Number(r.currentPrice) + (Number(r.bidCount) > 0 ? Math.max(1, Math.ceil(Number(r.currentPrice) * 0.10)) : 0),
+                bidCount: Number(r.bidCount) || 0,
+                minutesRemaining: Number.isFinite(Number(r.endsAt)) ? Math.max(0, Math.round((Number(r.endsAt) - nowTs) / 60000)) : null,
+              }));
+
+            // Monta avisos de venda para itens valiosos no inventário/equipados/leilões ganhos
+            const candidateEquips: any[] = [];
+            if (Array.isArray(this.knownEquipment)) candidateEquips.push(...this.knownEquipment);
+            if (this.knownEquippedSlots && typeof this.knownEquippedSlots === 'object') {
+              for (const slotKey of Object.keys(this.knownEquippedSlots)) {
+                const eq = this.knownEquippedSlots[slotKey];
+                if (eq && eq.name) candidateEquips.push({ ...eq, isEquipped: true });
+              }
+            }
+            if (Array.isArray(mineRows)) {
+              for (const m of mineRows) {
+                if ((m.type === 'item' || m.item) && (m.item?.name || m.name)) {
+                  candidateEquips.push({ ...(m.item || m), isOwnAuction: true });
+                }
+              }
+            }
+
+            const itemAdvisories: any[] = [];
+            const seenItems = new Set<string>();
+            for (const it of candidateEquips) {
+              const name = String(it.name || '').trim();
+              if (!name) continue;
+              const tier = Number(it.tier ?? it.ftier ?? 0);
+              const key = `${name.toLowerCase()}#${tier}`;
+              if (seenItems.has(key)) continue;
+              seenItems.add(key);
+
+              const estVal = estimateItemMarketValueCoins({
+                name,
+                tier,
+                upLevel: Number(it.upLevel ?? it.up ?? 0),
+                attrs: Array.isArray(it.attrs) ? it.attrs : [],
+              });
+              // Consideramos item valioso para venda se o valor estimado for >= 100 coins
+              if (estVal >= 100) {
+                const recPrice = Math.max(40, Math.round(estVal * 0.85));
+                const isEquipped = Boolean(it.isEquipped);
+                itemAdvisories.push({
+                  itemName: name,
+                  tier,
+                  estimatedValueCoins: estVal,
+                  targetPriceCoins: recPrice,
+                  isEquipped,
+                  status: isEquipped ? 'Equipado (Upgrade)' : (it.isOwnAuction ? 'Em Leilão' : 'Na Mochila'),
+                  message: `Item valioso "${name}${tier ? ` T${tier}` : ''}": valor est. ~${estVal}c. Venda sugerida: no mínimo ${recPrice} coins${isEquipped ? ' (ou manter equipado como upgrade!)' : ' pelo site!'}`
+                });
+              }
+            }
 
              const histData = this.unwrapTrpc(historyRes);
             const histRows = Array.isArray(histData?.rows) ? histData.rows : [];
@@ -395,6 +471,8 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
            scanRes = {
               ok: true,
               listings,
+              itemListings,
+              itemAdvisories,
               historyRates,
               listingRates,
                referenceRate,
@@ -425,6 +503,8 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
                marketCoins,
                hasOwnActiveGold,
                listings: listings.length,
+               itemListingsCount: itemListings.length,
+               itemSellAdvisories: itemAdvisories,
                referenceRate,
                historyMedianRate,
                marketMinRate,
@@ -521,21 +601,41 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
             logs.push(`[AUCTION] Saldo insuficiente para venda (${Math.floor(scanRes.goldToSell / 1e6)}kk < mínimo ${Math.floor(scanRes.minGoldAmount / 1e6)}kk)`);
           }
 
+          // Compra / Sniper de Itens Valiosos: JEV avalia itens BiS/raros com margem >= 35c
+          let itemBuyDecision: any = null;
+          if (config.auctionItemSniperEnabled && scanRes.itemListings && scanRes.itemListings.length > 0 && scanRes.coinsAvailable > 0) {
+            if (jev && config.jevEnabled) {
+              itemBuyDecision = await jev.decideItemAuction({
+                coinsAvailable: scanRes.coinsAvailable,
+                budget: config.auctionItemBudget || 100,
+                minEstimatedValue: config.auctionItemMinEstimatedValue || 150,
+                maxMinutesRemaining: config.auctionSniperMaxMinutes,
+                listings: scanRes.itemListings,
+              });
+              const bidAmount = Number(itemBuyDecision?.targetMaxPrice || 0);
+              if (bidAmount > 0) {
+                if (bidAmount <= Number(scanRes.freeMarketCoins ?? scanRes.coinsAvailable ?? 0)) itemBuyDecision.currency = 'market';
+                else if (bidAmount <= Number(scanRes.freeNormalCoins ?? 0)) itemBuyDecision.currency = 'normal';
+                else itemBuyDecision.selectedListingId = null;
+              }
+              if (itemBuyDecision?.selectedListingId) {
+                logs.push(`[JEV-ITEM-SNIPER] 🎯 Alvo Valioso: #${itemBuyDecision.selectedListingId} "${itemBuyDecision.itemName}" por ${itemBuyDecision.targetMaxPrice}c (est ~${itemBuyDecision.estimatedValue}c, lucro ~${itemBuyDecision.expectedProfitCoins}c)`);
+              }
+            }
+          }
+
           // Compra / Sniper de Gold: JEV avalia lotes encerrando
-          // Um lance ativo reserva apenas a sua própria quantia. Continue
-          // arbitrando com o saldo livre restante, sem bloquear o mercado
-          // inteiro enquanto um lance aguarda liquidação.
-          // Venda e compra usam saldos independentes: uma decisão de venda
-          // não pode bloquear um lote de compra comprovadamente lucrativo.
-          // Assim o gold pode ser anunciado enquanto coins livres aproveitam
-          // arbitragem, sem deixar uma das duas reservas parada.
-          if (config.auctionLive && scanRes.listings && scanRes.listings.length > 0 && scanRes.coinsAvailable > 0) {
+          // Corte mínimo exigido: >= 9kk por coin (config.auctionMinGoldPerCoin || 9_000_000)
+          const coinsLeftForGold = itemBuyDecision?.selectedListingId
+            ? Math.max(0, scanRes.coinsAvailable - Number(itemBuyDecision.targetMaxPrice || 0))
+            : scanRes.coinsAvailable;
+          if (config.auctionLive && scanRes.listings && scanRes.listings.length > 0 && coinsLeftForGold > 0) {
             if (jev && config.jevEnabled) {
               buyDecision = await jev.decideGoldAuction({
-                coinsAvailable: scanRes.coinsAvailable,
+                coinsAvailable: coinsLeftForGold,
                 budget: config.auctionBudget,
                 minMarginPct: config.auctionMinMarginPct,
-                minGoldPerCoin: config.auctionMinGoldPerCoin || 7_000_000,
+                minGoldPerCoin: config.auctionMinGoldPerCoin || 9_000_000,
                 maxMinutesRemaining: config.auctionSniperMaxMinutes,
                 referenceRate: scanRes.historyMedianRate || scanRes.referenceRate,
                 preferredCurrency: 'market',
@@ -543,7 +643,7 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
               });
               const bidAmount = Number(buyDecision?.targetMaxPrice || 0);
               if (bidAmount > 0) {
-                if (bidAmount <= Number(scanRes.freeMarketCoins ?? scanRes.coinsAvailable ?? 0)) buyDecision.currency = 'market';
+                if (bidAmount <= Number(scanRes.freeMarketCoins ?? coinsLeftForGold ?? 0)) buyDecision.currency = 'market';
                 else if (bidAmount <= Number(scanRes.freeNormalCoins ?? 0)) buyDecision.currency = 'normal';
                 else buyDecision.selectedListingId = null;
               }
@@ -606,6 +706,43 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
               this.lastAuctionStatus.sellStatus = 'Anúncio de Gold ativo no mercado';
             } else if (scanRes.currentGold < scanRes.minGoldAmount) {
               this.lastAuctionStatus.sellStatus = `Acumulando saldo mín (${Math.floor(scanRes.minGoldAmount / 1e6)}kk)`;
+            }
+            if (scanRes.itemAdvisories) {
+              this.lastAuctionStatus.itemSellAdvisories = scanRes.itemAdvisories;
+            }
+            this.lastAuctionStatus.itemSniperStatus = config.auctionItemSniperEnabled
+              ? (itemBuyDecision?.selectedListingId
+                  ? `🎯 Alvo: ${itemBuyDecision.itemName} (${itemBuyDecision.targetMaxPrice}c)`
+                  : `Ativo (Monitorando ${scanRes.itemListings?.length || 0} itens, budget <= ${config.auctionItemBudget}c)`)
+              : 'Desativado';
+          }
+
+          if (itemBuyDecision && itemBuyDecision.selectedListingId) {
+            const lid = Number(itemBuyDecision.selectedListingId);
+            const maxPrice = Number(itemBuyDecision.targetMaxPrice || 100);
+            const bidCurrency = itemBuyDecision.currency || 'market';
+            const buyMsg = `Item #${lid} "${itemBuyDecision.itemName}" por até ${maxPrice} coins`;
+            if (!config.auctionLive) {
+              logs.push(`[AUCTION] DRY-RUN ITEM: ${buyMsg}`);
+            } else {
+              try {
+                const bidRes = await fetch('https://baiakidle.com/api/trpc/auction.bid?batch=1', {
+                  method: 'POST',
+                  headers: authHeaders,
+                  body: JSON.stringify({ '0': { listingId: lid, maxAmount: maxPrice, currency: bidCurrency } }),
+                  signal: AbortSignal.timeout(15000),
+                }).then(r => r.json()).catch(() => null);
+                const bidItem = Array.isArray(bidRes) ? bidRes[0] : bidRes;
+                const bidData = bidItem?.result?.data?.json ?? bidItem?.result?.data ?? bidItem?.data ?? null;
+                const bidErr = bidItem?.error?.json?.message || bidItem?.error?.message || null;
+                if (bidData && !bidErr) {
+                  logs.push(`[AUCTION] 🎯 LANCE REGISTRADO NO ITEM (JEV): ${buyMsg}`);
+                } else {
+                  logs.push(`[AUCTION] LANCE NO ITEM RECUSADO [${bidErr || 'falha'}]: ${buyMsg}`);
+                }
+              } catch (e: any) {
+                logs.push(`[AUCTION] ERRO LANCE ITEM (${String(e?.message || e)})`);
+              }
             }
           }
 

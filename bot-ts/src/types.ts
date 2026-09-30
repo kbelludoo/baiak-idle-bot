@@ -89,6 +89,9 @@ export interface BotConfig {
   auctionSellEnabled: boolean;
   auctionSellPassword: string;
   auctionMinGoldPerCoin: number;
+  auctionItemSniperEnabled: boolean;
+  auctionItemBudget: number;
+  auctionItemMinEstimatedValue: number;
   jevEnabled: boolean;
   jevApiKey: string;
   jevEndpoint: string;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { JevEngine } from '../src/jev';
+import { JevEngine, estimateItemMarketValueCoins } from '../src/jev';
 
 describe('JEV (TypeSafe AI Decision Engine)', () => {
   it('instantiates with proper configuration and defaults', () => {
@@ -132,36 +132,87 @@ describe('JEV (TypeSafe AI Decision Engine)', () => {
     expect(res.expectedProfitCoins).toBe(-5);
   });
 
-  it('respeita taxa mínima de corte de gold por coin (ex: 7kk/c) descartando lotes abaixo', async () => {
+  it('respeita taxa mínima de corte de gold por coin (ex: 9kk/c) descartando lotes abaixo', async () => {
     const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
     const listings = [
-      { id: 'cheap-rate', goldAmount: 600_000_000, priceCoins: 100, minutesRemaining: 2 }, // 6.0kk/c -> rejeita (< 7kk)
-      { id: 'golden-rate', goldAmount: 750_000_000, priceCoins: 100, minutesRemaining: 3 }, // 7.5kk/c -> aceita (>= 7kk)
+      { id: 'cheap-rate', goldAmount: 800_000_000, priceCoins: 100, minutesRemaining: 2 }, // 8.0kk/c -> rejeita (< 9kk)
+      { id: 'golden-rate', goldAmount: 950_000_000, priceCoins: 100, minutesRemaining: 3 }, // 9.5kk/c -> aceita (>= 9kk)
     ];
 
     const res = await offlineEngine.decideGoldAuction({
       coinsAvailable: 200,
       budget: 100,
       minMarginPct: 10,
-      minGoldPerCoin: 7_000_000,
-      referenceRate: 5_000_000,
+      minGoldPerCoin: 9_000_000,
+      referenceRate: 6_000_000,
       listings,
     });
 
     expect(res.selectedListingId).toBe('golden-rate');
     expect(res.isProfitable).toBe(true);
 
-    // Se todos forem abaixo de 7kk/c, recusa
+    // Se todos forem abaixo de 9kk/c, recusa
     const resOnlyLow = await offlineEngine.decideGoldAuction({
       coinsAvailable: 200,
       budget: 100,
       minMarginPct: 10,
-      minGoldPerCoin: 7_000_000,
-      referenceRate: 5_000_000,
-      listings: [{ id: 'cheap-rate', goldAmount: 600_000_000, priceCoins: 100, minutesRemaining: 2 }],
+      minGoldPerCoin: 9_000_000,
+      referenceRate: 6_000_000,
+      listings: [{ id: 'cheap-rate', goldAmount: 800_000_000, priceCoins: 100, minutesRemaining: 2 }],
     });
     expect(resOnlyLow.selectedListingId).toBeNull();
     expect(resOnlyLow.isProfitable).toBe(false);
+  });
+
+  it('estimateItemMarketValueCoins calcula valor calibrado em coins com base no tier e família nobre', () => {
+    expect(estimateItemMarketValueCoins({ name: 'Soulbleeder' })).toBe(350);
+    expect(estimateItemMarketValueCoins({ name: 'Inferniarch Bow', tier: 1 })).toBe(290); // 250 + 40
+    expect(estimateItemMarketValueCoins({ name: 'Falcon Plate' })).toBe(220);
+    expect(estimateItemMarketValueCoins({ name: 'Naga Crossbow' })).toBe(180);
+    expect(estimateItemMarketValueCoins({ name: 'Eldritch Quiver' })).toBe(150);
+    expect(estimateItemMarketValueCoins({
+      name: 'Falcon Battleaxe',
+      tier: 2,
+      attrs: [{ id: 1, level: 10 }],
+      upLevel: 7,
+    })).toBe(220 + 120 + 100 + 80); // 520 coins!
+  });
+
+  it('decideItemAuction seleciona item valioso BiS dentro do budget de 100 coins com alto lucro', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const listings = [
+      {
+        id: 'item-1',
+        item: { name: 'Inferniarch Bow', tier: 1 },
+        priceCoins: 30, // 30c por item de 290c -> spread de 260c!
+        minutesRemaining: 2,
+      },
+      {
+        id: 'item-2',
+        item: { name: 'Plate Legs', tier: 0 },
+        priceCoins: 5,  // valor est ~40c -> rejeita (< 150c)
+        minutesRemaining: 1,
+      },
+      {
+        id: 'item-3',
+        item: { name: 'Soulbleeder', tier: 2 },
+        priceCoins: 150, // fora do budget de 100 coins
+        minutesRemaining: 5,
+      },
+    ];
+
+    const res = await offlineEngine.decideItemAuction({
+      coinsAvailable: 100,
+      budget: 100,
+      minEstimatedValue: 150,
+      maxMinutesRemaining: 5,
+      listings,
+    });
+
+    expect(res.selectedListingId).toBe('item-1');
+    expect(res.isProfitable).toBe(true);
+    expect(res.estimatedValue).toBe(290);
+    expect(res.expectedProfitCoins).toBe(260);
   });
 
   it('decideGoldSellListing calculates optimal coin price to sell gold at premium', async () => {

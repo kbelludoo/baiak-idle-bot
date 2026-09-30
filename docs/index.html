@@ -1334,9 +1334,16 @@ function applyJevHunt(botId, huntId) {
 
 function huntSection(id, s, decision, isForced) {
   const stage = huntStageInfo(s);
-  const currentId = s.selected_hunt_id || s.force_hunt_id || s.last_hunt_id || '';
-  const currentCatalog = HUNTS_CATALOG.find(h => canonicalHunt(h.id) === canonicalHunt(currentId))
-    || HUNTS_CATALOG.find(h => canonicalHunt(h.name) === canonicalHunt(s.selected_hunt_name || s.last_hunt || s.hunt));
+  const isBoss = Boolean(
+    s.boss ||
+    s.selected_hunt_id === 'boss' ||
+    s.boss_status?.activeBossId ||
+    s.boss_status?.state === 'FIGHTING' ||
+    /boss|chefe|sala do chefe/i.test(String(s.selected_hunt_name || s.observed_hunt || s.hunt || ''))
+  );
+  const currentId = isBoss ? 'boss' : (s.selected_hunt_id || s.force_hunt_id || s.last_hunt_id || '');
+  const currentCatalog = isBoss ? null : (HUNTS_CATALOG.find(h => canonicalHunt(h.id) === canonicalHunt(currentId))
+    || HUNTS_CATALOG.find(h => canonicalHunt(h.name) === canonicalHunt(s.selected_hunt_name || s.last_hunt || s.hunt)));
   const huntName = esc(currentCatalog?.name || huntNameWithoutStage(s.selected_hunt_name || stage.raw || s.last_hunt || s.hunt || '—'));
   const mode = '🎮 ESCOLHA MANUAL';
   const decisionText = s.hunt_control === 'manual'
@@ -1495,12 +1502,37 @@ function auctionSection(s) {
     </div>
   ` : '';
 
+  const itemAdvisories = Array.isArray(auc.itemSellAdvisories) ? auc.itemSellAdvisories : [];
+  const itemAdvisoriesHtml = itemAdvisories.length > 0 ? `
+    <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">
+      ${itemAdvisories.map(it => `
+        <div style="padding:10px 14px;background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.35);border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:220px;">
+            <div style="font-weight:700;color:#a5b4fc;font-size:12px;display:flex;align-items:center;gap:6px;">
+              <span>🛡️</span> <span>ITEM VALIOSO DETECTADO: <b>${esc(it.itemName)}${it.tier ? ` (Tier ${it.tier})` : ''}</b></span>
+              <span style="background:${it.isEquipped ? 'rgba(34,197,94,0.2)' : 'rgba(234,179,8,0.2)'};color:${it.isEquipped ? '#4ade80' : '#fde047'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${it.isEquipped ? 'Equipado (Upgrade)' : 'Na Mochila'}</span>
+            </div>
+            <div style="color:#f8fafc;font-size:12px;margin-top:3px;">
+              Valor de mercado estimado: <b style="color:#fde047;">~${num(it.estimatedValueCoins)} Coins</b> · Venda sugerida: no mínimo <b style="color:#4ade80;">${num(it.targetPriceCoins)} Coins</b>!
+            </div>
+            <div style="color:#94a3b8;font-size:11px;margin-top:2px;">
+              ${it.isEquipped ? '💡 O bot está usando o item em combate como upgrade. Se preferir coins, anuncie no leilão do site.' : '💡 Pronto para ser anunciado no leilão pelo site para multiplicar seu saldo de coins!'}
+            </div>
+          </div>
+          <a href="https://baiakidle.com" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;padding:6px 12px;background:#6366f1;color:#fff;font-weight:700;font-size:11px;border-radius:6px;text-decoration:none;transition:opacity 0.2s;">
+            Anunciar no Site ↗
+          </a>
+        </div>
+      `).join('')}
+    </div>
+  ` : '';
+
   return `
     <div class="card-sub-panel auction-panel">
       <div class="panel-head">
         <div class="panel-title auction-title">
           <span>🪙</span>
-          <span>MERCADO & LEILÕES ATIVOS (SNIPER & GOLD)</span>
+          <span>MERCADO & LEILÕES ATIVOS (SNIPER DE ITENS & GOLD)</span>
         </div>
         <span class="panel-badge ${badgeClass}">${badgeText}</span>
       </div>
@@ -1511,14 +1543,14 @@ function auctionSection(s) {
           <small>${reservedCoins > 0 ? `🔒 ${num(reservedCoins)} coins reservadas` : 'Saldo 100% liberado'}</small>
         </div>
         <div class="panel-item">
-          <span>Venda de Gold por Coins</span>
-          <strong title="${esc(sellStatus)}">${hasOwnActiveGold ? '🟢 Anúncio Ativo' : (advisory && advisory.shouldSell ? '📢 Vender Agora' : 'Acumulando')}</strong>
-          <small>${goldToSell > 0 ? `Alvo: ${formatGold(goldToSell)} gold` : 'Mín: 105kk gold'}</small>
+          <span>Sniper de Itens BiS (<=100c)</span>
+          <strong style="color:#a5b4fc;font-size:11px;" title="${esc(auc.itemSniperStatus || '')}">${auc.itemSniperStatus ? (auc.itemSniperStatus.length > 28 ? auc.itemSniperStatus.slice(0, 28) + '...' : auc.itemSniperStatus) : 'Ativo (Alvos >= 150c)'}</strong>
+          <small>${auc.itemListingsCount ? `${auc.itemListingsCount} itens monitorados` : 'Buscando pechinchas'}</small>
         </div>
         <div class="panel-item">
-          <span>Cotação de Mercado (JEV)</span>
-          <strong>~${(refRate / 1000000).toFixed(1)}kk / coin</strong>
-          <small>Mediana histórica de vendas</small>
+          <span>Arbitragem de Gold</span>
+          <strong title="${esc(sellStatus)}">${hasOwnActiveGold ? '🟢 Anúncio Ativo' : (advisory && advisory.shouldSell ? '📢 Vender Agora' : 'Compra >= 9kk/c')}</strong>
+          <small>${goldToSell > 0 ? `Alvo venda: ${formatGold(goldToSell)}` : 'Corte: 9.0kk/coin'}</small>
         </div>
         <div class="panel-item">
           <span>Saldo em Moedas (Coins)</span>
@@ -1527,6 +1559,7 @@ function auctionSection(s) {
         </div>
       </div>
       ${advisoryHtml}
+      ${itemAdvisoriesHtml}
     </div>
   `;
 }
@@ -1549,7 +1582,15 @@ function card(id, b) {
 
   // Rastreador de Hunt: ao trocar de hunt, zera contadores e recomeça a medição
   const isTreino = Boolean(s.treino || /treino online|treino parou u\.é|training/i.test(String(s.observed_hunt || s.hunt || s.subsystems?.auto_treino?.status || '')));
-  const currentHuntKey = isTreino ? 'treino' : String(s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id || s.hunt || 'unknown').trim().toLowerCase().replace(/-lair|-cave|-dungeon|-camp|-ground/g, '');
+  const isBoss = Boolean(
+    s.boss ||
+    s.selected_hunt_id === 'boss' ||
+    s.boss_status?.activeBossId ||
+    s.boss_status?.state === 'FIGHTING' ||
+    /boss|chefe|sala do chefe/i.test(String(s.selected_hunt_name || s.observed_hunt || s.hunt || ''))
+  );
+  const isTreinoOrBoss = isTreino || isBoss;
+  const currentHuntKey = isTreino ? 'treino' : (isBoss ? 'boss' : String(s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id || s.hunt || 'unknown').trim().toLowerCase().replace(/-lair|-cave|-dungeon|-camp|-ground/g, ''));
   const rawKills = Number(s.kills) || 0;
   const rawWaves = Number(s.waves) || 0;
   const rawSessionXp = Number(s.session_xp ?? an.session_xp ?? an.raw_xp ?? 0) || 0;
@@ -1585,9 +1626,9 @@ function card(id, b) {
   const huntElapsedStr = formatElapsed(huntElapsedSec, Math.floor(huntElapsedSec / 60));
   const huntElapsedHours = huntElapsedSec > 0 ? huntElapsedSec / 3600 : 0;
 
-  const huntXpFinal = isTreino ? 0 : huntXp;
-  const huntGoldFinal = isTreino ? 0 : huntGold;
-  const huntElapsedStrFinal = isTreino ? 'Em treino' : huntElapsedStr;
+  const huntXpFinal = isTreinoOrBoss ? 0 : huntXp;
+  const huntGoldFinal = isTreinoOrBoss ? 0 : huntGold;
+  const huntElapsedStrFinal = isTreino ? 'Em treino' : (isBoss ? 'Na sala do chefe' : huntElapsedStr);
 
   const isForced = Boolean(s.force_hunt && s.force_hunt_id);
   const uptimeSec = Number(s.online_uptime_seconds ?? 0) || 0;
@@ -1612,29 +1653,33 @@ function card(id, b) {
   const rawXpRate = selected.xp_per_hour ?? an.xp_per_hour;
   const parsedRawXp = parseHuntMetric(rawXpRate);
   let parsedXpRate = parsedRawXp > 0 ? parsedRawXp : 0;
-  if (!(parsedXpRate > 0)) {
+  if (isTreinoOrBoss) {
+    parsedXpRate = 0;
+  } else if (!(parsedXpRate > 0)) {
     parsedXpRate = liveXpPerHour || huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'xp');
   }
-  const displayXpHour = parsedXpRate > 0 ? `${formatXp(parsedXpRate)}/h` : (currentSampleReady ? '0 XP/h' : 'Calculando…');
+  const displayXpHour = isTreinoOrBoss ? '0 XP/h' : (parsedXpRate > 0 ? `${formatXp(parsedXpRate)}/h` : (currentSampleReady ? '0 XP/h' : 'Calculando…'));
 
   // Loot / hora da nova medição
   const rawLootRate = selected.loot_per_hour ?? an.loot_per_hour;
   const parsedRawLoot = parseHuntMetric(rawLootRate);
   let parsedLootRate = parsedRawLoot > 0 ? parsedRawLoot : 0;
-  if (!(parsedLootRate > 0)) {
+  if (isTreinoOrBoss) {
+    parsedLootRate = 0;
+  } else if (!(parsedLootRate > 0)) {
     parsedLootRate = huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'loot');
   }
-  const displayLootHour = parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : (currentSampleReady ? '0/h' : 'Calculando…');
+  const displayLootHour = isTreinoOrBoss ? '0/h' : (parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : (currentSampleReady ? '0/h' : 'Calculando…'));
 
   // Gold / hora
   const rawGoldHour = Number(selected.gold_per_hour ?? a.goldPerHour ?? an.net_gold_per_hour ?? 0) || 0;
   const provisionalGoldReady = !goldSampleReady && rawGoldHour > 0 && selected.source === 'profiler-live';
   const goldHourVal = (goldSampleReady || provisionalGoldReady) ? rawGoldHour : 0;
-  const displayGoldHour = !(goldSampleReady || provisionalGoldReady) ? 'Calculando…' : (goldHourVal > 0 ? `${formatGold(goldHourVal)}/h` : '0/h');
+  const displayGoldHour = isTreinoOrBoss ? '0/h' : (!(goldSampleReady || provisionalGoldReady) ? 'Calculando…' : (goldHourVal > 0 ? `${formatGold(goldHourVal)}/h` : '0/h'));
 
   // Kills / hora & Waves / hora
-  const killsHourVal = huntElapsedSec >= 60 ? (liveKillsPerHour || Number(sessionMetrics.kills_per_hour ?? a.killsPerHour ?? 0)) : (liveKillsPerHour || 0);
-  const wavesHourVal = huntElapsedSec >= 60 ? (liveWavesPerHour || Number(sessionMetrics.waves_per_hour ?? a.wavesPerHour ?? 0)) : (liveWavesPerHour || 0);
+  const killsHourVal = isTreinoOrBoss ? 0 : (huntElapsedSec >= 60 ? (liveKillsPerHour || Number(sessionMetrics.kills_per_hour ?? a.killsPerHour ?? 0)) : (liveKillsPerHour || 0));
+  const wavesHourVal = isTreinoOrBoss ? 0 : (huntElapsedSec >= 60 ? (liveWavesPerHour || Number(sessionMetrics.waves_per_hour ?? a.wavesPerHour ?? 0)) : (liveWavesPerHour || 0));
 
   // Level / hora display
   const liveLevelGain = Math.max(0, rawLevel - hState.baseLevel);
@@ -1642,11 +1687,11 @@ function card(id, b) {
   const displayLevelHour = huntElapsedSec < 60
     ? 'Calculando…'
     : (liveLevelRate > 0 ? num(liveLevelRate) : (rate !== null && Number.isFinite(rate) ? num(rate) : '0,0'));
-  const displayXpHourFinal = isTreino ? '0 XP/h' : displayXpHour;
-  const displayLootHourFinal = isTreino ? '0/h' : displayLootHour;
-  const displayGoldHourFinal = isTreino ? '0/h' : displayGoldHour;
-  const killsHourValFinal = isTreino ? 0 : killsHourVal;
-  const wavesHourValFinal = isTreino ? 0 : wavesHourVal;
+  const displayXpHourFinal = isTreinoOrBoss ? '0 XP/h' : displayXpHour;
+  const displayLootHourFinal = isTreinoOrBoss ? '0/h' : displayLootHour;
+  const displayGoldHourFinal = isTreinoOrBoss ? '0/h' : displayGoldHour;
+  const killsHourValFinal = isTreinoOrBoss ? 0 : killsHourVal;
+  const wavesHourValFinal = isTreinoOrBoss ? 0 : wavesHourVal;
 
   return `
     <article class="bot ${id}">

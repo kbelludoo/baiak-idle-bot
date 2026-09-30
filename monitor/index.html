@@ -1336,12 +1336,19 @@ function applyJevHunt(botId, huntId) {
 function huntSection(id, s, decision, isForced) {
   const stage = huntStageInfo(s);
   const inTreino = Boolean(s.treino || /treino online|treino parou u\.é|training/i.test(String(s.observed_hunt || s.hunt)));
-  const currentId = inTreino ? 'treino-online' : (s.selected_hunt_id || s.force_hunt_id || s.last_hunt_id || '');
-  const currentCatalog = inTreino ? null
+  const isBoss = Boolean(
+    s.boss ||
+    s.selected_hunt_id === 'boss' ||
+    s.boss_status?.activeBossId ||
+    s.boss_status?.state === 'FIGHTING' ||
+    /boss|chefe|sala do chefe/i.test(String(s.selected_hunt_name || s.observed_hunt || s.hunt || ''))
+  );
+  const currentId = inTreino ? 'treino-online' : (isBoss ? 'boss' : (s.selected_hunt_id || s.force_hunt_id || s.last_hunt_id || ''));
+  const currentCatalog = (inTreino || isBoss) ? null
     : (HUNTS_CATALOG.find(h => canonicalHunt(h.id) === canonicalHunt(currentId))
       || HUNTS_CATALOG.find(h => canonicalHunt(h.name) === canonicalHunt(s.selected_hunt_name || s.last_hunt || s.hunt)));
-  const huntName = esc(inTreino ? 'Treino Online' : (currentCatalog?.name || huntNameWithoutStage(s.selected_hunt_name || stage.raw || s.last_hunt || s.hunt || '—')));
-  const mode = inTreino ? '🧘 TREINO ATIVO' : '🎮 ESCOLHA MANUAL';
+  const huntName = esc(inTreino ? 'Treino Online' : (isBoss ? (s.selected_hunt_name || 'Sala do Chefe (Boss)') : (currentCatalog?.name || huntNameWithoutStage(s.selected_hunt_name || stage.raw || s.last_hunt || s.hunt || '—'))));
+  const mode = inTreino ? '🧘 TREINO ATIVO' : (isBoss ? '👑 SALA DO CHEFE' : '🎮 ESCOLHA MANUAL');
   const decisionText = inTreino
     ? 'Bot em Treino Online: XP, gold e kills zerados até voltar à caçada'
     : (s.hunt_control === 'manual'
@@ -1531,7 +1538,15 @@ function card(id, b) {
 
   // Rastreador de Hunt: ao trocar de hunt, zera contadores e recomeça a medição
   const isTreino = Boolean(s.treino || /treino online|treino parou u\.é|training/i.test(String(s.observed_hunt || s.hunt || s.subsystems?.auto_treino?.status || '')));
-  const currentHuntKey = isTreino ? 'treino' : String(s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id || s.hunt || 'unknown').trim().toLowerCase().replace(/-lair|-cave|-dungeon|-camp|-ground/g, '');
+  const isBoss = Boolean(
+    s.boss ||
+    s.selected_hunt_id === 'boss' ||
+    s.boss_status?.activeBossId ||
+    s.boss_status?.state === 'FIGHTING' ||
+    /boss|chefe|sala do chefe/i.test(String(s.selected_hunt_name || s.observed_hunt || s.hunt || ''))
+  );
+  const isTreinoOrBoss = isTreino || isBoss;
+  const currentHuntKey = isTreino ? 'treino' : (isBoss ? 'boss' : String(s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id || s.hunt || 'unknown').trim().toLowerCase().replace(/-lair|-cave|-dungeon|-camp|-ground/g, ''));
   const rawKills = Number(s.kills) || 0;
   const rawWaves = Number(s.waves) || 0;
   const rawSessionXp = Number(s.session_xp ?? an.session_xp ?? an.raw_xp ?? 0) || 0;
@@ -1567,9 +1582,9 @@ function card(id, b) {
   const huntElapsedStr = formatElapsed(huntElapsedSec, Math.floor(huntElapsedSec / 60));
   const huntElapsedHours = huntElapsedSec > 0 ? huntElapsedSec / 3600 : 0;
 
-  const huntXpFinal = isTreino ? 0 : huntXp;
-  const huntGoldFinal = isTreino ? 0 : huntGold;
-  const huntElapsedStrFinal = isTreino ? 'Em treino' : huntElapsedStr;
+  const huntXpFinal = isTreinoOrBoss ? 0 : huntXp;
+  const huntGoldFinal = isTreinoOrBoss ? 0 : huntGold;
+  const huntElapsedStrFinal = isTreino ? 'Em treino' : (isBoss ? 'Na sala do chefe' : huntElapsedStr);
 
   const isForced = Boolean(s.force_hunt && s.force_hunt_id);
   const uptimeSec = Number(s.online_uptime_seconds ?? 0) || 0;
@@ -1594,29 +1609,33 @@ function card(id, b) {
   const rawXpRate = selected.xp_per_hour ?? an.xp_per_hour;
   const parsedRawXp = parseHuntMetric(rawXpRate);
   let parsedXpRate = parsedRawXp > 0 ? parsedRawXp : 0;
-  if (!(parsedXpRate > 0)) {
+  if (isTreinoOrBoss) {
+    parsedXpRate = 0;
+  } else if (!(parsedXpRate > 0)) {
     parsedXpRate = liveXpPerHour || huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'xp');
   }
-  const displayXpHour = parsedXpRate > 0 ? `${formatXp(parsedXpRate)}/h` : (currentSampleReady ? '0 XP/h' : 'Calculando…');
+  const displayXpHour = isTreinoOrBoss ? '0 XP/h' : (parsedXpRate > 0 ? `${formatXp(parsedXpRate)}/h` : (currentSampleReady ? '0 XP/h' : 'Calculando…'));
 
   // Loot / hora da nova medição
   const rawLootRate = selected.loot_per_hour ?? an.loot_per_hour;
   const parsedRawLoot = parseHuntMetric(rawLootRate);
   let parsedLootRate = parsedRawLoot > 0 ? parsedRawLoot : 0;
-  if (!(parsedLootRate > 0)) {
+  if (isTreinoOrBoss) {
+    parsedLootRate = 0;
+  } else if (!(parsedLootRate > 0)) {
     parsedLootRate = huntMetricValue(s, s.selected_hunt_id || s.last_hunt_id || s.force_hunt_id, 'loot');
   }
-  const displayLootHour = parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : (currentSampleReady ? '0/h' : 'Calculando…');
+  const displayLootHour = isTreinoOrBoss ? '0/h' : (parsedLootRate > 0 ? `${formatGold(parsedLootRate)}/h` : (currentSampleReady ? '0/h' : 'Calculando…'));
 
   // Gold / hora
   const rawGoldHour = Number(selected.gold_per_hour ?? a.goldPerHour ?? an.net_gold_per_hour ?? 0) || 0;
   const provisionalGoldReady = !goldSampleReady && rawGoldHour > 0 && selected.source === 'profiler-live';
   const goldHourVal = (goldSampleReady || provisionalGoldReady) ? rawGoldHour : 0;
-  const displayGoldHour = !(goldSampleReady || provisionalGoldReady) ? 'Calculando…' : (goldHourVal > 0 ? `${formatGold(goldHourVal)}/h` : '0/h');
+  const displayGoldHour = isTreinoOrBoss ? '0/h' : (!(goldSampleReady || provisionalGoldReady) ? 'Calculando…' : (goldHourVal > 0 ? `${formatGold(goldHourVal)}/h` : '0/h'));
 
   // Kills / hora & Waves / hora
-  const killsHourVal = huntElapsedSec >= 60 ? (liveKillsPerHour || Number(sessionMetrics.kills_per_hour ?? a.killsPerHour ?? 0)) : (liveKillsPerHour || 0);
-  const wavesHourVal = huntElapsedSec >= 60 ? (liveWavesPerHour || Number(sessionMetrics.waves_per_hour ?? a.wavesPerHour ?? 0)) : (liveWavesPerHour || 0);
+  const killsHourVal = isTreinoOrBoss ? 0 : (huntElapsedSec >= 60 ? (liveKillsPerHour || Number(sessionMetrics.kills_per_hour ?? a.killsPerHour ?? 0)) : (liveKillsPerHour || 0));
+  const wavesHourVal = isTreinoOrBoss ? 0 : (huntElapsedSec >= 60 ? (liveWavesPerHour || Number(sessionMetrics.waves_per_hour ?? a.wavesPerHour ?? 0)) : (liveWavesPerHour || 0));
 
   // Level / hora display
   const liveLevelGain = Math.max(0, rawLevel - hState.baseLevel);
@@ -1624,11 +1643,11 @@ function card(id, b) {
   const displayLevelHour = huntElapsedSec < 60
     ? 'Calculando…'
     : (liveLevelRate > 0 ? num(liveLevelRate) : (rate !== null && Number.isFinite(rate) ? num(rate) : '0,0'));
-  const displayXpHourFinal = isTreino ? '0 XP/h' : displayXpHour;
-  const displayLootHourFinal = isTreino ? '0/h' : displayLootHour;
-  const displayGoldHourFinal = isTreino ? '0/h' : displayGoldHour;
-  const killsHourValFinal = isTreino ? 0 : killsHourVal;
-  const wavesHourValFinal = isTreino ? 0 : wavesHourVal;
+  const displayXpHourFinal = isTreinoOrBoss ? '0 XP/h' : displayXpHour;
+  const displayLootHourFinal = isTreinoOrBoss ? '0/h' : displayLootHour;
+  const displayGoldHourFinal = isTreinoOrBoss ? '0/h' : displayGoldHour;
+  const killsHourValFinal = isTreinoOrBoss ? 0 : killsHourVal;
+  const wavesHourValFinal = isTreinoOrBoss ? 0 : wavesHourVal;
 
   return `
     <article class="bot ${id}">

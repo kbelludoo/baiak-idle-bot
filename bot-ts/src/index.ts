@@ -109,6 +109,15 @@ const FAST_STATE_JS = `() => {
     if (tm && tm[1]) wave = tm[1].trim();
   }
   const trainingView = inTraining || /treino|online training|exercise|dummy/i.test(String(wave || ""));
+  const inBoss = Boolean(
+    (typeof window !== "undefined" && (
+      window.__baiak_state?.activeBossId ||
+      window.m?.activeBossId ||
+      window.__baiak_state?.bossgate?.activeBossId
+    )) ||
+    /(?:sala\s+d[oe]\s+chefe|sala\s+d[oe]\s+boss|\bboss\b|\bchefe\b)/i.test(wave || "") ||
+    /(?:sala\s+d[oe]\s+chefe|sala\s+d[oe]\s+boss|\bboss\b|\bchefe\b)/i.test(document.title || "")
+  );
 
   // Party e Nível — seletores tolerantes a rename de build + espelhos do kernel
   let shooters = Array.from(document.querySelectorAll("#bar-shooters .bar-member")).map((el, slot) => ({
@@ -339,6 +348,7 @@ const FAST_STATE_JS = `() => {
     connExpired,
     inBatterySaver,
     inTraining,
+    inBoss,
     events,
     spells,
     helpers,
@@ -352,6 +362,19 @@ const FAST_STATE_JS = `() => {
 // ===================================================================
 // MAIN
 // ===================================================================
+
+const BOSS_NAME_PATTERN = /(?:sala\s+d[oe]\s+chefe|sala\s+d[oe]\s+boss|\bboss\b|\bchefe\b|brokul|scarlett\s+etzel|oberon|ratmiral|nightmare\s+beast|darkfang|bloodback|shadowpelt|black\s+vixen|sharpclaw|utua\s+stone|amenef|ahau|irgix|kusuma|brain\s+head|neferi|sister\s+hetai|time\s+guardian|lloyd|sir\s+nictros|megasylvan|drume|ghulosh|lokathmor|mazzinor|brainstealer|leiden|frozen\s+horror|dragonking|thorn\s+knight|alptramun|tanjis|rakesh|obujos|jaul)/i;
+
+function isBossActive(telemetry: any, softwareBossRunner?: any, waveText?: string): boolean {
+  if (telemetry?.inBoss) return true;
+  if (telemetry?.activeBossId) return true;
+  const runnerStatus = softwareBossRunner?.getStatus?.();
+  if (runnerStatus?.activeBossId || runnerStatus?.state === 'FIGHTING') return true;
+  const tHunt = String(telemetry?.hunt || '');
+  if (tHunt && tHunt !== 'Conectando...' && tHunt !== '—' && BOSS_NAME_PATTERN.test(tHunt)) return true;
+  if (waveText && waveText !== 'Conectando...' && waveText !== '—' && BOSS_NAME_PATTERN.test(waveText)) return true;
+  return false;
+}
 
 // 100% de stamina (2520 min / 42:00). O placeholder "42:00" do jogo é
 // ambíguo durante o carregamento, mas com o personagem confirmado no Treino
@@ -620,15 +643,19 @@ async function main() {
 
     const activeText = telemetry.hunt && telemetry.hunt !== 'Conectando...' && telemetry.hunt !== '—'
       ? telemetry.hunt : '';
+    const inBossNow = isBossActive(telemetry, softwareBossRunner, activeText);
     const activeMatch = matchHunt(activeText);
     // manualHuntId e authoritativeHuntId têm prioridade máxima sobre telemetry
     // transitório para evitar que pacotes WebSocket de outras salas (ou de
     // chat/eventos paralelos) façam a hunt exibida no painel piscar brevemente.
-    const selectedHuntId = manualHuntId
-      || authoritativeHuntId
-      || activeMatch?.id
-      || (profiler as any).activeHuntId
-      || null;
+    // Porém na sala do chefe a exibição fixa em 'boss' com XP zerada.
+    const selectedHuntId = inBossNow
+      ? 'boss'
+      : (manualHuntId
+        || authoritativeHuntId
+        || activeMatch?.id
+        || (profiler as any).activeHuntId
+        || null);
     const selectedHunt = selectedHuntId
       ? HUNTS_TABLE.find((h: any) => h.id === selectedHuntId) || null
       : activeMatch;
@@ -724,18 +751,22 @@ async function main() {
       ? Math.floor(Math.max(0, telemetry.kills - sessionKillsBase) * matrixXpPerKill)
       : 0;
     const sessionXp = Math.floor(Math.max(mappedSessionXp, hudXpAccumulated, estimatedSessionXp));
-    if (inTrainingNow) {
+    if (inTrainingNow || inBossNow) {
+      const isBoss = inBossNow && !inTrainingNow;
+      const bossName = (telemetry as any).activeBossId
+        ? `Sala do Chefe (${(telemetry as any).activeBossId})`
+        : (activeText && BOSS_NAME_PATTERN.test(activeText) ? activeText : "Sala do Chefe (Boss)");
       return {
         elapsedSeconds,
-        selectedHuntId: null,
-        selectedHuntName: "Treino Online",
+        selectedHuntId: isBoss ? 'boss' : null,
+        selectedHuntName: isBoss ? bossName : "Treino Online",
         selectedHuntMetrics: {
           xp_per_hour: 0,
           loot_per_hour: 0,
           gold_per_hour: 0,
           sample_ready: false,
           gold_sample_ready: false,
-          source: 'treino',
+          source: isBoss ? 'boss' : 'treino',
           window_seconds: 0,
           historical_gold_per_hour: 0,
         },
@@ -1028,10 +1059,12 @@ async function main() {
       }
       const topLevel = memberLevels.length > 0 ? Math.max(...memberLevels) : Number(telemetry.level) || 0;
       const partyConnected = Math.min(3, new Set(rawMembers.map((m: any) => Number(m?.slot)).filter((s: number) => Number.isFinite(s))).size || Math.min(3, rawMembers.length));
-      const partyConfigReady = partyMembersOut.filter((member: any) => member.ready).length;
-      const activeHunt = telemetry.hunt && telemetry.hunt !== "Conectando..." && telemetry.hunt !== "—" ? telemetry.hunt : "—";
-      const mapSnapshot = protocolMapper.snapshot();
       const metrics = runtimeMetrics();
+      const inBossStatus = isBossActive(telemetry, softwareBossRunner, telemetry.hunt);
+      const activeHunt = inBossStatus
+        ? (metrics.selectedHuntName || "Sala do Chefe (Boss)")
+        : (telemetry.hunt && telemetry.hunt !== "Conectando..." && telemetry.hunt !== "—" ? telemetry.hunt : "—");
+      const mapSnapshot = protocolMapper.snapshot();
       const bossState = (telemetry as any).autoBossState;
       if (config.autoBoss) {
         if (bossState && typeof bossState === 'object' && Number(bossState.until || 0) > Date.now()) {
@@ -1276,6 +1309,7 @@ async function main() {
   // intervalo curto, sem permitir que JEV ou o resume antigo troquem a hunt.
   const enforceManualHunt = (observedId: string, source: string): void => {
     if (!manualHuntId || observedId === manualHuntId) return;
+    if (telemetry.inTreino || isBossActive(telemetry, softwareBossRunner, observedId)) return;
     needsHuntEntry = true;
     const now = Date.now();
     if (now - lastManualReapplyAt < 12_000 || !pageRef) return;
@@ -1302,6 +1336,7 @@ async function main() {
   const softwareBossRunner = new SoftwareBossRunner();
 
   const huntFinishedForSwitch = (): boolean => {
+    if (isBossActive(telemetry, softwareBossRunner)) return false;
     const current = String(telemetry.hunt || '').toLowerCase();
     if (!telemetry.online || telemetry.inTreino) return true;
     if (/cidade|city|templo|temple/.test(current)) return true;
@@ -1837,6 +1872,11 @@ async function main() {
             trainingFalseStreak = 0;
           }
         }
+        if (domState.inBoss === true) {
+          telemetry.inBoss = true;
+        } else if (domState.inBoss === false && !softwareBossRunner.getStatus().activeBossId && !telemetry.activeBossId && !BOSS_NAME_PATTERN.test(domState.wave || '')) {
+          telemetry.inBoss = false;
+        }
         if (domState.wave) telemetry.updateHunt(domState.wave, source);
         if (domState.level) telemetry.updateLevel(domState.level, source);
         if (domState.gold !== undefined && domState.gold !== null) telemetry.updateGold(domState.gold, source);
@@ -2014,7 +2054,7 @@ async function main() {
         if (domState.connExpired) needsHuntEntry = true;
 
         // Profiler
-        if (looksLikeTreino(wave) || telemetry.inTreino) {
+        if (looksLikeTreino(wave) || telemetry.inTreino || isBossActive(telemetry, softwareBossRunner, wave)) {
           if ((profiler as any).activeHuntId !== undefined && (profiler as any).activeHuntId !== null) {
             try { (profiler as any).commitSession(telemetry.gold, telemetry.kills, false); } catch (_) {}
             (profiler as any).activeHuntId = null;
@@ -2440,7 +2480,7 @@ async function main() {
             waves: telemetry.waves,
             gold: telemetry.gold,
             level: telemetry.level,
-            bossActive: Boolean(softwareBossRunner.getStatus().activeBossId),
+            bossActive: isBossActive(telemetry, softwareBossRunner, wave),
             bossChargesLeft: softwareBossRunner.getStatus().chargesLeft,
           },
           autoRestoreTarget,
@@ -2806,6 +2846,9 @@ async function main() {
                   resistances: (magicState as any).resistances || [],
                 };
                 const inspectRes = await safeEval<any>(pageRef, "equip", { ...equipArgs, job: "inspect" }, 16000);
+                if (inspectRes?.candidates || inspectRes?.equippedSlots) {
+                  extrasScheduler.setKnownEquipment(inspectRes.candidates, inspectRes.equippedSlots);
+                }
                 const equipmentDecision = await jev.decideEquipmentBatch({
                   vocation: equipArgs.vocation,
                   level: equipArgs.level,

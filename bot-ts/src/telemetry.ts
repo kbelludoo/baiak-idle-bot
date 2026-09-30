@@ -272,6 +272,8 @@ export class TelemetryStore {
   public huntStageTotal: number | null = null;
   public huntStageLabel: string | null = null;
   public inTreino: boolean = false;
+  public inBoss: boolean = false;
+  public activeBossId: string | null = null;
   public online = false;
 
   // Contrato monitor/: uptime contínuo sem queda + contadores de WS.
@@ -749,6 +751,8 @@ export class TelemetryStore {
         : false,
       loop_mode: this.loopMode,
       treino: this.inTreino,
+      boss: this.inBoss,
+      active_boss_id: this.activeBossId,
       party_slots: this.partySlots,
       party_members: this.shooters,
       room_players: this.roomPlayers,
