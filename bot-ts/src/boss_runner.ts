@@ -187,7 +187,7 @@ export class SoftwareBossRunner {
   private killsToday: number = 0;
   private lastRewardCollectAt: number = 0;
   private lastChargesLeft: number = -1;   // -1 = ainda nao lemos do servidor
-  private lastChargesMax: number = 3;
+  private lastChargesMax: number = 20;
   private dayStartMs: number = 0;         // inicio do dia atual para reset de killsToday
   /** Cooldowns internos (boss -> timestamp de liberacao) quando o servidor nao fornece */
   private internalCooldowns: Record<string, number> = {};
@@ -237,18 +237,18 @@ export class SoftwareBossRunner {
   }
 
   /**
-   * Detecta se a conta e VIP pelo pacote autobossstate.until > now.
-   * Conta VIP sem Auto Boss Store: 5 cargas/dia.
-   * Conta Free: 3 cargas/dia.
-   * Se o servidor enviar bossgate.chargesMax, usa esse valor diretamente.
+   * Cargas diárias da Sala de Chefes:
+   * - Conta Free: 20 cargas/dia (20 de 20).
+   * - Conta VIP: 40 cargas/dia (40 de 40).
+   * Se o servidor fornecer bossgate.chargesMax explicitamente, usa o valor autoritativo do servidor.
    */
   private resolveChargesMax(snapshot: BossPageSnapshot): number {
     // Se o servidor forneceu o maximo explicitamente (via bossgate ou window.m)
     if (snapshot.bossChargesMax > 0) {
       return snapshot.bossChargesMax;
     }
-    // Inferido: conta VIP tem 5 tentativas/dia; Free tem 3
-    return snapshot.isVipAccount ? 5 : 3;
+    // Inferido: conta VIP tem 40 tentativas/dia; Free tem 20
+    return snapshot.isVipAccount ? 40 : 20;
   }
 
   /**
@@ -285,11 +285,12 @@ export class SoftwareBossRunner {
             ? Number(bossgate.chargesMax)
             : (m.bossChargesMax !== undefined ? Number(m.bossChargesMax) : 0));
 
-        // autobossstate: until > now = conta tem passe VIP Auto Boss da Store
+        // autobossstate ou vipUntil: until > now = conta tem benefício VIP
         const abs = bs.autobossstate || {};
         const autoBossUntil = Number(abs.until ?? 0);
         const autoBossRunning = Boolean(abs.running);
-        const isVipAccount = autoBossUntil > Date.now();
+        const vipUntil = Number(bs.vipUntil || m.lastVipUntil || 0);
+        const isVipAccount = autoBossUntil > Date.now() || vipUntil > Date.now();
 
         return {
           bossChargesLeft: rawCharges,
@@ -454,7 +455,7 @@ export class SoftwareBossRunner {
 
     // 4. Resolve quantas cargas restam hoje
     const chargesMax = this.resolveChargesMax(snapshot);
-    if (chargesMax > this.lastChargesMax || this.lastChargesMax === 3) {
+    if (chargesMax > this.lastChargesMax || this.lastChargesMax <= 5 || this.lastChargesMax === 20) {
       this.lastChargesMax = chargesMax;
     }
 

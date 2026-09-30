@@ -487,7 +487,7 @@ export const KERNEL_SOURCE = `
     deaths: [], dailystatus: null, event: null, eventmeta: null,
     reconnectOk: false, resume: null, ready: false,
     bossChargesLeft: null, bossPassLeft: null, bossCooldowns: null, activeBossId: null,
-    bossgate: null, autobossstate: null, bossChargesMax: null,
+    bossgate: null, autobossstate: null, bossChargesMax: null, vipUntil: null,
     lastUpdate: 0,
   };
 
@@ -608,7 +608,9 @@ export const KERNEL_SOURCE = `
         if (Array.isArray(plist)) state.players = plist.slice(0, 12);
       } else if (type === 'mine' && payload && typeof payload === 'object') {
         if (typeof payload.gold === 'number') state.lootGold = payload.gold;
+        if (payload.vipUntil !== undefined) state.vipUntil = payload.vipUntil;
         if (payload.bossChargesLeft !== undefined) state.bossChargesLeft = payload.bossChargesLeft;
+        if (payload.bossChargesMax !== undefined) state.bossChargesMax = payload.bossChargesMax;
         if (payload.bossPassLeft !== undefined) state.bossPassLeft = payload.bossPassLeft;
         if (payload.bossCooldowns !== undefined) state.bossCooldowns = payload.bossCooldowns;
         if (payload.activeBossId !== undefined) state.activeBossId = payload.activeBossId;

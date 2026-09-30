@@ -1407,8 +1407,12 @@ function bossSection(s) {
   const state = bs.state || (autoSub.status === 'FUNCIONAL' ? 'IDLE' : 'DISABLED');
   const activeBossId = bs.activeBossId || (state === 'FIGHTING' ? 'Chefe Ativo' : null);
   const killsToday = Number(bs.killsToday ?? 0);
-  const chargesLeft = bs.chargesLeft !== undefined ? Number(bs.chargesLeft) : (s.bossChargesLeft !== undefined ? Number(s.bossChargesLeft) : 20);
-  const chargesMax = Number(bs.chargesMax || 20);
+  const isVip = Boolean((s.vipUntil && Number(s.vipUntil) > Date.now()) || bs.isVipAccount);
+  const defaultMax = isVip ? 40 : 20;
+  const chargesMax = Number(bs.chargesMax >= 20 ? bs.chargesMax : (s.bossChargesMax >= 20 ? s.bossChargesMax : defaultMax));
+  const chargesLeft = bs.chargesLeft !== undefined && bs.chargesLeft >= 0
+    ? Number(bs.chargesLeft)
+    : (s.bossChargesLeft !== undefined && s.bossChargesLeft >= 0 ? Number(s.bossChargesLeft) : Math.max(0, chargesMax - killsToday));
   const chargesPct = Math.min(100, Math.max(0, Math.round((chargesLeft / Math.max(1, chargesMax)) * 100)));
   const detail = bs.detail || autoSub.detail || (state === 'FIGHTING' ? `Em combate contra ${activeBossId}` : 'Rotação diária pronta');
 
