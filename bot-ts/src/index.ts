@@ -2454,7 +2454,12 @@ async function main() {
           async (reason) => {
             if (pageRef) {
               console.warn(`[AUTO-RESTORE] 🔄 Executando recarga da página (motivo: ${reason})...`);
+              forceResetEvalLocks(pageRef);
+              actionQueue.clear();
               await pageRef.reload({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => null);
+              forceResetEvalLocks(pageRef);
+              actionQueue.clear();
+              await sleep(3500);
             }
           }
         );

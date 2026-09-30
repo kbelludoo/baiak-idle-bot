@@ -486,7 +486,7 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
                 : ((scanRes.currentGold || 0) >= 105000000 ? 'Aguardando próxima janela de venda' : 'Acumulando saldo mín (105kk)'),
             };
           }
-           logs.push(`[AUCTION] Mercado: saldo=${Math.floor((scanRes.currentGold || 0) / 1e6)}kk | alvo=${Math.floor((scanRes.goldToSell || 0) / 1e6)}kk | faixa=${Math.round((scanRes.marketMinRate || 0) / 1e6)}-${Math.round((scanRes.marketMaxRate || 0) / 1e6)}kk/c | mediana=${Math.round((scanRes.referenceRate || 0) / 1e6)}kk/c | coins=${scanRes.coinsAvailable || 0}${scanRes.reservedCoins ? ` (reservados=${scanRes.reservedCoins})` : ''} | anuncio_ativo=${scanRes.hasOwnActiveGold}`);
+           logs.push(`[AUCTION] Mercado: saldo=${Math.floor((scanRes.currentGold || 0) / 1e6)}kk | alvo=${Math.floor((scanRes.goldToSell || 0) / 1e6)}kk | faixa=${Math.round((scanRes.marketMinRate || 0) / 1e6)}-${Math.round((scanRes.marketMaxRate || 0) / 1e6)}kk/c | mediana=${Math.round((scanRes.referenceRate || 0) / 1e6)}kk/c | coins=${scanRes.coinsAvailable || 0}${scanRes.reservedCoins ? ` (reservados=${scanRes.reservedCoins})` : ''} | sniper_min=${(config.auctionMinGoldPerCoin / 1e6).toFixed(1)}kk/c | venda_auto=${config.auctionSellEnabled ? 'ON' : 'OFF(manual)'}`);
           let sellDecision: any = null;
           let buyDecision: any = null;
 
@@ -535,6 +535,7 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
                 coinsAvailable: scanRes.coinsAvailable,
                 budget: config.auctionBudget,
                 minMarginPct: config.auctionMinMarginPct,
+                minGoldPerCoin: config.auctionMinGoldPerCoin || 7_000_000,
                 maxMinutesRemaining: config.auctionSniperMaxMinutes,
                 referenceRate: scanRes.historyMedianRate || scanRes.referenceRate,
                 preferredCurrency: 'market',
@@ -579,64 +580,32 @@ export class DefaultExtrasScheduler implements ExtrasScheduler {
           if (config.token) authHeaders['authorization'] = `Bearer ${config.token}`;
 
           let deferredBrowserSell: any = null;
+          let sellAdvisory: any = null;
           if (execSellDecision) {
-            const sellMsg = `${Math.floor(scanRes.goldToSell / 1e6)}kk por ${execSellDecision.targetPriceCoins} coins`;
-            logs.push(`[AUCTION] Iniciando publicação automática: ${sellMsg}`);
-            if (!config.auctionLive) {
-              logs.push(`[AUCTION] DRY-RUN VENDA: ${sellMsg}`);
-            } else {
-              try {
-                const createBody = JSON.stringify({ '0': {
-                  goldAmount: Math.floor(scanRes.goldToSell),
-                  startPrice: Math.max(25, Math.floor(execSellDecision.targetPriceCoins)),
-                  // O bundle nativo envia a senha da conta nesta mesma
-                  // mutação. Sem ela o servidor responde com a mensagem
-                  // genérica de robô antes de abrir a confirmação visual.
-                  durationHours: 6,
-                  password: config.auctionSellPassword || '',
-                  twofaCode: '',
-                  smsCode: '',
-                  pushProof: '',
-                  confirmText: 'CONFIRMAR',
-                  captchaToken: this.cachedTurnstileToken || '',
-                }});
-                const tokenAge = Math.round((now - this.cachedTurnstileTs) / 1000);
-                if (this.cachedTurnstileToken) {
-                  logs.push(`[AUCTION] Usando token Turnstile (${tokenAge}s atrás)`);
-                } else {
-                  logs.push('[AUCTION] AVISO: sem token Turnstile cacheado — aguardando widget inicializar');
-                }
+            const goldKk = Math.floor(scanRes.goldToSell / 1e6);
+            const targetCoins = execSellDecision.targetPriceCoins;
+            const minGoldKk = Math.floor(scanRes.minGoldAmount / 1e6);
+            sellAdvisory = {
+              shouldSell: true,
+              goldAmount: scanRes.goldToSell,
+              goldAmountKk: goldKk,
+              targetPriceCoins: targetCoins,
+              minGoldAmountKk: minGoldKk,
+              reason: execSellDecision.reason || `Mercado favorável: venda recomendada por no mínimo ${targetCoins} coins`,
+              recommendedAt: new Date().toISOString(),
+              message: `Recomendado anunciar ${goldKk}kk de Gold por no mínimo ${targetCoins} Coins no site (mínimo: ${minGoldKk}kk).`,
+            };
+            logs.push(`[AUCTION] 📢 AVISO DE VENDA: Recomendado anunciar ${goldKk}kk de Gold por no mínimo ${targetCoins} coins no leilão pelo site!`);
+          }
 
-                const createRes = await fetch('https://baiakidle.com/api/trpc/auction.createGold?batch=1', {
-                  method: 'POST',
-                  headers: authHeaders,
-                  body: createBody,
-                  signal: AbortSignal.timeout(30000),
-                }).then(r => r.json()).catch(() => null);
-                const item = Array.isArray(createRes) ? createRes[0] : createRes;
-                const data = item?.result?.data?.json ?? item?.result?.data ?? item?.data ?? null;
-                const errMsg = item?.error?.json?.message || item?.error?.json?.data?.message ||
-                  item?.error?.message || item?.error?.data?.message || null;
-                if (data && !errMsg) {
-                  logs.push(`[AUCTION] ANÚNCIO DE VENDA CRIADO (JEV): ${sellMsg}`);
-                } else {
-                  logs.push(`[AUCTION] VENDA RECUSADA [${errMsg || 'falha'}]: ${sellMsg}`);
-                  // A API direta não consegue concluir o desafio Turnstile
-                  // quando o token não foi emitido ou já expirou. Nesse caso,
-                  // reutiliza o fluxo nativo da página, que abre o widget,
-                  // preenche a confirmação e tenta novamente com a sessão do
-                  // navegador. Não repete o anúncio para erros de saldo,
-                  // preço ou autenticação.
-                  const needsBrowserChallenge = /rob[oô]|robot|captcha|turnstile|challenge|bot/i.test(String(errMsg || ''));
-                  if (needsBrowserChallenge) {
-                    logs.push('[AUCTION] Desafio anti-bot (Turnstile/captcha) detectado no servidor — venda pausada por 30m para não travar o bot');
-                    this.lastTimes['auction'] = now + 1800000; // 30 min cooldown
-                    deferredBrowserSell = null;
-                  }
-                }
-              } catch (e: any) {
-                logs.push(`[AUCTION] ERRO VENDA (${String(e?.message || e)})`);
-              }
+          if (this.lastAuctionStatus) {
+            if (sellAdvisory) {
+              this.lastAuctionStatus.sellAdvisory = sellAdvisory;
+              this.lastAuctionStatus.sellStatus = `📢 Hora de vender: anuncie ${sellAdvisory.goldAmountKk}kk por ${sellAdvisory.targetPriceCoins} coins no site!`;
+            } else if (scanRes.hasOwnActiveGold) {
+              this.lastAuctionStatus.sellStatus = 'Anúncio de Gold ativo no mercado';
+            } else if (scanRes.currentGold < scanRes.minGoldAmount) {
+              this.lastAuctionStatus.sellStatus = `Acumulando saldo mín (${Math.floor(scanRes.minGoldAmount / 1e6)}kk)`;
             }
           }
 

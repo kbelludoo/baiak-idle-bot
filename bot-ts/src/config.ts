@@ -166,8 +166,9 @@ export function parseConfig(): BotConfig {
     auctionMaxItems: parseInt(getVal('--auction-max-items', env.AUCTION_MAX_ITEMS || '2'), 10),
     auctionSniperMaxMinutes: clamp(parseInt(getVal('--auction-sniper-mins', env.AUCTION_SNIPER_MAX_MINS || '3'), 10) || 3, 1, 360),
     auctionSellGoldAmount: parseInt(getVal('--auction-sell-gold', env.AUCTION_SELL_GOLD || '800000000'), 10) || 800_000_000,
-    auctionSellEnabled: has('--auction-sell') || envFlag('AUCTION_SELL_ENABLED', true),
+    auctionSellEnabled: has('--auction-sell') ? true : has('--no-auction-sell') ? false : envFlag('AUCTION_SELL_ENABLED', false),
     auctionSellPassword: getVal('--auction-sell-password', env.AUCTION_SELL_PASSWORD || ''),
+    auctionMinGoldPerCoin: parseInt(getVal('--auction-min-gpc', env.AUCTION_MIN_GOLD_PER_COIN || '7000000'), 10) || 7_000_000,
     jevEnabled: has('--no-jev') ? false : envFlag('JEV_ENABLED', true),
     jevApiKey: getVal('--jev-api-key', env.EXPERIENTIAL_API_KEY || env.TYPESAFE_API_KEY || env.JEV_API_KEY || ''),
     jevEndpoint: getVal('--jev-endpoint', env.JEV_ENDPOINT || 'https://api.typesafe.ai/v1/systemone'),
@@ -199,7 +200,7 @@ export function describeFlags(c: BotConfig): string {
     `screenshot=${c.screenshot ? 'ON' : 'OFF'}`,
     `jev=${c.jevEnabled ? (c.jevApiKey ? 'ON(API)' : 'ON(local-fallback)') : 'OFF'}`,
     `jev_auto_hunt=${c.jevAutoHunt ? 'ON' : 'OFF'}`,
-    `auction=${c.auctionEnabled ? (c.auctionLive ? 'LIVE' : 'DRY') : 'OFF'}(budget=${c.auctionBudget}c,sell=${(c.auctionSellGoldAmount / 1_000_000).toFixed(0)}kk)`,
+    `auction=${c.auctionEnabled ? (c.auctionLive ? 'LIVE' : 'DRY') : 'OFF'}(budget=${c.auctionBudget}c,minGpc=${(c.auctionMinGoldPerCoin / 1_000_000).toFixed(1)}kk,sell=${c.auctionSellEnabled ? (c.auctionSellGoldAmount / 1_000_000).toFixed(0) + 'kk' : 'MANUAL'})`,
     c.stream ? `stream=${c.streamWidth}x${c.streamHeight}@${c.streamFps}q${c.streamQuality}` : 'stream=OFF',
   ];
   if (c.forceHunt && c.huntId) bits.push(`force_hunt=${c.huntId}`);

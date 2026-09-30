@@ -1465,13 +1465,35 @@ function auctionSection(s) {
   const hasOwnActiveGold = Boolean(auc.hasOwnActiveGold);
   const refRate = Number(auc.referenceRate ?? 5500000);
   const goldToSell = Number(auc.goldToSell ?? 0);
+  const advisory = auc.sellAdvisory || null;
   const sellStatus = auc.sellStatus || (hasOwnActiveGold ? 'Anúncio de Gold ativo no mercado' : 'Acumulando saldo mín (105kk)');
 
   let badgeClass = 'badge-auction-active';
   let badgeText = activeBids > 0 ? `🎯 ${activeBids} LANCE(S) ATIVO(S)` : '🟢 SNIPER MONITORANDO';
   if (hasOwnActiveGold) {
     badgeText = '💰 VENDA DE GOLD ATIVA';
+  } else if (advisory && advisory.shouldSell) {
+    badgeText = '📢 HORA DE VENDER GOLD';
   }
+
+  const advisoryHtml = advisory && advisory.shouldSell ? `
+    <div style="margin-top:12px;padding:12px 14px;background:rgba(234,179,8,0.14);border:1px solid rgba(234,179,8,0.4);border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:220px;">
+        <div style="font-weight:700;color:#fde047;font-size:12px;display:flex;align-items:center;gap:6px;">
+          <span>📢</span> <span>HORA DE VENDER GOLD NO SITE!</span>
+        </div>
+        <div style="color:#f8fafc;font-size:13px;margin-top:4px;font-weight:600;">
+          Recomendado anunciar <b>${advisory.goldAmountKk}kk de Gold</b> por no mínimo <b>${advisory.targetPriceCoins} Coins</b> no leilão do jogo!
+        </div>
+        <div style="color:#94a3b8;font-size:11px;margin-top:2px;">
+          ${esc(advisory.reason || '')} (Mínimo exigido: ${advisory.minGoldAmountKk || 100}kk)
+        </div>
+      </div>
+      <a href="https://baiakidle.com" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;padding:7px 14px;background:#eab308;color:#000;font-weight:700;font-size:11px;border-radius:6px;text-decoration:none;transition:opacity 0.2s;">
+        Abrir Baiak Idle ↗
+      </a>
+    </div>
+  ` : '';
 
   return `
     <div class="card-sub-panel auction-panel">
@@ -1490,7 +1512,7 @@ function auctionSection(s) {
         </div>
         <div class="panel-item">
           <span>Venda de Gold por Coins</span>
-          <strong title="${esc(sellStatus)}">${hasOwnActiveGold ? '🟢 Anúncio Ativo' : 'Acumulando'}</strong>
+          <strong title="${esc(sellStatus)}">${hasOwnActiveGold ? '🟢 Anúncio Ativo' : (advisory && advisory.shouldSell ? '📢 Vender Agora' : 'Acumulando')}</strong>
           <small>${goldToSell > 0 ? `Alvo: ${formatGold(goldToSell)} gold` : 'Mín: 105kk gold'}</small>
         </div>
         <div class="panel-item">
@@ -1504,6 +1526,7 @@ function auctionSection(s) {
           <small>${num(walletCoins)} carteira · ${num(marketCoins)} mercado</small>
         </div>
       </div>
+      ${advisoryHtml}
     </div>
   `;
 }

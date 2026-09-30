@@ -469,6 +469,7 @@ export class JevEngine {
     coinsAvailable: number;
     budget: number;
     minMarginPct: number;
+    minGoldPerCoin?: number;
     maxMinutesRemaining?: number;
     referenceRate?: number; // gold por coin da mediana de mercado (opcional)
     preferredCurrency?: 'market' | 'normal';
@@ -494,17 +495,21 @@ export class JevEngine {
     }
 
     const maxMins = state.maxMinutesRemaining ?? 3;
+    const minGpc = Math.max(0, Number(state.minGoldPerCoin ?? 0));
 
-    // Filtra ofertas dentro do orçamento e pontua priorizando maior gold por coin e lotes acabando (sniping)
+    // Filtra ofertas dentro do orçamento e que atendam à taxa mínima de gold por coin (ex: >= 7kk/coin)
     const withinBudget = state.listings.filter(l => {
       const bidPrice = Math.max(l.priceCoins, Number(l.nextPriceCoins) || l.priceCoins);
-      return bidPrice <= state.budget && bidPrice <= state.coinsAvailable;
+      const gpc = bidPrice > 0 ? l.goldAmount / bidPrice : 0;
+      return bidPrice <= state.budget && bidPrice <= state.coinsAvailable && (minGpc <= 0 || gpc >= minGpc);
     });
     if (!withinBudget.length) {
       return {
         selectedListingId: null,
         isProfitable: false,
-        reason: 'Nenhuma oferta viável dentro do orçamento de coins',
+        reason: minGpc > 0
+          ? `Nenhuma oferta viável dentro do orçamento de coins com taxa mínima de ${(minGpc / 1e6).toFixed(1)}kk/coin`
+          : 'Nenhuma oferta viável dentro do orçamento de coins',
         source: 'fallback' as const,
       };
     }
@@ -583,7 +588,9 @@ export class JevEngine {
       questions: {
         is_worth_bidding: {
           type: 'noul',
-           instructions: 'Maximize o lucro absoluto em coins, não apenas gold por coin. Considere expected_profit_coins, preço do lance, taxa de revenda, tempo restante e risco de disputa. Só aprove se o lucro projetado for positivo e material.',
+          instructions: minGpc > 0
+            ? `Maximize o lucro em coins. Taxa mínima de corte: ${(minGpc / 1e6).toFixed(1)}kk gold por coin. Só aprove se o lote pagar pelo menos essa taxa e o lucro for positivo e seguro.`
+            : 'Maximize o lucro absoluto em coins, não apenas gold por coin. Considere expected_profit_coins, preço do lance, taxa de revenda, tempo restante e risco de disputa. Só aprove se o lucro projetado for positivo e material.',
         },
       },
     };
@@ -598,13 +605,14 @@ export class JevEngine {
         : fallbackProfitable))
       : fallbackProfitable;
 
+    const gpcDesc = (best.goldPerCoin / 1e6).toFixed(2);
     return {
       selectedListingId: isProfitable ? best.id : null,
       isProfitable,
       targetMaxPrice: isProfitable ? best.bidPriceCoins : undefined,
       expectedProfitCoins: Math.round(best.spreadCoins || 0),
       currency: state.preferredCurrency || 'market',
-      reason: `JEV sniper: ${isProfitable ? 'Arrematar' : 'Pular'} (prob=${prob !== undefined ? prob.toFixed(2) : '-'}, ~${best.minutesRemaining ?? '?'}m, lucro ~${Math.round(best.spreadCoins || 0)}c, margem ~${best.profitMarginPct.toFixed(1)}%)`,
+      reason: `JEV sniper: ${isProfitable ? 'Arrematar' : 'Pular'} #${best.id} [${gpcDesc}kk/c] (prob=${prob !== undefined ? prob.toFixed(2) : '-'}, ~${best.minutesRemaining ?? '?'}m, lucro ~${Math.round(best.spreadCoins || 0)}c, margem ~${best.profitMarginPct.toFixed(1)}%)`,
       source: 'jev_api',
       apiError: isProfitable ? undefined : (prob !== undefined ? `prob=${prob.toFixed(2)}<=0.5` : 'prob ausente'),
     };

@@ -118,6 +118,7 @@ export async function safeEval<T = any>(
     ]);
     return result;
   } catch (err: any) {
+    ACTIVE_EVAL_PAGES.delete(pageObject);
     if (!err?.message?.includes('Execution context was destroyed')) {
       console.warn(`[SAFE_EVAL AVISO] [${name}] ${err?.message || err}`);
     }

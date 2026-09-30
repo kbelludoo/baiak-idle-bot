@@ -132,6 +132,38 @@ describe('JEV (TypeSafe AI Decision Engine)', () => {
     expect(res.expectedProfitCoins).toBe(-5);
   });
 
+  it('respeita taxa mínima de corte de gold por coin (ex: 7kk/c) descartando lotes abaixo', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const listings = [
+      { id: 'cheap-rate', goldAmount: 600_000_000, priceCoins: 100, minutesRemaining: 2 }, // 6.0kk/c -> rejeita (< 7kk)
+      { id: 'golden-rate', goldAmount: 750_000_000, priceCoins: 100, minutesRemaining: 3 }, // 7.5kk/c -> aceita (>= 7kk)
+    ];
+
+    const res = await offlineEngine.decideGoldAuction({
+      coinsAvailable: 200,
+      budget: 100,
+      minMarginPct: 10,
+      minGoldPerCoin: 7_000_000,
+      referenceRate: 5_000_000,
+      listings,
+    });
+
+    expect(res.selectedListingId).toBe('golden-rate');
+    expect(res.isProfitable).toBe(true);
+
+    // Se todos forem abaixo de 7kk/c, recusa
+    const resOnlyLow = await offlineEngine.decideGoldAuction({
+      coinsAvailable: 200,
+      budget: 100,
+      minMarginPct: 10,
+      minGoldPerCoin: 7_000_000,
+      referenceRate: 5_000_000,
+      listings: [{ id: 'cheap-rate', goldAmount: 600_000_000, priceCoins: 100, minutesRemaining: 2 }],
+    });
+    expect(resOnlyLow.selectedListingId).toBeNull();
+    expect(resOnlyLow.isProfitable).toBe(false);
+  });
+
   it('decideGoldSellListing calculates optimal coin price to sell gold at premium', async () => {
     const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
     const res = await offlineEngine.decideGoldSellListing({
