@@ -141,9 +141,11 @@
       || window.location.hostname === '127.0.0.1'
       || window.location.hostname.endsWith('trycloudflare.com');
 
+    const KNOWN_FLEET_TUNNEL = 'https://visit-had-hamilton-cubic.trycloudflare.com';
+
     const defaultApi = isDirectHost
       ? window.location.origin
-      : (localStorage.getItem('baiak_fleet_api') || '');
+      : (localStorage.getItem('baiak_fleet_api') || KNOWN_FLEET_TUNNEL);
 
     let apiUrl = paramApi || defaultApi;
     if (paramApi) localStorage.setItem('baiak_fleet_api', apiUrl);
