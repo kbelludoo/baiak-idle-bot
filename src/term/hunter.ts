@@ -584,11 +584,19 @@ export async function runSession(opts: HunterOptions): Promise<void> {
   // direto do terminal. Uma vez por processo — ver treeAppliedThisProcess.
   if (autoTree && !treeAppliedThisProcess) {
     treeAppliedThisProcess = true;
+    const currentSlotsMap: Record<string, number> = {};
+    const slotsArr = partySlotsFor(cachedChars, character);
+    for (const s of slotsArr) {
+      if (s?.name) currentSlotsMap[String(s.name).trim()] = s.slot;
+    }
+
     activateTalentTrees(trpc, room, {
       log,
+      slots: currentSlotsMap,
       paceMs: Number(process.env.TREE_PACE_MS ?? 30),
       adjacency: Number(process.env.TREE_ADJACENCY ?? 1.5),
       survivalWeight: Number(process.env.TREE_SURVIVAL ?? 0.35),
+      utilityWeight: Number(process.env.TREE_UTILITY ?? 0.15),
       settleMs: 15_000,
       verifyMs: 120_000,
     }).catch((err: any) => log(`[tree] falha ao aplicar a árvore: ${err?.message || err}`));

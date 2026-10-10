@@ -119,11 +119,13 @@ export async function waitForStableState(
 export function buildTreeTargets(raw: any, opts: TreeRunOptions = {}): TreeTarget[] {
   const slots = slotMap(opts.slots);
   const out: TreeTarget[] = [];
-  for (const c of characterRows(raw)) {
+  const rows = characterRows(raw);
+  for (let idx = 0; idx < rows.length; idx++) {
+    const c = rows[idx];
     const name = String(c?.name || '').trim();
     const vocation = String(c?.vocation || '').trim().toLowerCase();
     const level = Math.max(1, Math.floor(Number(c?.level) || 1));
-    const slot = slots[name];
+    const slot = slots[name] !== undefined ? slots[name] : idx;
     if (!name || slot === undefined) continue;
     if (!TALENT_TREES[vocation]) continue;
     const ranks = parseTree(c?.state?.tree);
