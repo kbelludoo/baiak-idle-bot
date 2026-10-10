@@ -65,6 +65,7 @@ export interface HunterOptions {
   autoLoop?: boolean;
   /** Porta do painel HTTP de controle (0 desliga). */
   controlPort?: number;
+  priority?: 'balanced' | 'gold' | 'xp';
   log?: (msg: string) => void;
 }
 
@@ -99,15 +100,26 @@ export function pickHuntForLevel(level: number): string | null {
  * - Prioriza hunts que o personagem aguenta tancar sem wipe (evitando perda de gold)
  * - Maximiza balance_score entre XP/h e Gold/h
  */
-export function pickBestHunt(level: number, magic?: Record<string, any> | null): string {
+export function pickBestHunt(
+  level: number,
+  magic?: Record<string, any> | null,
+  priority: 'balanced' | 'gold' | 'xp' = 'balanced',
+): string {
   if (!Number.isFinite(level) || level <= 0) return 'troll-cave';
   const available = HUNTS_TABLE.filter((h) => h.min <= level).map((h) => h.id);
   const ranked = rankHunts(available, level, magic);
   const tankable = ranked.filter((h) => h.can_tank);
-  if (tankable.length > 0) {
-    return tankable[0].id;
+  const pool = tankable.length > 0 ? tankable : ranked;
+
+  if (priority === 'gold') {
+    pool.sort((a, b) => (Number(b.gold_h) || 0) - (Number(a.gold_h) || 0));
+    return pool[0]?.id || 'glooth-cave';
   }
-  return ranked[0]?.id || pickHuntForLevel(level) || 'troll-cave';
+  if (priority === 'xp') {
+    pool.sort((a, b) => (Number(b.exp_h) || 0) - (Number(a.exp_h) || 0));
+    return pool[0]?.id || 'troll-cave';
+  }
+  return pool[0]?.id || pickHuntForLevel(level) || 'troll-cave';
 }
 
 /**
@@ -335,7 +347,8 @@ export async function runSession(opts: HunterOptions): Promise<void> {
     );
   } catch { /* sem characters.list o poll cuida disso */ }
 
-  const huntId = opts.huntId || pickBestHunt(character.level) || 'troll-cave';
+  const priority = (opts.priority || process.env.PRIORITY || process.env.HUNT_PRIORITY || 'balanced').toLowerCase() as any;
+  const huntId = opts.huntId || pickBestHunt(character.level, null, priority) || 'troll-cave';
   const huntName = HUNTS_BY_ID[huntId]?.name || huntId;
   const sim = simulateHunt(huntId, character.level);
   log(

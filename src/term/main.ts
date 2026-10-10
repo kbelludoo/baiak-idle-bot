@@ -114,6 +114,7 @@ async function main(): Promise<void> {
     autoLoop: !has('--no-loop') && process.env.AUTO_LOOP !== 'false',
     controlPort: argInt('--control-port', Number(process.env.CONTROL_PORT ?? 8080)),
     autoBoss: has('--auto-boss') || process.env.AUTO_BOSS === 'true',
+    priority: (argVal('--priority') || process.env.PRIORITY || process.env.HUNT_PRIORITY || undefined) as any,
     log,
   };
 
