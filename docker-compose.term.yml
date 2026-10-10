@@ -1,0 +1,39 @@
+# Modo terminal (sem Chromium) — alternativa ao compose do modo navegador.
+#
+#   docker compose -f docker-compose.term.yml up -d --build
+#   docker compose -f docker-compose.term.yml logs -f
+#   docker compose -f docker-compose.term.yml down
+#
+# Em 1 GB de RAM o daemon do Docker consome ~150 MB, então prefira o Bun nativo
+# (bash instalar_terminal.sh) quando puder.
+services:
+  baiak-term:
+    build:
+      context: .
+      dockerfile: Dockerfile.term
+    image: baiak-terminal-bot
+    container_name: baiak-term
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      USER_DATA_DIR: /app/data
+      # Dentro do container o loopback é o próprio container, então o painel
+      # remoto precisa de CONTROL_TOKEN no .env para ESCRITA (leitura é livre).
+      CONTROL_HOST: ${CONTROL_HOST:-0.0.0.0}
+      CONTROL_PORT: ${CONTROL_PORT:-8080}
+    volumes:
+      # baiak_device precisa sobreviver ao rebuild, senão o fp muda a cada boot
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:8080:8080"
+    mem_limit: 256m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

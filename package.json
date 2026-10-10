@@ -1,0 +1,20 @@
+{
+  "name": "baiak-terminal-bot",
+  "version": "2.0.0",
+  "description": "Baiak Idle Terminal Bot — driver 24/7 sem navegador com TypeSafe AI (Jev) e simulação matemática de hunts",
+  "module": "src/term/main.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/term/main.ts",
+    "terminal": "bun run src/term/main.ts",
+    "terminal:probe": "bun run src/term/main.ts --probe --session-sec=30",
+    "test": "bun test",
+    "check": "bun build src/term/main.ts --target=bun --no-bundle && bun run typecheck",
+    "typecheck": "tsc --noEmit -p tsconfig.term.json"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.3"
+  }
+}

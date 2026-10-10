@@ -1,0 +1,469 @@
+import { describe, expect, it } from 'bun:test';
+import { JevEngine, estimateItemMarketValueCoins } from '../src/jev';
+
+describe('JEV (TypeSafe AI Decision Engine)', () => {
+  it('instantiates with proper configuration and defaults', () => {
+    const engine = new JevEngine({
+      apiKey: 'test-key',
+      endpoint: 'https://api.experientiallabs.ai/v1/systemone',
+      timeoutMs: 1500,
+    });
+    expect(engine.apiKey).toBe('test-key');
+    expect(engine.model).toBe('jev-latest');
+    expect(engine.enabled).toBe(true);
+  });
+
+  it('decideBuildAndSpells returns valid elemental build and rotation (local fallback)', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const res = await offlineEngine.decideBuildAndSpells({
+      vocation: 'Knight',
+      level: 150,
+      huntId: 'glooth-cave',
+      huntName: 'Glooth Bandits',
+      weaknesses: ['physical', 'energy'],
+      resistances: ['earth'],
+      availableElements: ['physical', 'fire', 'energy'],
+      hpPct: 85,
+      manaPct: 70,
+    });
+
+    expect(res.source).toBe('fallback');
+    expect(res.primaryElement).toBe('physical');
+    expect(res.rotationStyle).toBe('aoe_burst');
+    expect(res.needDefensive).toBe(false);
+  });
+
+  it('decideBuildAndSpells triggers mana_saver rotation when mana is critically low', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const res = await offlineEngine.decideBuildAndSpells({
+      vocation: 'Paladin',
+      level: 120,
+      huntId: 'asura-lair',
+      weaknesses: ['holy'],
+      resistances: ['death'],
+      availableElements: ['holy', 'physical'],
+      hpPct: 40,
+      manaPct: 15,
+    });
+
+    expect(res.rotationStyle).toBe('mana_saver');
+    expect(res.needDefensive).toBe(true);
+  });
+
+  it('decideEquipment correctly compares equipment upgrade score', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const upgrade = await offlineEngine.decideEquipment({
+      vocation: 'Knight',
+      level: 100,
+      equippedScore: 2050,
+      candidateName: 'Zaoan Helmet',
+      candidateSlot: 'helmet',
+      candidateRarity: 3,
+      candidateTier: 1,
+      candidateUp: 2,
+    });
+    expect(upgrade.shouldEquip).toBe(true);
+
+    const downgrade = await offlineEngine.decideEquipment({
+      vocation: 'Knight',
+      level: 100,
+      equippedScore: 2050,
+      candidateName: 'Leather Helmet',
+      candidateSlot: 'helmet',
+      candidateRarity: 0,
+      candidateTier: 0,
+      candidateUp: 0,
+    });
+    expect(downgrade.shouldEquip).toBe(false);
+  });
+
+  it('decideSellAndPouch respects thresholdPct and cooldown', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const shouldSell = await offlineEngine.decideSellAndPouch({
+      usedSlots: 30,
+      maxSlots: 32,
+      thresholdPct: 70,
+      lastSellSecAgo: 120,
+    });
+    expect(shouldSell.shouldSell).toBe(true);
+    expect(shouldSell.urgencyScore).toBeGreaterThanOrEqual(90);
+
+    const keepBag = await offlineEngine.decideSellAndPouch({
+      usedSlots: 10,
+      maxSlots: 32,
+      thresholdPct: 70,
+      lastSellSecAgo: 120,
+    });
+    expect(keepBag.shouldSell).toBe(false);
+  });
+
+  it('decideGoldAuction selects best gold per coin listing within budget and prioritizes ending auctions', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const listings = [
+      { id: 'deal-1', goldAmount: 1000000, priceCoins: 50, minutesRemaining: 15 },   // 20,000 g/c, 15m restantes (sniper!)
+      { id: 'deal-2', goldAmount: 2000000, priceCoins: 100, minutesRemaining: 300 }, // 20,000 g/c, 5h restantes
+      { id: 'deal-3', goldAmount: 8000000, priceCoins: 300, minutesRemaining: 10 },  // Fora do orçamento de 100 coins
+    ];
+
+    const res = await offlineEngine.decideGoldAuction({
+      coinsAvailable: 200,
+      budget: 100,
+      minMarginPct: 10,
+      maxMinutesRemaining: 45,
+      listings,
+    });
+
+    expect(res.selectedListingId).toBe('deal-1');
+    expect(res.isProfitable).toBe(true);
+  });
+
+  it('recusa comprar 100kk por 30 coins se a revenda calculada vale 25', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const res = await offlineEngine.decideGoldAuction({
+      coinsAvailable: 39,
+      budget: 100,
+      minMarginPct: 25,
+      referenceRate: 4_000_000,
+      listings: [{ id: 'loss', goldAmount: 100_000_000, priceCoins: 30, minutesRemaining: 2 }],
+    });
+
+    expect(res.selectedListingId).toBeNull();
+    expect(res.isProfitable).toBe(false);
+    expect(res.expectedProfitCoins).toBe(-5);
+  });
+
+  it('respeita taxa mínima de corte de gold por coin (ex: 9kk/c) descartando lotes abaixo', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const listings = [
+      { id: 'cheap-rate', goldAmount: 800_000_000, priceCoins: 100, minutesRemaining: 2 }, // 8.0kk/c -> rejeita (< 9kk)
+      { id: 'golden-rate', goldAmount: 950_000_000, priceCoins: 100, minutesRemaining: 3 }, // 9.5kk/c -> aceita (>= 9kk)
+    ];
+
+    const res = await offlineEngine.decideGoldAuction({
+      coinsAvailable: 200,
+      budget: 100,
+      minMarginPct: 10,
+      minGoldPerCoin: 9_000_000,
+      referenceRate: 6_000_000,
+      listings,
+    });
+
+    expect(res.selectedListingId).toBe('golden-rate');
+    expect(res.isProfitable).toBe(true);
+
+    // Se todos forem abaixo de 9kk/c, recusa
+    const resOnlyLow = await offlineEngine.decideGoldAuction({
+      coinsAvailable: 200,
+      budget: 100,
+      minMarginPct: 10,
+      minGoldPerCoin: 9_000_000,
+      referenceRate: 6_000_000,
+      listings: [{ id: 'cheap-rate', goldAmount: 800_000_000, priceCoins: 100, minutesRemaining: 2 }],
+    });
+    expect(resOnlyLow.selectedListingId).toBeNull();
+    expect(resOnlyLow.isProfitable).toBe(false);
+  });
+
+  it('estimateItemMarketValueCoins calcula valor calibrado em coins com base no tier e família nobre', () => {
+    expect(estimateItemMarketValueCoins({ name: 'Soulbleeder' })).toBe(350);
+    expect(estimateItemMarketValueCoins({ name: 'Inferniarch Bow', tier: 1 })).toBe(290); // 250 + 40
+    expect(estimateItemMarketValueCoins({ name: 'Falcon Plate' })).toBe(220);
+    expect(estimateItemMarketValueCoins({ name: 'Naga Crossbow' })).toBe(180);
+    expect(estimateItemMarketValueCoins({ name: 'Eldritch Quiver' })).toBe(150);
+    expect(estimateItemMarketValueCoins({
+      name: 'Falcon Battleaxe',
+      tier: 2,
+      attrs: [{ id: 1, level: 10 }],
+      upLevel: 7,
+    })).toBe(220 + 120 + 100 + 80); // 520 coins!
+  });
+
+  it('decideItemAuction seleciona item valioso BiS dentro do budget de 100 coins com alto lucro', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const listings = [
+      {
+        id: 'item-1',
+        item: { name: 'Inferniarch Bow', tier: 1 },
+        priceCoins: 30, // 30c por item de 290c -> spread de 260c!
+        minutesRemaining: 2,
+      },
+      {
+        id: 'item-2',
+        item: { name: 'Plate Legs', tier: 0 },
+        priceCoins: 5,  // valor est ~40c -> rejeita (< 150c)
+        minutesRemaining: 1,
+      },
+      {
+        id: 'item-3',
+        item: { name: 'Soulbleeder', tier: 2 },
+        priceCoins: 150, // fora do budget de 100 coins
+        minutesRemaining: 5,
+      },
+    ];
+
+    const res = await offlineEngine.decideItemAuction({
+      coinsAvailable: 100,
+      budget: 100,
+      minEstimatedValue: 150,
+      maxMinutesRemaining: 5,
+      listings,
+    });
+
+    expect(res.selectedListingId).toBe('item-1');
+    expect(res.isProfitable).toBe(true);
+    expect(res.estimatedValue).toBe(290);
+    expect(res.expectedProfitCoins).toBe(260);
+  });
+
+  it('decideGoldSellListing calculates optimal coin price to sell gold at premium', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const res = await offlineEngine.decideGoldSellListing({
+      goldToSell: 800_000_000, // 800kk
+      currentMarketRates: [4_000_000, 5_000_000, 6_000_000],
+    });
+
+    expect(res.shouldList).toBe(true);
+    expect(res.targetPriceCoins).toBeGreaterThan(100);
+    expect(res.source).toBe('fallback');
+  });
+
+  it('evaluateHuntRecommendation returns advisory recommendation without forcing switch', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const hunts = [
+      { id: 'trolls', name: 'Troll Cave', minLevel: 1 },
+      { id: 'dragon-lair', name: 'Dragon Lair', minLevel: 60 },
+      { id: 'glooth-cave', name: 'Glooth Bandits', minLevel: 140 },
+      { id: 'asura-lair', name: 'Asuras', minLevel: 250 },
+    ];
+
+    const rec = await offlineEngine.evaluateHuntRecommendation({
+      level: 155,
+      vocation: 'Paladin',
+      currentHuntId: 'dragon-lair',
+      unlockedHunts: hunts,
+      recentDeaths: 0,
+      candidates: [
+        { id: 'trolls', name: 'Troll Cave', minLevel: 1, xpPerHour: 200_000, netGoldPerHour: 50_000, sampleReady: true, source: 'server-preview' },
+        { id: 'dragon-lair', name: 'Dragon Lair', minLevel: 60, xpPerHour: 2_000_000, netGoldPerHour: 100_000, sampleReady: true, source: 'server-preview' },
+        { id: 'glooth-cave', name: 'Glooth Bandits', minLevel: 140, xpPerHour: 5_000_000, netGoldPerHour: 2_000_000, sampleReady: true, source: 'server-preview' },
+      ],
+    });
+
+    expect(rec.advisoryOnly).toBe(true);
+    expect(rec.recommendedHuntId).toBe('glooth-cave');
+    expect(rec.source).toBe('fallback');
+    expect(rec.confidence).toBeGreaterThanOrEqual(0.90);
+  });
+
+  it('garante confiança de 90%+ (0.90 a 0.95) quando alimentado com simulação determinística do motor', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const rec = await offlineEngine.evaluateHuntRecommendation({
+      level: 150,
+      vocation: 'Knight',
+      currentHuntId: 'dragon-lair',
+      unlockedHunts: [
+        { id: 'dragon-lair', name: 'Dragon Lair', minLevel: 60 },
+        { id: 'glooth-cave', name: 'Glooth Bandit', minLevel: 60 },
+        { id: 'refiner-cave', name: 'Stone Refiner', minLevel: 30 },
+      ],
+      recentDeaths: 0,
+      candidates: [
+        { id: 'dragon-lair', name: 'Dragon Lair', minLevel: 60, xpPerHour: 591_325, netGoldPerHour: 127_891, sampleReady: true, source: 'engine-deterministic' },
+        { id: 'glooth-cave', name: 'Glooth Bandit', minLevel: 60, xpPerHour: 700_620, netGoldPerHour: 353_748, sampleReady: true, source: 'engine-deterministic' },
+        { id: 'refiner-cave', name: 'Stone Refiner', minLevel: 30, xpPerHour: 502_751, netGoldPerHour: 566_586, sampleReady: true, source: 'engine-deterministic' },
+      ],
+    });
+
+    expect(rec.recommendedHuntId).toBe('refiner-cave');
+    expect(rec.confidence).toBeGreaterThanOrEqual(0.90);
+    expect(rec.confidence).toBeLessThanOrEqual(0.96);
+    expect(rec.rationale).toContain('engine-deterministic');
+  });
+
+  it('prioriza XP máxima quando goal é level (Level Rush)', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const rec = await offlineEngine.evaluateHuntRecommendation({
+      level: 150,
+      vocation: 'Knight',
+      currentHuntId: 'dragon-lair',
+      unlockedHunts: [
+        { id: 'dragon-lair', name: 'Dragon Lair', minLevel: 60 },
+        { id: 'glooth-cave', name: 'Glooth Bandit', minLevel: 60 },
+        { id: 'refiner-cave', name: 'Stone Refiner', minLevel: 30 },
+      ],
+      recentDeaths: 0,
+      goal: 'level',
+      candidates: [
+        { id: 'dragon-lair', name: 'Dragon Lair', minLevel: 60, xpPerHour: 591_325, netGoldPerHour: 127_891, sampleReady: true, source: 'engine-deterministic' },
+        { id: 'glooth-cave', name: 'Glooth Bandit', minLevel: 60, xpPerHour: 700_620, netGoldPerHour: 353_748, sampleReady: true, source: 'engine-deterministic' },
+        { id: 'refiner-cave', name: 'Stone Refiner', minLevel: 30, xpPerHour: 502_751, netGoldPerHour: 566_586, sampleReady: true, source: 'engine-deterministic' },
+      ],
+    });
+
+    expect(rec.recommendedHuntId).toBe('glooth-cave');
+    expect(rec.confidence).toBeGreaterThanOrEqual(0.90);
+  });
+
+  it('evaluateHuntRecommendation supports hunts table with min field', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const huntsWithMin = [
+      { id: 'troll-cave', name: 'Troll Cave', min: 1 },
+      { id: 'wyrm-cave', name: 'Wyrm', min: 130 },
+      { id: 'naga-lair', name: 'Naga Lair', min: 300 },
+    ];
+
+    const rec = await offlineEngine.evaluateHuntRecommendation({
+      level: 150,
+      vocation: 'Knight',
+      currentHuntId: 'troll-cave',
+      unlockedHunts: huntsWithMin as any,
+      recentDeaths: 0,
+    });
+
+    expect(rec.recommendedHuntId).toBe('troll-cave');
+    expect(rec.recommendedHuntName).toBe('Troll Cave');
+    expect(rec.rationale).toContain('Sem amostra válida');
+    expect(rec.advisoryOnly).toBe(true);
+  });
+
+  it('prefere matriz histórica robusta de Asuras a uma amostra curta de Hero', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const rec = await offlineEngine.evaluateHuntRecommendation({
+      level: 334,
+      vocation: 'Knight',
+      currentHuntId: 'vexclaw-lair',
+      unlockedHunts: [
+        { id: 'hero-cave', name: 'Hero', minLevel: 60 },
+        { id: 'asura-lair', name: 'Asuras', minLevel: 150 },
+      ],
+      recentDeaths: 0,
+      candidates: [
+        { id: 'hero-cave', name: 'Hero', minLevel: 60, xpPerHour: 7_569_045, netGoldPerHour: 763_890, sampleReady: true, source: 'live-observed' },
+        { id: 'asura-lair', name: 'Asuras', minLevel: 150, xpPerHour: 9_522_583, netGoldPerHour: 2_252_227, sampleReady: true, source: 'matrix-observed' },
+      ],
+    });
+    expect(rec.recommendedHuntId).toBe('asura-lair');
+    expect(rec.rationale).toContain('9.522.583');
+  });
+
+  it('discoverDamageFormula retorna coeficientes calibrados no soak (fallback offline)', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const res = await offlineEngine.discoverDamageFormula([
+      { level: 150, avgHp: 1450, alive: 3, spawnS: 3.6, kills: 966, uptimeSec: 4149, huntId: 'dragon-lair' },
+      { level: 150, avgHp: 2500, alive: 4, spawnS: 2.2, kills: 981, uptimeSec: 4250, huntId: 'glooth-cave' },
+      { level: 311, avgHp: 8450, alive: 4, spawnS: 2.2, kills: 172, uptimeSec: 1276, huntId: 'vexclaw-lair' },
+    ]);
+    expect(res.source).toBe('fallback');
+    expect(res.a).toBeCloseTo(0.24, 2);
+    expect(res.b).toBeCloseTo(0.12, 2);
+    expect(res.c).toBeCloseTo(0.08, 2);
+    expect(res.partyMult).toBeCloseTo(1.25, 2);
+    expect(res.medianK).toBeGreaterThan(0.5);
+    expect(res.medianK).toBeLessThan(2.0);
+  });
+
+  it('reviewHuntSimulator mantém revisão advisory sem alterar fórmulas no fallback', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const review = await offlineEngine.reviewHuntSimulator({
+      observedSamples: [{ level: 150, dps: 158, killsH: 838 }],
+      currentHypotheses: [{ model: 'current', formula: 'dps=level*1.05' }],
+    });
+    expect(review.source).toBe('fallback');
+    expect(review.priorities[0]).toBe('validation');
+    expect(review.recommendedModel).toContain('Manter');
+  });
+
+  it('decideEquipmentBatch usa somente candidatos válidos no fallback', async () => {
+    const offlineEngine = new JevEngine({ apiKey: '', enabled: false });
+    const result = await offlineEngine.decideEquipmentBatch({
+      vocation: 'knight', level: 200, huntId: 'wyrm-cave', preferredElement: 'ice',
+      candidates: [
+        { hash: 'a', name: 'Axe', slot: 'weapon', score: 1400, equippedScore: 1000 },
+        { hash: 'b', name: 'Old', slot: 'helmet', score: 900, equippedScore: 1000 },
+      ],
+    });
+    expect(result.selectedHashes).toEqual(['a']);
+    expect(result.source).toBe('fallback');
+  });
+
+  it('decideBossSafety bloqueia bosses com alto risco de wipe e aprova bosses seguros', async () => {
+    const engine = new JevEngine({ apiKey: '', enabled: false });
+    
+    // Boss seguro: jogador lvl 268 enfrentando Brokul (min 50, daily)
+    const safe = await engine.decideBossSafety({
+      player: { level: 268, vocation: 'Paladin' },
+      boss: { id: 'brokul', name: 'Brokul', minLevel: 50, rarity: 'daily' },
+    });
+    expect(safe.canKill).toBe(true);
+    expect(safe.dangerScore).toBeLessThan(40);
+
+    // Boss arriscado: Jaul é bane (margem 80 -> min 200). Com lvl 120 deve ser bloqueado!
+    const hard = await engine.decideBossSafety({
+      player: { level: 120, vocation: 'Paladin' },
+      boss: { id: 'jaul', name: 'Jaul', minLevel: 120, rarity: 'bane' },
+    });
+    expect(hard.canKill).toBe(false);
+    expect(hard.dangerScore).toBeGreaterThanOrEqual(65);
+  });
+
+  it('triageInventoryItem categoriza itens valiosos no baú, forja e venda', async () => {
+    const engine = new JevEngine({ apiKey: '', enabled: false });
+
+    // Item valioso BiS / raro -> deve ir para o baú
+    const stash = await engine.triageInventoryItem(
+      { name: 'Soulbleeder', tier: 3, upLevel: 7 },
+      { vocation: 'Paladin', level: 268 },
+    );
+    expect(stash.action).toBe('stash_chest');
+
+    // Item com tier para forja -> salvage_forge
+    const forge = await engine.triageInventoryItem(
+      { name: 'Plate Armor', tier: 1, ftier: 1 },
+      { vocation: 'Knight', level: 100 },
+    );
+    expect(forge.action).toBe('salvage_forge');
+
+    // Item comum sem valor -> vendor_sell
+    const junk = await engine.triageInventoryItem(
+      { name: 'Mace', tier: 0, upLevel: 0 },
+      { vocation: 'Knight', level: 100 },
+    );
+    expect(junk.action).toBe('vendor_sell');
+  });
+
+  it('decideFlashOffer avalia custo benefício de ofertas relâmpago', async () => {
+    const engine = new JevEngine({ apiKey: '', enabled: false });
+
+    const cheap = await engine.decideFlashOffer({
+      key: 'offer-1',
+      cost: 10_000,
+      currency: 'gold',
+      playerGold: 1_000_000,
+      playerLevel: 150,
+    });
+    expect(cheap.shouldBuy).toBe(true);
+
+    const expensive = await engine.decideFlashOffer({
+      key: 'offer-2',
+      cost: 500_000,
+      currency: 'gold',
+      playerGold: 1_000_000,
+      playerLevel: 150,
+    });
+    expect(expensive.shouldBuy).toBe(false);
+  });
+
+  it('decideCodexDeliveries seleciona entregas prontas e alvos da hunt', async () => {
+    const engine = new JevEngine({ apiKey: '', enabled: false });
+    const res = await engine.decideCodexDeliveries({
+      activeEntries: [
+        { id: 101, monsterName: 'Glooth Bandit', count: 500, maxCount: 500, ready: true },
+        { id: 102, monsterName: 'Dragon', count: 120, maxCount: 500, ready: false },
+      ],
+      currentHuntMonsters: ['glooth_bandit', 'glooth_brigand'],
+    });
+    expect(res.deliverIds).toEqual([101]);
+    expect(res.focusedTargets).toContain('Glooth Bandit');
+  });
+});
+

@@ -1,8 +1,0 @@
-{
-  "name": "baiak-bot-monitor",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "start": "bun run server.ts"
-  }
-}

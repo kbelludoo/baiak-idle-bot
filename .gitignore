@@ -1,30 +1,25 @@
-# Secrets
-.env
-.env.*
-!.env.example
-**/.env
-!**/.env.example
-**/.env.local
+# Environment & Credentials (CRITICAL: NEVER COMMIT)
+.env*
+*.env*
+*.key
+*.pem
+*.pub
 
-# Logs / dumps locais
+# Runtime & Build
+node_modules/
+data/
+*.tar.gz
 *.log
-logs/
-bot-ts/data/*
-bot-ts/data-ts/*
-!bot-ts/data/.gitkeep
-monitor/data/*
-!monitor/data/.gitkeep
+index.js
 
-# IDEs
-.vscode/
-.idea/
-*.sublime-project
-*.sublime-workspace
+# OS & Binaries
 .DS_Store
 Thumbs.db
+*.exe
 
-# Screenshots de teste
-*.png
-*.jpg
-*.jpeg
-*.sqlite
+# Scratch & Temporary
+.bak-src/
+_*.ts
+_*.cjs
+_*.json
+_vpsdiff/

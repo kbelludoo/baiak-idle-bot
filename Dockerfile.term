@@ -1,0 +1,24 @@
+# Driver terminal do Baiak Idle — sem Chromium, sem Xvfb, sem SwiftShader.
+# Só o runtime Bun + os fontes. Uso típico: 1 OCPU / 1 GB (Oracle Always Free).
+FROM oven/bun:1-debian
+
+WORKDIR /app
+
+# O driver não tem dependências de runtime (dependencies: {}), então não há
+# `bun install` aqui — a imagem fica em ~150 MB em vez de ~700 MB com o Puppeteer.
+COPY package.json tsconfig.json ./
+COPY types ./types
+COPY src ./src
+
+# data/ guarda o baiak_device (o fingerprint precisa ser estável entre boots).
+RUN mkdir -p /app/data
+
+ENV NODE_ENV=production \
+    USER_DATA_DIR=/app/data \
+    CONTROL_HOST=0.0.0.0 \
+    CONTROL_PORT=8080
+
+# Painel HTTP de controle (leitura livre; escrita exige CONTROL_TOKEN ou loopback)
+EXPOSE 8080
+
+CMD ["bun", "run", "src/term/main.ts"]
