@@ -338,17 +338,25 @@ export async function runSession(opts: HunterOptions): Promise<void> {
   log(`[term] personagem ${character.name} (id=${character.id}, lvl=${character.level}, voc=${character.vocation})`);
   telemetry.updateLevel(character.level, 'trpc');
 
+  let rawCharsList: any[] = [];
   await refreshPartyConfig().catch(() => {});
   try {
-    const seed = applyPartyTelemetry(normalizeChars(await trpc.query('characters.list').catch(() => [])), character);
+    rawCharsList = normalizeChars(await trpc.query('characters.list').catch(() => []));
+    const seed = applyPartyTelemetry(rawCharsList, character);
     log(
       `[term] party ativa: leader=${partyState.leader ?? '-'} disabled=[${[...partyState.disabled].join(',')}] ` +
       `lvl=${seed.lvl} stam=${Number.isFinite(seed.stam) ? `${Math.round(seed.stam)}min` : 'n/a'}`,
     );
   } catch { /* sem characters.list o poll cuida disso */ }
 
-  const priority = (opts.priority || process.env.PRIORITY || process.env.HUNT_PRIORITY || 'balanced').toLowerCase() as any;
-  const huntId = opts.huntId || pickBestHunt(character.level, null, priority) || 'troll-cave';
+  const activeCountAtBoot = activePartyOf(rawCharsList).length;
+  // Estratégia de prioridade solicitada:
+  // - Com 3 slots liberados: foco 100% em XP MÁXIMO (em todas as contas)!
+  // - Com menos de 3 slots: foco em GOLD (acumular 100kk para liberar o 3º slot)!
+  let currentStrategy: 'gold' | 'xp' = activeCountAtBoot >= 3 ? 'xp' : (opts.priority === 'xp' ? 'xp' : 'gold');
+  log(`[term] 🎯 Estratégia inicial: ${currentStrategy === 'xp' ? '⚡ XP MÁXIMO (3 slots ativos)' : '💰 FARM DE OURO (acumular 100kk para 3 slots)'}`);
+
+  const huntId = opts.huntId || pickBestHunt(character.level, null, currentStrategy) || 'troll-cave';
   const huntName = HUNTS_BY_ID[huntId]?.name || huntId;
   const sim = simulateHunt(huntId, character.level);
   log(
@@ -922,6 +930,17 @@ export async function runSession(opts: HunterOptions): Promise<void> {
         if (!c) return;
         if (c.gold !== undefined) telemetry.updateGold(c.gold, 'trpc');
         applyPartyTelemetry(chars, character);
+
+        // Transição automática: liberou o 3º slot da party? Chaveia para XP MÁXIMO imediatamente!
+        const activeCount = activePartyOf(chars).length;
+        if (activeCount >= 3 && currentStrategy === 'gold') {
+          currentStrategy = 'xp';
+          log(`[term] 🚀 3 slots de party liberados (${activeCount} personagens ativos)! Transição automática: foco alterado de GOLD para XP MÁXIMO!`);
+          const xpBestHunt = pickBestHunt(leaderLevelOf(chars) || character.level, null, 'xp');
+          if (xpBestHunt && xpBestHunt !== currentHuntId) {
+            stage('transição para XP máximo (3 slots liberados)', xpBestHunt);
+          }
+        }
       }).catch((err: any) => log(`[term] poll tRPC falhou: ${err?.message || err}`));
     }, pollSec * 1000)
     : null;
