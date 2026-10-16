@@ -25,10 +25,12 @@ type Bot struct {
 	deviceID  string
 	jev       *JevClient
 
-	// Captcha & Turnstile
+	// Captcha & Turnstile & 2FA
 	turnstileToken   string
 	turnstileTokenAt time.Time
 	turnstileChan    chan string
+	twofaCode        string
+	twofaCodeAt      time.Time
 
 	// Estado dinâmico da conta
 	primaryChar    CharacterInfo
@@ -598,6 +600,22 @@ func (b *Bot) ExecuteAction(action string, payload map[string]any) (any, error) 
 		go RunAuctionCycle(context.Background(), b)
 		return "Ciclo de leilão JEV e coleta de inbox disparados com sucesso!", nil
 
+	case "trigger_sniper":
+		go func() {
+			bal, _ := RefreshCoinAndAuthStatus(context.Background(), b)
+			RunAuctionSniper(context.Background(), b, bal)
+		}()
+		return "Sniper de leilão disparado para varrer oportunidades!", nil
+
+	case "reauth_2fa":
+		code, _ := payload["code"].(string)
+		if code == "" {
+			return nil, fmt.Errorf("parâmetro 'code' de 6 dígitos obrigatório")
+		}
+		b.SupplyTwofaCode(code)
+		go RunAuctionCycle(context.Background(), b)
+		return fmt.Sprintf("Código 2FA '%s' injetado com sucesso! Tentando criar anúncios imediatamente.", code), nil
+
 	case "solve_captcha":
 		b.TriggerCaptchaSolver()
 		return "Solver de Captcha Turnstile acionado via runner!", nil
@@ -627,6 +645,34 @@ func (b *Bot) GetTurnstileToken() string {
 		return b.turnstileToken
 	}
 	return ""
+}
+
+func (b *Bot) SupplyTwofaCode(code string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.twofaCode = strings.TrimSpace(code)
+	b.twofaCodeAt = time.Now()
+	b.addLog(fmt.Sprintf("✔ Código 2FA registrado (%s) — tentando liberar janela de 30min", b.twofaCode))
+}
+
+func (b *Bot) GetTwofaCode() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.twofaCode != "" && time.Since(b.twofaCodeAt) < 3*time.Minute {
+		return b.twofaCode
+	}
+	return os.Getenv("AUCTION_2FA_CODE")
+}
+
+func (b *Bot) UpdateCoinStatus(coins, marketCoins int, leftMs float64) {
+	b.updateStatus(func(s *engine.AccountStatus) {
+		if s.Extra == nil {
+			s.Extra = make(map[string]any)
+		}
+		s.Extra["coins"] = coins
+		s.Extra["marketCoins"] = marketCoins
+		s.Extra["twofaLeftMs"] = leftMs
+	})
 }
 
 func (b *Bot) GetPassword() string {

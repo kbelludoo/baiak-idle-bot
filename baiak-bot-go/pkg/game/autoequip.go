@@ -8,14 +8,15 @@ import (
 )
 
 type InventoryItem struct {
-	Name     string  `json:"name"`
-	Tier     float64 `json:"tier"`
-	FTier    float64 `json:"ftier"`
-	UpLevel  float64 `json:"upLevel"`
-	UID      any     `json:"uid"`
-	Hash     string  `json:"hash"`
-	Location string  `json:"location"`
-	CharID   any     `json:"charId"`
+	Name     string          `json:"name"`
+	Tier     float64         `json:"tier"`
+	FTier    float64         `json:"ftier"`
+	UpLevel  float64         `json:"upLevel"`
+	UID      any             `json:"uid"`
+	Hash     string          `json:"hash"`
+	Location string          `json:"location"`
+	CharID   any             `json:"charId"`
+	Attrs    []ItemAttribute `json:"attrs,omitempty"`
 }
 
 type CatalogItem struct {
