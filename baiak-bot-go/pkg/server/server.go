@@ -32,6 +32,7 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleDashboard)
 	mux.HandleFunc("/api/status", s.handleAPIStatus)
+	mux.HandleFunc("/api/fleet", s.handleAPIFleet)
 	mux.HandleFunc("/api/action", s.handleAPIAction)
 
 	addr := fmt.Sprintf(":%d", s.port)
@@ -41,6 +42,59 @@ func (s *Server) Start() error {
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(indexHTML)
+}
+
+func (s *Server) handleAPIFleet(w http.ResponseWriter, r *http.Request) {
+	statuses := s.manager.GetAllStatuses()
+	var totalGold int64 = 0
+	var totalExpH float64 = 0
+	var totalGoldH float64 = 0
+	onlineCount := 0
+	botsMap := make(map[string]any)
+
+	for _, st := range statuses {
+		totalGold += st.Gold
+		totalExpH += st.ExpPerHour
+		totalGoldH += st.GoldPerHour
+		isOnline := st.Status == "hunting" || st.Status == "training"
+		if isOnline {
+			onlineCount++
+		}
+		botsMap[st.ID] = map[string]any{
+			"label":     st.Name,
+			"name":      st.Name,
+			"online":    isOnline,
+			"reachable": true,
+			"status": map[string]any{
+				"online":    isOnline,
+				"uptimeSec": st.DurationSec,
+				"gold":      st.Gold,
+				"level":     st.Level,
+				"hunt": map[string]any{
+					"id":   st.CurrentArea,
+					"name": st.CurrentArea,
+				},
+				"rates": map[string]any{
+					"xpPerHour":   st.ExpPerHour,
+					"goldPerHour": st.GoldPerHour,
+				},
+			},
+		}
+	}
+
+	data := map[string]any{
+		"fleet": map[string]any{
+			"botsOnline":       onlineCount,
+			"botsTotal":        len(statuses),
+			"totalXpPerHour":   totalExpH,
+			"totalLootPerHour": totalGoldH,
+			"totalGold":        totalGold,
+		},
+		"bots": botsMap,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
