@@ -16,7 +16,7 @@ import (
 
 func main() {
 	browserPath := flag.String("browser-path", "", "caminho do executavel chromium")
-	gameURL := flag.String("game", "https://baiakidle.com", "url do jogo")
+	gameURL := flag.String("game", "https://baiakidle.com/jogar", "url do jogo")
 	tunnelURL := flag.String("tunnel", "", "url base do cloudflare tunnel")
 	cookie := flag.String("cookie", "", "cookie de sessao")
 	timeout := flag.Duration("timeout", 100*time.Second, "tempo limite")
@@ -64,10 +64,14 @@ func main() {
 	}
 
 	// Executa solver in-page diretamente no domínio oficial do jogo
-	renderScript := fmt.Sprintf(`(() => {
-		const div = document.createElement('div');
-		div.id = 'turnstile-auto-container';
-		document.body.appendChild(div);
+	renderScript := `(() => {
+		let div = document.getElementById('turnstile-auto-container');
+		if (!div) {
+			div = document.createElement('div');
+			div.id = 'turnstile-auto-container';
+			div.style.cssText = 'position:fixed; top:20px; left:20px; width:300px; height:100px; z-index:9999999; background:white;';
+			document.body.appendChild(div);
+		}
 		const s = document.createElement('script');
 		s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 		s.async = true;
@@ -75,19 +79,23 @@ func main() {
 			if (window.turnstile) {
 				window.turnstile.render(div, {
 					sitekey: '0x4AAAAAAD1KLtRAtKEsbKdT',
+					theme: 'light',
 					callback: (t) => {
 						window.__turnstileSolved = t;
-						fetch('%s/api/ticket', {
-							method: 'POST',
-							headers: { 'Content-Type': 'application/json' },
-							body: JSON.stringify({ turnstileToken: t })
-						}).catch(() => {});
+					},
+					'error-callback': (err) => {
+						window.__turnstileError = String(err);
 					}
 				});
+			} else {
+				window.__turnstileError = 'window.turnstile not defined on load';
 			}
 		};
+		s.onerror = () => {
+			window.__turnstileError = 'failed to load turnstile script';
+		};
 		document.head.appendChild(s);
-	})()`, *tunnelURL)
+	})()`
 
 	_, _ = session.Evaluate(ctx, renderScript)
 

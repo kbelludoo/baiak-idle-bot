@@ -58,8 +58,8 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 	_ = b.room.Send("inboxtakeall", map[string]any{})
 	_ = b.room.Send("goldinboxclaim", map[string]any{})
 
-	// 2. Atualizar saldos de moedas
-	bal, _ := RefreshCoinAndAuthStatus(ctx, b)
+	// 2. Atualizar saldos de moedas e janela de 2FA
+	bal, leftMs := RefreshCoinAndAuthStatus(ctx, b)
 
 	// 3. Executar o Sniper de Leilão (compras e arremates com base em JEV)
 	RunAuctionSniper(ctx, b, bal)
@@ -94,6 +94,9 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 	}
 
 	pw := b.GetPassword()
+	if leftMs > 0 {
+		pw = ""
+	}
 
 	// 5. Avaliar itens da mochila via items.summary e JEV
 	summaryRaw, err := b.trpc.Query(ctx, "items.summary", nil)
@@ -124,6 +127,12 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 						"confirmText":   it.Name, // Confirmação exata exigida pelo servidor
 						"captchaToken":  token,
 					}
+					if leftMs <= 0 {
+						if twofa := b.GetTwofaCode(); twofa != "" {
+							payload["twofaCode"] = twofa
+							payload["smsCode"] = twofa
+						}
+					}
 
 					res, err := b.trpc.Mutate(ctx, "auction.create", payload)
 					if err != nil {
@@ -131,6 +140,8 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 						if strings.Contains(errStr, "captcha") || strings.Contains(errStr, "turnstile") || token == "" {
 							b.addLog(fmt.Sprintf("[JEV-AUCTION] ⚠️ Captcha Turnstile necessário para anunciar %s: acionando solver...", it.Name))
 							b.TriggerCaptchaSolver()
+						} else if strings.Contains(errStr, "2fa") || strings.Contains(errStr, "sms") || strings.Contains(errStr, "reauth") {
+							b.addLog(fmt.Sprintf("[JEV-AUCTION] ⚠️ Confirmação 2FA / Reauth necessária para anunciar %s: insira o código 2FA no painel", it.Name))
 						} else if strings.Contains(errStr, "password") || strings.Contains(errStr, "senha") {
 							b.addLog(fmt.Sprintf("[JEV-AUCTION] ⚠️ Falha de senha ao anunciar %s: confira credentials.password no accounts.json", it.Name))
 						} else {
@@ -162,6 +173,12 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 				"confirmText":   "CONFIRMAR",
 				"captchaToken":  token,
 			}
+			if leftMs <= 0 {
+				if twofa := b.GetTwofaCode(); twofa != "" {
+					payload["twofaCode"] = twofa
+					payload["smsCode"] = twofa
+				}
+			}
 
 			res, err := b.trpc.Mutate(ctx, "auction.createGold", payload)
 			if err != nil {
@@ -169,6 +186,8 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 				if strings.Contains(errStr, "captcha") || strings.Contains(errStr, "turnstile") || token == "" {
 					b.addLog(fmt.Sprintf("[AUCTION] ⚠️ Captcha Turnstile necessário para anunciar %dkk gold: acionando solver...", goldToSell/1000000))
 					b.TriggerCaptchaSolver()
+				} else if strings.Contains(errStr, "2fa") || strings.Contains(errStr, "sms") || strings.Contains(errStr, "reauth") {
+					b.addLog(fmt.Sprintf("[AUCTION] ⚠️ Confirmação 2FA / Reauth necessária para anunciar gold: insira o código 2FA no painel"))
 				} else if strings.Contains(errStr, "password") || strings.Contains(errStr, "senha") {
 					b.addLog(fmt.Sprintf("[AUCTION] ⚠️ Falha de senha ao anunciar gold: confira credentials.password no accounts.json"))
 				} else {

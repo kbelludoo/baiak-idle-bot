@@ -75,12 +75,26 @@ func (s *Server) handleAPIFleet(w http.ResponseWriter, r *http.Request) {
 		if isOnline {
 			onlineCount++
 		}
+		staminaStr := "42h"
+		if sVal, ok := st.Extra["stamina"].(string); ok && sVal != "" {
+			staminaStr = sVal
+		}
+		telemetryMap := map[string]any{
+			"gold":    st.Gold,
+			"level":   st.Level,
+			"kills":   st.Kills,
+			"stamina": staminaStr,
+		}
 		botsMap[st.ID] = map[string]any{
 			"label":     st.Name,
 			"name":      st.Name,
 			"online":    isOnline,
 			"reachable": true,
 			"status": map[string]any{
+				"telemetry":   telemetryMap,
+				"kills":       st.Kills,
+				"vocation":    st.Vocation,
+				"currentArea": st.CurrentArea,
 				"online":    isOnline,
 				"uptimeSec": st.DurationSec,
 				"gold":      st.Gold,

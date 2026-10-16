@@ -77,9 +77,7 @@ func (c *TRPCClient) unwrap(body []byte) (any, error) {
 // Query realiza um tRPC GET query
 func (c *TRPCClient) Query(ctx context.Context, path string, input any) (any, error) {
 	wrapped := map[string]any{
-		"0": map[string]any{
-			"json": input,
-		},
+		"0": input,
 	}
 	inputBytes, _ := json.Marshal(wrapped)
 	reqURL := fmt.Sprintf("%s/%s?batch=1&input=%s", c.base, path, url.QueryEscape(string(inputBytes)))
@@ -115,9 +113,7 @@ func (c *TRPCClient) Query(ctx context.Context, path string, input any) (any, er
 // Mutate realiza um tRPC POST mutation
 func (c *TRPCClient) Mutate(ctx context.Context, path string, input any) (any, error) {
 	wrapped := map[string]any{
-		"0": map[string]any{
-			"json": input,
-		},
+		"0": input,
 	}
 	inputBytes, _ := json.Marshal(wrapped)
 	reqURL := fmt.Sprintf("%s/%s?batch=1", c.base, path)

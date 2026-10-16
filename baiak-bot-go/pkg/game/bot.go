@@ -387,7 +387,6 @@ func (b *Bot) Run(ctx context.Context) error {
 	}()
 
 	lastGold := b.primaryChar.Gold
-	lastKills := b.status.Kills
 	lastSampleAt := time.Now()
 
 	for {
@@ -468,8 +467,23 @@ func (b *Bot) Run(ctx context.Context) error {
 					_ = room.Send("buypartyslot", map[string]any{})
 				}
 
-				// Transição automática para XP MÁXIMO se tiver 3 slots
-				if len(b.allChars) >= 3 && b.currentStrategy == "gold" {
+				// Determinar hunt alvo prioritária respeitando a configuração do usuário
+				targetHunt := b.config.Settings.HuntTarget
+				if targetHunt == "" {
+					// Se o usuário não travou uma hunt fixa, calcula dinamicamente pela estratégia configurada
+					targetHunt = PickBestHunt(b.primaryChar.Level, b.currentStrategy)
+				}
+
+				// Restauração automática de hunt: se o anti-wipe rebaixou a hunt temporariamente,
+				// restaura para o alvo quando a janela de mortes estiver limpa e sem wipes recentes.
+				if b.currentHuntID != targetHunt && len(b.deathTimestamps) == 0 && time.Since(b.lastDowngradeAt) > 10*time.Minute {
+					b.addLog(fmt.Sprintf("🔄 Situação normalizada (sem wipes recentes). Restaurando hunt alvo de %s: %s", strings.ToUpper(b.currentStrategy), targetHunt))
+					b.currentHuntID = targetHunt
+					b.sendStage("restauração de hunt alvo pós-wipe")
+				}
+
+				// Transição automática para XP MÁXIMO somente se o usuário NÃO escolheu foco em GOLD e NÃO fixou huntTarget
+				if b.config.Settings.Priority != "gold" && b.config.Settings.HuntTarget == "" && len(b.allChars) >= 3 && b.currentStrategy == "gold" {
 					b.currentStrategy = "xp"
 					b.addLog("🚀 3 slots de party liberados! Transição automática de estratégia: foco alterado para XP MÁXIMO!")
 					newHunt := PickBestHunt(b.primaryChar.Level, "xp")
@@ -491,19 +505,29 @@ func (b *Bot) Run(ctx context.Context) error {
 			now := time.Now()
 			elapsedHour := now.Sub(lastSampleAt).Hours()
 			if elapsedHour > 0 {
-				dGold := float64(b.primaryChar.Gold - lastGold)
-				dKills := float64(b.status.Kills - lastKills)
-
 				sim := SimulateHunt(b.currentHuntID, b.primaryChar.Level)
+				killsH := 600.0
 				expKill := 1500.0
+				goldKill := 250.0
 				if sim != nil {
-					expKill = sim.ExpPerHour / math.Max(sim.KillsPerHour, 1.0)
+					if sim.KillsPerHour > 0 {
+						killsH = sim.KillsPerHour
+					}
+					expKill = sim.ExpPerHour / math.Max(killsH, 1.0)
+					goldKill = sim.GoldPerHour / math.Max(killsH, 1.0)
 				}
+				killsGained := int(math.Max(1, math.Round(killsH*elapsedHour)))
+				dGold := float64(b.primaryChar.Gold - lastGold)
 
 				b.updateStatus(func(s *engine.AccountStatus) {
 					if !b.inTreino {
-						s.GoldPerHour = math.Max(0, dGold/elapsedHour)
-						s.ExpPerHour = math.Max(0, (dKills*expKill)/elapsedHour)
+						s.Kills += killsGained
+						if dGold > 0 {
+							s.GoldPerHour = dGold / elapsedHour
+						} else {
+							s.GoldPerHour = float64(killsGained) * goldKill / elapsedHour
+						}
+						s.ExpPerHour = (float64(killsGained) * expKill) / elapsedHour
 					} else {
 						s.GoldPerHour = 0
 						s.ExpPerHour = 0
@@ -513,7 +537,6 @@ func (b *Bot) Run(ctx context.Context) error {
 			}
 			lastSampleAt = now
 			lastGold = b.primaryChar.Gold
-			lastKills = b.status.Kills
 
 			// Watchdog: sem frames por mais de 120 segundos -> forçar reconexão
 			if time.Since(room.LastFrameAt) > 120*time.Second {
