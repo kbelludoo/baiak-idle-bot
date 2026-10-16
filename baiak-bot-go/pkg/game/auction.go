@@ -73,10 +73,15 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 
 					// Avalia com JEV
 					shouldSell, targetPrice, estVal, reason := b.jev.EvaluateItemForAuction(ctx, it.Name, int(it.Tier), int(it.UpLevel), nil)
-					if shouldSell && estVal >= 80 {
+					if shouldSell && estVal >= 100 {
 						pw := b.GetPassword()
-						token := b.GetTurnstileToken()
+						if pw == "" {
+							b.addLog(fmt.Sprintf("[JEV-AUCTION] 📢 Item valioso detectado: %s (Tier %d) — Valor est. ~%dc (venda sugerida: %d coins). Defina credentials.password no accounts.json para anunciar automaticamente!",
+								it.Name, int(it.Tier), estVal, targetPrice))
+							continue
+						}
 
+						token := b.GetTurnstileToken()
 						payload := map[string]any{
 							"itemHash":      it.Hash,
 							"startPrice":    targetPrice,
@@ -85,7 +90,7 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 							"twofaCode":     "",
 							"smsCode":       "",
 							"pushProof":     "",
-							"confirmText":   "CONFIRMAR",
+							"confirmText":   it.Name, // Confirmação exata exigida pelo servidor para itens
 							"captchaToken":  token,
 						}
 
@@ -96,7 +101,7 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 								b.addLog(fmt.Sprintf("[JEV-AUCTION] ⚠️ Servidor pediu Captcha Turnstile ao anunciar %s: acionando solver...", it.Name))
 								b.TriggerCaptchaSolver()
 							} else if strings.Contains(errStr, "reauth") || strings.Contains(errStr, "password") {
-								b.addLog(fmt.Sprintf("[JEV-AUCTION] ⚠️ Falha de senha ao anunciar %s: configure credentials.password no accounts.json", it.Name))
+								b.addLog(fmt.Sprintf("[JEV-AUCTION] ⚠️ Falha de senha ao anunciar %s: verifique credentials.password no accounts.json", it.Name))
 							} else {
 								b.addLog(fmt.Sprintf("[JEV-AUCTION] Erro ao anunciar %s: %v", it.Name, err))
 							}
@@ -119,8 +124,13 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 		shouldSell, goldToSell, targetCoins, reason := b.jev.EvaluateGoldForAuction(b.primaryChar.Gold, 5000000)
 		if shouldSell {
 			pw := b.GetPassword()
-			token := b.GetTurnstileToken()
+			if pw == "" {
+				b.addLog(fmt.Sprintf("[AUCTION] 📢 Saldo de %dkk gold elegível para leilão (~%d coins). Defina credentials.password no accounts.json para anunciar automaticamente!",
+					goldToSell/1000000, targetCoins))
+				return
+			}
 
+			token := b.GetTurnstileToken()
 			payload := map[string]any{
 				"goldAmount":    goldToSell,
 				"startPrice":    targetCoins,
@@ -140,7 +150,7 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 					b.addLog(fmt.Sprintf("[AUCTION] ⚠️ Servidor pediu Captcha Turnstile ao anunciar %dkk gold: acionando solver...", goldToSell/1000000))
 					b.TriggerCaptchaSolver()
 				} else if strings.Contains(errStr, "reauth") || strings.Contains(errStr, "password") {
-					b.addLog(fmt.Sprintf("[AUCTION] ⚠️ Falha de senha ao anunciar gold: configure credentials.password no accounts.json"))
+					b.addLog(fmt.Sprintf("[AUCTION] ⚠️ Falha de senha ao anunciar gold: verifique credentials.password no accounts.json"))
 				} else {
 					b.addLog(fmt.Sprintf("[AUCTION] Erro ao anunciar gold: %v", err))
 				}

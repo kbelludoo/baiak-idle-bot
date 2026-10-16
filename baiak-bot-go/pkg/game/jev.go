@@ -179,9 +179,9 @@ func (j *JevClient) EvaluateItemForAuction(ctx context.Context, name string, tie
 		targetPrice = 25
 	}
 
-	// Itens comuns ou de valor irrisório (< 80 coins) não justificam leilão
-	if estVal < 80 {
-		return false, targetPrice, estVal, fmt.Sprintf("Item de baixo valor (estVal=%dc < 80c)", estVal)
+	// Itens comuns ou de valor irrisório (< 100 coins) não justificam leilão
+	if estVal < 100 {
+		return false, targetPrice, estVal, fmt.Sprintf("Item de baixo valor (estVal=%dc < 100c)", estVal)
 	}
 
 	// Consulta JEV System One para decisão probabilística tipada
