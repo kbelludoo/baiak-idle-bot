@@ -327,6 +327,25 @@ func (b *Bot) Run(ctx context.Context) error {
 	_ = room.Send("protecttiers", map[string]any{"tiers": []int{3, 4, 5, 6, 7, 8, 9, 10}})
 	_ = room.Send("codexauto", map[string]any{"on": true})
 
+	// Sincronizar rotação de magias, cura e poções BiS para a party
+	SyncPartyAutoConfig(ctx, b.trpc, room, b.allChars, b.addLog)
+
+	// Gasto de talentos automático
+	if b.config.Settings.AutoTree {
+		go SpendTalentsForParty(ctx, room, b.allChars, b.addLog)
+	}
+
+	// Auto-equip de itens melhores na mochila
+	minTier := b.config.Settings.EquipMinTier
+	if minTier <= 0 {
+		minTier = 3
+	}
+	for idx, c := range b.allChars {
+		if idx <= 3 {
+			RunAutoEquip(ctx, b.trpc, room, c, idx, minTier, b.addLog)
+		}
+	}
+
 	// 5. Tickers periódicos
 	rewardTicker := time.NewTicker(30 * time.Second)
 	defer rewardTicker.Stop()
@@ -336,6 +355,9 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	staminaTicker := time.NewTicker(10 * time.Second)
 	defer staminaTicker.Stop()
+
+	equipTicker := time.NewTicker(5 * time.Minute)
+	defer equipTicker.Stop()
 
 	pollTicker := time.NewTicker(60 * time.Second)
 	defer pollTicker.Stop()
@@ -369,6 +391,18 @@ func (b *Bot) Run(ctx context.Context) error {
 				_ = room.Send("arenaQueue", map[string]any{})
 				b.addLog("⚔️ Fila de Arena diária disparada")
 			}
+
+		case <-equipTicker.C:
+			minTier := b.config.Settings.EquipMinTier
+			if minTier <= 0 {
+				minTier = 3
+			}
+			for idx, c := range b.allChars {
+				if idx <= 3 {
+					RunAutoEquip(ctx, b.trpc, room, c, idx, minTier, b.addLog)
+				}
+			}
+			SyncPartyAutoConfig(ctx, b.trpc, room, b.allChars, b.addLog)
 
 		case <-staminaTicker.C:
 			if b.config.Settings.AutoTreino {
