@@ -11,6 +11,8 @@
 > - **Itens 1 e 5 do TOP 10 clarificados:** o frame \`mine\` **NÃO chega** nesse tipo de sessão (30 tipos vistos, 3 contextos tentados) — não é acionável; \`prof.perks\` e \`rift.ranks\` chegam vazios/zerados no estado (essência 0, soul 0) sem nenhuma ação cliente associada (não acionáveis).
 > - **Imbue:** bloqueado por equipamento — nenhuma peça vestida tem slot de imbue; a \`glooth spear\` t2 na mochila **tem** 2 slots ("critical hit" incluso), mas é de paladin e exige troca de arma (decisão de gear, fora do escopo).
 > - **Montaria nº 2:** bloqueada por moeda — saldo de 3 coins e a pesca (rota de corais) está desligada no servidor (features.fishing=false).
+> - **Boss (rodada 2 — decisivo):** a luta de boss **não para a hunt** (a conta continua farmando as waves) e o desfecho chega por frames: vitória → `log:"Boss derrotado!"` + `notify{kind:"boss"}` em **~11-15 s** (archfoes); wipe → `deaths{mode:"boss", goldLost}` (Ratmiral e Irgix, ~**379.000 gold** cada, ~18-19% do cofre). Medido que o Jev, sozinho, autorizava esses wipes (81%/76% de "confiança"). A regra nova do driver: **só entra em boss que já consta no bestiário da conta como morto antes** (`bst:<id>` > 0), com Jev como segunda trava, cooldown/cargas vindos de `characters.list` (carga consumida no INÍCIO da tentativa; recarga ~43 h); padrão recomendado: só archfoes provados. Frame `deaths` encerra a flag da luta na hora (antes o label ficava preso por 90 s-10 min). **Dungeons:** `dungeongate` mostra minLevel 300 + 5M gold de entrada — fora de alcance. **Auto-Boss playlist:** assinatura em coins + 5M gold por preset — fora de alcance (3 coins).
+
 
 
 ## 1. Camada comum (vale para todos os sistemas)

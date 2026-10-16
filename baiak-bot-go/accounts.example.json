@@ -1,0 +1,68 @@
+[
+  {
+    "id": "acc-1",
+    "name": "Conta 1",
+    "enabled": true,
+    "credentials": {
+      "token": "SEU_TOKEN_AQUI",
+      "origin": "https://baiakidle.com"
+    },
+    "settings": {
+      "huntTarget": "vexclaw-lair",
+      "priority": "gold",
+      "autoHunt": true,
+      "autoSell": true,
+      "autoRewards": true,
+      "autoTreino": true,
+      "autoArena": true,
+      "autoCodex": true,
+      "autoTree": true,
+      "autoBoss": false,
+      "autoBuyPartySlot": true
+    }
+  },
+  {
+    "id": "acc-2",
+    "name": "Conta 2",
+    "enabled": true,
+    "credentials": {
+      "token": "SEU_TOKEN_CONTA_2",
+      "origin": "https://baiakidle.com"
+    },
+    "settings": {
+      "huntTarget": "refiner-cave",
+      "priority": "gold",
+      "autoHunt": true,
+      "autoSell": true,
+      "autoRewards": true,
+      "autoTreino": true,
+      "autoArena": true,
+      "autoCodex": true,
+      "autoTree": true,
+      "autoBoss": false,
+      "autoBuyPartySlot": true
+    }
+  },
+  {
+    "id": "acc-3",
+    "name": "Conta 3",
+    "enabled": true,
+    "credentials": {
+      "token": "SEU_TOKEN_CONTA_3",
+      "origin": "https://baiakidle.com"
+    },
+    "settings": {
+      "huntTarget": "vexclaw-lair",
+      "priority": "gold",
+      "autoHunt": true,
+      "autoSell": true,
+      "autoRewards": true,
+      "autoTreino": true,
+      "autoArena": true,
+      "autoCodex": true,
+      "autoTree": true,
+      "autoBoss": false,
+      "autoBuyPartySlot": true
+    }
+  }
+]

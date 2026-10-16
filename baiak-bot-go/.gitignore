@@ -1,0 +1,12 @@
+# Secrets and local configurations
+accounts.json
+data/
+baiak_device
+
+# Binaries
+*.exe
+baiak-bot.exe
+baiak-bot-linux
+
+# Temporary and log files
+*.log

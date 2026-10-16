@@ -353,8 +353,10 @@ export async function runSession(opts: HunterOptions): Promise<void> {
   // Estratégia de prioridade solicitada:
   // - Com 3 slots liberados: foco 100% em XP MÁXIMO (em todas as contas)!
   // - Com menos de 3 slots: foco em GOLD (acumular 100kk para liberar o 3º slot)!
-  let currentStrategy: 'gold' | 'xp' = activeCountAtBoot >= 3 ? 'xp' : (opts.priority === 'xp' ? 'xp' : 'gold');
-  log(`[term] 🎯 Estratégia inicial: ${currentStrategy === 'xp' ? '⚡ XP MÁXIMO (3 slots ativos)' : '💰 FARM DE OURO (acumular 100kk para 3 slots)'}`);
+  let currentStrategy: 'gold' | 'xp' = (opts.priority === 'gold' || opts.priority === 'xp')
+    ? opts.priority
+    : (activeCountAtBoot >= 3 ? 'xp' : 'gold');
+  log(`[term] 🎯 Estratégia inicial: ${currentStrategy === 'gold' ? '💰 FARM DE OURO (máximo gold/h)' : '⚡ XP MÁXIMO'}`);
 
   const huntId = opts.huntId || pickBestHunt(character.level, null, currentStrategy) || 'troll-cave';
   const huntName = HUNTS_BY_ID[huntId]?.name || huntId;
@@ -556,7 +558,16 @@ export async function runSession(opts: HunterOptions): Promise<void> {
       log(`[term] 👑 ${currentBossName} recusado: ${txt.slice(0, 80)}`);
     }
   };
-  room.on('notify', (p: any) => bossOutcomeNow(String(p?.text ?? '')));
+  room.on('buyresult', (p: any) => {
+    log(`[term] 🛒 buyresult: ${JSON.stringify(p)}`);
+  });
+  room.on('toast', (p: any) => {
+    log(`[term] 🔔 toast: ${JSON.stringify(p)}`);
+  });
+  room.on('notify', (p: any) => {
+    log(`[term] 🔔 notify: ${JSON.stringify(p)}`);
+    bossOutcomeNow(String(p?.text ?? ''));
+  });
   room.on('log', (p: any) => {
     const txt = String(p?.text ?? '');
     bossOutcomeNow(txt);

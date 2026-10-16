@@ -393,6 +393,16 @@ export function startControlServer(port: number, ctx: ControlContext) {
               return Response.json({ ok: false, error: 'sala fechada' }, { status: 503, headers: corsHeaders });
             }
 
+            if (action === 'buy_party_slot' || action === 'buypartyslot') {
+              const room = ctx.getRoom();
+              if (room && !room.closed) {
+                room.send('buypartyslot', {});
+                log('[web] 👥 Compra de slot de party enviada (buypartyslot)');
+                return Response.json({ ok: true, message: 'Pacote buypartyslot enviado!' }, { headers: corsHeaders });
+              }
+              return Response.json({ ok: false, error: 'sala fechada' }, { status: 503, headers: corsHeaders });
+            }
+
             return Response.json({ ok: false, error: `Ação desconhecida: ${action}` }, { status: 400, headers: corsHeaders });
           } catch (err: any) {
             return Response.json({ ok: false, error: err?.message || String(err) }, { status: 500, headers: corsHeaders });

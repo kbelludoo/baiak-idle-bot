@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>⚡ BAIAK IDLE - MULTI-ACCOUNT BOT</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #111827;
+      --border: #1f2937;
+      --accent: #00d2ff;
+      --accent-green: #00ff88;
+      --accent-gold: #ffaa00;
+      --accent-red: #ff3366;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 20px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .header h1 {
+      font-size: 1.5rem;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .stats-bar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .stat-card .label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; }
+    .stat-card .val { font-size: 1.4rem; font-weight: bold; margin-top: 4px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      gap: 20px;
+    }
+    .acc-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .acc-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .acc-title { font-size: 1.15rem; font-weight: bold; color: var(--text); }
+    .badge {
+      font-size: 0.75rem;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+    .badge-hunting { background: rgba(0, 255, 136, 0.15); color: var(--accent-green); border: 1px solid var(--accent-green); }
+    .badge-training { background: rgba(0, 210, 255, 0.15); color: var(--accent); border: 1px solid var(--accent); }
+    .badge-idle { background: rgba(255, 170, 0, 0.15); color: var(--accent-gold); border: 1px solid var(--accent-gold); }
+    .badge-error { background: rgba(255, 51, 102, 0.15); color: var(--accent-red); border: 1px solid var(--accent-red); }
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      font-size: 0.85rem;
+      background: #0d131f;
+      padding: 12px;
+      border-radius: 6px;
+    }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .btn {
+      padding: 8px;
+      border: 1px solid var(--border);
+      background: #1f2937;
+      color: var(--text);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+    .btn:hover { background: #374151; }
+    .btn-gold { background: rgba(255, 170, 0, 0.2); border-color: var(--accent-gold); color: var(--accent-gold); }
+    .btn-gold:hover { background: rgba(255, 170, 0, 0.35); }
+    .btn-treino { background: rgba(0, 210, 255, 0.2); border-color: var(--accent); color: var(--accent); }
+    .btn-treino:hover { background: rgba(0, 210, 255, 0.35); }
+    .logs-box {
+      background: #000;
+      border-radius: 6px;
+      padding: 8px;
+      font-family: monospace;
+      font-size: 0.72rem;
+      max-height: 90px;
+      overflow-y: auto;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>⚡ BAIAK IDLE - MULTI-ACCOUNT BOT</h1>
+    <span id="uptimeBadge" style="font-size: 0.85rem; color: var(--text-muted);">Uptime: ...</span>
+  </div>
+
+  <div class="stats-bar">
+    <div class="stat-card">
+      <div class="label">Contas Conectadas</div>
+      <div class="val" id="totalActive">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Total de Ouro Farmado</div>
+      <div class="val" id="totalGold" style="color: var(--accent-gold);">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Total Monstros Derrotados</div>
+      <div class="val" id="totalKills" style="color: var(--accent-green);">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Consumo de RAM (Engine Go)</div>
+      <div class="val" id="ramStats" style="color: var(--accent);">0 MB</div>
+    </div>
+  </div>
+
+  <div class="grid" id="accountsGrid"></div>
+
+  <script>
+    function formatGold(n) {
+      if (!n) return '0';
+      if (n >= 1000000) return (n / 1000000).toFixed(2) + 'kk';
+      if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+      return n.toLocaleString();
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        
+        document.getElementById('uptimeBadge').textContent = 'Uptime: ' + data.uptime;
+        document.getElementById('ramStats').textContent = data.ramAllocMB.toFixed(1) + ' MB (Sys: ' + data.ramSysMB.toFixed(1) + ' MB)';
+        
+        const accounts = data.accounts || [];
+        let totalGold = 0;
+        let totalKills = 0;
+        let activeCount = 0;
+
+        const grid = document.getElementById('accountsGrid');
+        grid.innerHTML = '';
+
+        accounts.forEach(acc => {
+          totalGold += acc.gold || 0;
+          totalKills += acc.kills || 0;
+          if (acc.status === 'hunting') activeCount++;
+
+          let badgeClass = 'badge-idle';
+          if (acc.status === 'hunting') badgeClass = 'badge-hunting';
+          else if (acc.status === 'training') badgeClass = 'badge-training';
+          else if (acc.status.includes('error') || acc.status.includes('offline')) badgeClass = 'badge-error';
+
+          const extra = acc.extra || {};
+          const stamina = extra.stamina || 'n/a';
+          const strategy = (extra.strategy || 'auto').toUpperCase();
+
+          const card = document.createElement('div');
+          card.className = 'acc-card';
+          card.innerHTML = `
+            <div class="acc-header">
+              <div>
+                <span class="acc-title">${acc.name || acc.id}</span>
+                <span style="font-size: 0.8rem; color: var(--text-muted); margin-left: 6px;">Lv. ${acc.level || 1} ${acc.vocation || ''}</span>
+              </div>
+              <span class="badge ${badgeClass}">${acc.status}</span>
+            </div>
+
+            <div class="info-grid">
+              <div><strong>Ouro:</strong> <span style="color:var(--accent-gold);">${formatGold(acc.gold)}</span></div>
+              <div><strong>Stamina:</strong> ${stamina}</div>
+              <div><strong>Hunt:</strong> ${acc.currentArea || 'Nenhuma'}</div>
+              <div><strong>Foco:</strong> ${strategy}</div>
+              <div><strong>Gold/h:</strong> ${formatGold(Math.round(acc.goldPerHour || 0))}</div>
+              <div><strong>EXP/h:</strong> ${formatGold(Math.round(acc.expPerHour || 0))}</div>
+            </div>
+
+            <div class="actions">
+              <button class="btn" onclick="promptHunt('${acc.id}')">🎯 Mudar Hunt</button>
+              <button class="btn btn-gold" onclick="dispatchAction('${acc.id}', 'auto_sell')">💰 Vender Loot</button>
+              <button class="btn btn-treino" onclick="dispatchAction('${acc.id}', 'toggle_treino')">🧘 Treino Online</button>
+              <button class="btn" onclick="dispatchAction('${acc.id}', 'buy_party_slot')">⭐ Comprar Slot (100kk)</button>
+            </div>
+
+            <div class="logs-box">
+              ${(acc.logs || []).slice(-4).map(l => '<div>▸ ' + l + '</div>').join('') || '<div>Iniciando telemetria...</div>'}
+            </div>
+          `;
+          grid.appendChild(card);
+        });
+
+        document.getElementById('totalActive').textContent = activeCount + '/' + accounts.length;
+        document.getElementById('totalGold').textContent = formatGold(totalGold);
+        document.getElementById('totalKills').textContent = totalKills.toLocaleString();
+
+      } catch (e) {
+        console.error('Falha ao atualizar dashboard:', e);
+      }
+    }
+
+    async function promptHunt(accId) {
+      const hId = prompt('Digite o ID da Hunt (ex: vexclaw-lair, refiner-cave, glooth-cave, asura-lair):');
+      if (hId && hId.trim()) {
+        await dispatchAction(accId, 'set_hunt', { huntId: hId.trim() });
+      }
+    }
+
+    async function dispatchAction(accId, action, payload = {}) {
+      try {
+        const res = await fetch('/api/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accountId: accId, action: action, payload: payload })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          alert('Ação executada: ' + (data.result || 'OK'));
+        } else {
+          alert('Erro: ' + (data.error || 'Falha'));
+        }
+        refresh();
+      } catch (e) {
+        alert('Erro ao enviar ação: ' + e);
+      }
+    }
+
+    setInterval(refresh, 2500);
+    refresh();
+  </script>
+</body>
+</html>
