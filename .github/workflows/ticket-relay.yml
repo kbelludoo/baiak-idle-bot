@@ -1,0 +1,74 @@
+# ==============================================================================
+# TICKET-RELAY WORKFLOW (PADRÃO SPLIT-RESOLVER PARA CAPTCHA TURNSTILE)
+# ==============================================================================
+# 1. Disparado automaticamente pela VPS ou manualmente com a URL do tunnel
+# 2. Devolve o token para a VPS via tunnel: POST <push_url>/api/ticket {turnstileToken}
+# ==============================================================================
+
+name: ticket-relay
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "probe = apenas testa a captura | push = envia o token pro bot na VPS"
+        required: false
+        default: "push"
+      push_url:
+        description: "URL base do bot (ex: https://xxx.trycloudflare.com)"
+        required: true
+        default: ""
+
+concurrency:
+  group: ticket-relay
+  cancel-in-progress: false
+
+jobs:
+  solve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Node e Chrome Headless
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolver Turnstile via Playwright / Chrome
+        env:
+          PUSH_URL: ${{ inputs.push_url }}
+        run: |
+          set -euo pipefail
+          echo "[Solver] Iniciando resolução do Turnstile para $PUSH_URL ..."
+          npx --yes playwright install --with-deps chromium
+          node -e "
+            const { chromium } = require('playwright');
+            (async () => {
+              const browser = await chromium.launch({ headless: true });
+              const page = await browser.newPage();
+              await page.goto('https://baiakidle.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
+              let token = '';
+              for (let i = 0; i < 30; i++) {
+                token = await page.evaluate(() => {
+                  return window.turnstile ? window.turnstile.getResponse() : (document.querySelector('[name=cf-turnstile-response]')?.value || '');
+                });
+                if (token) break;
+                await new Promise(r => setTimeout(r, 1000));
+              }
+              await browser.close();
+              if (!token) {
+                console.error('Turnstile token não capturado a tempo');
+                process.exit(1);
+              }
+              console.log('Token capturado com sucesso! Entregando na VPS...');
+              const res = await fetch('${{ inputs.push_url }}/api/ticket', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ turnstileToken: token })
+              });
+              const json = await res.json();
+              console.log('Resposta da VPS:', json);
+            })();
+          "
+          echo "✔ Token entregue com sucesso para $PUSH_URL"

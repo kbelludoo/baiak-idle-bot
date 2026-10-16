@@ -34,6 +34,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/status", s.handleAPIStatus)
 	mux.HandleFunc("/api/fleet", s.handleAPIFleet)
 	mux.HandleFunc("/api/action", s.handleAPIAction)
+	mux.HandleFunc("/api/ticket", s.handleAPITicket)
 
 	addr := fmt.Sprintf(":%d", s.port)
 	return http.ListenAndServe(addr, mux)
@@ -143,3 +144,39 @@ func (s *Server) handleAPIAction(w http.ResponseWriter, r *http.Request) {
 		"result": result,
 	})
 }
+
+func (s *Server) handleAPITicket(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		AccountID      string `json:"accountId"`
+		Ticket         string `json:"ticket"`
+		TurnstileToken string `json:"turnstileToken"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || (body.Ticket == "" && body.TurnstileToken == "") {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "Campos 'ticket' ou 'turnstileToken' são obrigatórios"})
+		return
+	}
+
+	token := body.TurnstileToken
+	if token == "" {
+		token = body.Ticket
+	}
+
+	if err := s.manager.SupplyTurnstileToken(body.AccountID, token); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":      true,
+		"message": "Turnstile token entregue com sucesso!",
+	})
+}
+

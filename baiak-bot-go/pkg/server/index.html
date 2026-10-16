@@ -143,7 +143,12 @@
     <div class="stat-card">
       <div class="label">Consumo de RAM (Engine Go)</div>
       <div class="val" id="ramStats" style="color: var(--accent);">0 MB</div>
-    </div>
+  </div>
+
+  <div style="display:flex; gap:10px; align-items:center; background:var(--card-bg); padding:10px 16px; border-radius:10px; border:1px solid var(--border); margin-bottom:1.5rem;">
+    <span style="font-size:0.85rem; font-weight:bold; color:var(--accent);">🛡️ Turnstile / Captcha Relay:</span>
+    <input id="manualToken" placeholder="Cole aqui o token do Turnstile gerado no browser ou solver (POST /api/ticket)" style="flex:1; background:#0f172a; border:1px solid #334155; color:#f8fafc; padding:6px 12px; border-radius:6px; font-size:0.8rem;" />
+    <button class="btn btn-gold" onclick="submitTurnstileToken()">Injetar Token</button>
   </div>
 
   <div class="grid" id="accountsGrid"></div>
@@ -210,7 +215,9 @@
               <button class="btn" onclick="promptHunt('${acc.id}')">🎯 Mudar Hunt</button>
               <button class="btn btn-gold" onclick="dispatchAction('${acc.id}', 'auto_sell')">💰 Vender Loot</button>
               <button class="btn btn-treino" onclick="dispatchAction('${acc.id}', 'toggle_treino')">🧘 Treino Online</button>
-              <button class="btn" onclick="dispatchAction('${acc.id}', 'buy_party_slot')">⭐ Comprar Slot (100kk)</button>
+              <button class="btn" onclick="dispatchAction('${acc.id}', 'buy_party_slot')">⭐ Comprar Slot</button>
+              <button class="btn" style="background:#7c3aed; color:#fff;" onclick="dispatchAction('${acc.id}', 'trigger_auction')">🏷️ Leilão JEV</button>
+              <button class="btn" style="background:#0284c7; color:#fff;" onclick="dispatchAction('${acc.id}', 'solve_captcha')">🛡️ Solver Captcha</button>
             </div>
 
             <div class="logs-box">
@@ -226,6 +233,23 @@
 
       } catch (e) {
         console.error('Falha ao atualizar dashboard:', e);
+      }
+    }
+
+    async function submitTurnstileToken() {
+      const token = document.getElementById('manualToken').value.trim();
+      if (!token) { alert('Digite ou cole o token'); return; }
+      try {
+        const res = await fetch('/api/ticket', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ turnstileToken: token })
+        });
+        const data = await res.json();
+        alert(data.message || (data.ok ? 'Token entregue com sucesso!' : data.error));
+        document.getElementById('manualToken').value = '';
+      } catch (e) {
+        alert('Erro ao enviar token: ' + e);
       }
     }
 

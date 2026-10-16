@@ -78,3 +78,25 @@ func (m *BotManager) ExecuteAction(accountID, action string, payload map[string]
 
 	return b.ExecuteAction(action, payload)
 }
+
+func (m *BotManager) SupplyTurnstileToken(accountID, token string) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if len(m.bots) == 0 {
+		return fmt.Errorf("nenhuma conta registrada")
+	}
+
+	if accountID != "" && accountID != "all" {
+		if b, ok := m.botByID[accountID]; ok {
+			return b.SupplyTurnstileToken(token)
+		}
+		return fmt.Errorf("conta '%s' não encontrada", accountID)
+	}
+
+	// Entrega para todas as contas
+	for _, b := range m.bots {
+		_ = b.SupplyTurnstileToken(token)
+	}
+	return nil
+}

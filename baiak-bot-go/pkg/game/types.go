@@ -10,8 +10,9 @@ type AccountConfig struct {
 }
 
 type GameCredentials struct {
-	Token  string `json:"token"`
-	Origin string `json:"origin,omitempty"` // Padrão: "https://baiakidle.com"
+	Token    string `json:"token"`
+	Origin   string `json:"origin,omitempty"`   // Padrão: "https://baiakidle.com"
+	Password string `json:"password,omitempty"` // Senha da conta (para leilões)
 }
 
 type GameSettings struct {
@@ -26,6 +27,9 @@ type GameSettings struct {
 	AutoTree         bool   `json:"autoTree"`                   // Padrão: true (gasta pontos de talentos)
 	AutoBoss         bool   `json:"autoBoss"`                   // Auto boss seguro
 	AutoBuyPartySlot bool   `json:"autoBuyPartySlot"`           // Compra 3º slot ao atingir 100kk gold
+	AutoAuction      bool   `json:"autoAuction"`                // Anúncio e venda autônoma com JEV (padrão true)
+	AuctionSellGold  bool   `json:"auctionSellGold"`            // Vende gold excedente > 105kk
+	AuctionSellItems bool   `json:"auctionSellItems"`           // Vende itens valiosos > 80c
 	EquipMinTier     int    `json:"equipMinTier,omitempty"`     // Mínimo de tier protegido (padrão 3 = épico+)
 	BindIP           string `json:"bindIP,omitempty"`           // IP local de saída (VPS multi-IP)
 }

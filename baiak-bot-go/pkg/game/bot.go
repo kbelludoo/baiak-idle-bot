@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"baiak-bot/pkg/auth"
 	"baiak-bot/pkg/engine"
 )
 
@@ -21,6 +23,12 @@ type Bot struct {
 	endpoint  Endpoint
 	dataDir   string
 	deviceID  string
+	jev       *JevClient
+
+	// Captcha & Turnstile
+	turnstileToken   string
+	turnstileTokenAt time.Time
+	turnstileChan    chan string
 
 	// Estado dinâmico da conta
 	primaryChar    CharacterInfo
@@ -50,6 +58,8 @@ func NewBot(cfg AccountConfig) *Bot {
 		deviceID:        LoadOrCreateDeviceID(dataDir),
 		trpc:            NewTRPCClient(cfg.Credentials.Token, cfg.Credentials.Origin, cfg.Settings.BindIP),
 		currentStrategy: cfg.Settings.Priority,
+		jev:             NewJevClient(),
+		turnstileChan:   make(chan string, 5),
 	}
 
 	return b
@@ -365,6 +375,15 @@ func (b *Bot) Run(ctx context.Context) error {
 	ratesTicker := time.NewTicker(15 * time.Second)
 	defer ratesTicker.Stop()
 
+	auctionTicker := time.NewTicker(90 * time.Second)
+	defer auctionTicker.Stop()
+
+	// Dispara o primeiro ciclo de leilão e coleta de inbox após 10 segundos
+	go func() {
+		time.Sleep(10 * time.Second)
+		RunAuctionCycle(ctx, b)
+	}()
+
 	lastGold := b.primaryChar.Gold
 	lastKills := b.status.Kills
 	lastSampleAt := time.Now()
@@ -373,6 +392,9 @@ func (b *Bot) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+
+		case <-auctionTicker.C:
+			RunAuctionCycle(ctx, b)
 
 		case <-rewardTicker.C:
 			if room.Closed {
@@ -572,7 +594,59 @@ func (b *Bot) ExecuteAction(action string, payload map[string]any) (any, error) 
 		}
 		return nil, fmt.Errorf("sala não conectada")
 
+	case "trigger_auction":
+		go RunAuctionCycle(context.Background(), b)
+		return "Ciclo de leilão JEV e coleta de inbox disparados com sucesso!", nil
+
+	case "solve_captcha":
+		b.TriggerCaptchaSolver()
+		return "Solver de Captcha Turnstile acionado via runner!", nil
+
 	default:
 		return nil, fmt.Errorf("ação desconhecida: %s", action)
 	}
 }
+
+func (b *Bot) SupplyTurnstileToken(token string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.turnstileToken = token
+	b.turnstileTokenAt = time.Now()
+	b.addLog(fmt.Sprintf("✔ Token Turnstile registrado (%d chars) — válido por ~110s", len(token)))
+	select {
+	case b.turnstileChan <- token:
+	default:
+	}
+	return nil
+}
+
+func (b *Bot) GetTurnstileToken() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.turnstileToken != "" && time.Since(b.turnstileTokenAt) < 110*time.Second {
+		return b.turnstileToken
+	}
+	return ""
+}
+
+func (b *Bot) GetPassword() string {
+	if b.config.Credentials.Password != "" {
+		return b.config.Credentials.Password
+	}
+	return os.Getenv("AUCTION_SELL_PASSWORD")
+}
+
+func (b *Bot) TriggerCaptchaSolver() {
+	b.addLog("🤖 Acionando solver de Captcha Turnstile via GitHub Actions...")
+	repo := os.Getenv("GITHUB_REPOSITORY")
+	if repo == "" {
+		repo = "kbelludoo/baiak-idle-bot"
+	}
+	go func() {
+		err := auth.DispararSolverActions(repo, "ticket-relay.yml", "/home/ubuntu/cloudflared.log", b.ID(), 45*time.Second)
+		if err != nil {
+			b.addLog(fmt.Sprintf("[Solver] Aviso: %v (você também pode colar o token via /api/ticket)", err))
+		}
+	}()
+}
+

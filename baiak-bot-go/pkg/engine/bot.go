@@ -24,6 +24,9 @@ type GameBot interface {
 
 	// ExecuteAction permite disparar comandos manuais via Web Dashboard (ex: "set_hunt", "buy_party_slot", "toggle_treino")
 	ExecuteAction(action string, payload map[string]any) (any, error)
+
+	// SupplyTurnstileToken injeta um token Turnstile resolvido externamente
+	SupplyTurnstileToken(token string) error
 }
 
 // AccountStatus estrutura padronizada para exibição no Terminal e na API HTTP/Web Dashboard
