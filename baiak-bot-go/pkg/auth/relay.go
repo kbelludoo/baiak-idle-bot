@@ -75,7 +75,6 @@ func DispararSolverActions(repo, workflowFile, tunnelLogPath, logID string, cool
 	// Dispara o runner no GitHub via CLI nativo `gh`
 	out, err := exec.Command("gh", "workflow", "run", workflowFile,
 		"-R", repo,
-		"-f", "mode=push",
 		"-f", "push_url="+tunnel,
 	).CombinedOutput()
 	if err != nil {

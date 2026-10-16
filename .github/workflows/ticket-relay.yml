@@ -1,107 +1,62 @@
+name: ticket-relay
+
 # ==============================================================================
-# TICKET-RELAY WORKFLOW (PADRÃO SPLIT-RESOLVER PARA CAPTCHA TURNSTILE)
+# TICKET-RELAY WORKFLOW (AI-GO-BROWSER / PURE GO RELAYRUNNER)
 # ==============================================================================
-# 1. Disparado automaticamente pela VPS ou manualmente com a URL do tunnel
-# 2. Devolve o token para a VPS via tunnel: POST <push_url>/api/ticket {turnstileToken}
+# Executa no GitHub Actions (2 vCPU / 7 GB RAM gratuitos).
+# Lança Chromium real sob xvfb com Stealth JA4 + TicketRelayHook.
+# Intercepta o turnstileToken em https://baiakidle.com e envia via tunnel.
 # ==============================================================================
 
-name: ticket-relay
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: "probe = apenas testa a captura | push = envia o token pro bot na VPS"
-        required: false
-        default: "push"
       push_url:
         description: "URL base do bot (ex: https://xxx.trycloudflare.com)"
         required: true
         default: ""
+
+permissions:
+  contents: read
 
 concurrency:
   group: ticket-relay
   cancel-in-progress: false
 
 jobs:
-  solve:
+  relay:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout repositório
         uses: actions/checkout@v4
 
-      - name: Configurar Node e Chrome Headless
-        uses: actions/setup-node@v4
+      - name: Configurar Go
+        uses: actions/setup-go@v5
         with:
-          node-version: 20
+          go-version: '1.24'
+          cache-dependency-path: baiak-bot-go/go.sum
 
-      - name: Resolver Turnstile via Playwright / Chrome
-        env:
-          PUSH_URL: ${{ inputs.push_url }}
+      - name: Compilar relayrunner
+        working-directory: ./baiak-bot-go
+        run: CGO_ENABLED=0 go build -ldflags="-s -w" -o ../relayrunner ./cmd/relayrunner
+
+      - name: Localizar Chromium nativo
+        id: chrome
         run: |
-          set -euo pipefail
-          echo "[Solver] Iniciando resolução do Turnstile para $PUSH_URL ..."
-          npm install --no-save playwright
-          npx --yes playwright install --with-deps chromium
-          xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" node -e "
-            const { chromium } = require('playwright');
-            (async () => {
-              const browser = await chromium.launch({
-                headless: false,
-                args: [
-                  '--no-sandbox',
-                  '--disable-setuid-sandbox',
-                  '--disable-blink-features=AutomationControlled',
-                  '--disable-infobars',
-                  '--window-size=1280,720'
-                ]
-              });
-              const context = await browser.newContext({
-                viewport: { width: 1280, height: 720 },
-                userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
-              });
-              const page = await context.newPage();
-              await page.addInitScript(() => {
-                delete Object.getPrototypeOf(navigator).webdriver;
-              });
-              await page.goto('https://baiakidle.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
-              const token = await page.evaluate(async () => {
-                return new Promise((resolve) => {
-                  const timer = setTimeout(() => resolve(''), 30000);
-                  const script = document.createElement('script');
-                  script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-                  script.async = true;
-                  script.onload = () => {
-                    const div = document.createElement('div');
-                    document.body.appendChild(div);
-                    if (window.turnstile) {
-                      window.turnstile.render(div, {
-                        sitekey: '0x4AAAAAAD1KLtRAtKEsbKdT',
-                        callback: (t) => { clearTimeout(timer); resolve(t); },
-                        'error-callback': () => { clearTimeout(timer); resolve(''); }
-                      });
-                    } else {
-                      clearTimeout(timer);
-                      resolve('');
-                    }
-                  };
-                  script.onerror = () => { clearTimeout(timer); resolve(''); };
-                  document.head.appendChild(script);
-                });
-              });
-              await browser.close();
-              if (!token) {
-                console.error('Turnstile token não capturado a tempo');
-                process.exit(1);
-              }
-              console.log('Token capturado com sucesso! Entregando na VPS...');
-              const res = await fetch('${{ inputs.push_url }}/api/ticket', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ turnstileToken: token })
-              });
-              const json = await res.json();
-              console.log('Resposta da VPS:', json);
-            })();
-          "
-          echo "✔ Token entregue com sucesso para $PUSH_URL"
+          for p in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$p" >/dev/null 2>&1; then
+              echo "path=$(command -v "$p")" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "nenhum Chromium encontrado no runner" >&2
+          exit 1
+
+      - name: Interceptar Turnstile Token via AI Go Browser (xvfb)
+        run: |
+          xvfb-run -a ./relayrunner \
+            -browser-path "${{ steps.chrome.outputs.path }}" \
+            -game "https://baiakidle.com" \
+            -tunnel "${{ inputs.push_url }}" \
+            -timeout 100s
