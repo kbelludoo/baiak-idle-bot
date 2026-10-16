@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
