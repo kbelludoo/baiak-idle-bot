@@ -58,8 +58,8 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 	_ = b.room.Send("inboxtakeall", map[string]any{})
 	_ = b.room.Send("goldinboxclaim", map[string]any{})
 
-	// 2. Atualizar saldos de moedas e janela de 2FA
-	bal, leftMs := RefreshCoinAndAuthStatus(ctx, b)
+	// 2. Atualizar saldos de moedas
+	bal, _ := RefreshCoinAndAuthStatus(ctx, b)
 
 	// 3. Executar o Sniper de Leilão (compras e arremates com base em JEV)
 	RunAuctionSniper(ctx, b, bal)
@@ -94,7 +94,6 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 	}
 
 	pw := b.GetPassword()
-	twofaCode := b.GetTwofaCode()
 
 	// 5. Avaliar itens da mochila via items.summary e JEV
 	summaryRaw, err := b.trpc.Query(ctx, "items.summary", nil)
@@ -116,21 +115,12 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 				// Avalia com JEV
 				shouldSell, targetPrice, estVal, reason := b.jev.EvaluateItemForAuction(ctx, it.Name, int(it.Tier), int(it.UpLevel), nil)
 				if shouldSell && estVal >= 100 {
-					if pw == "" && leftMs <= 0 {
-						b.addLog(fmt.Sprintf("[JEV-AUCTION] 📢 Item valioso na bag: %s (Tier %d) — Valor est. ~%dc. Defina credentials.password para anunciar!",
-							it.Name, int(it.Tier), estVal))
-						continue
-					}
-
 					token := b.GetTurnstileToken()
 					payload := map[string]any{
 						"itemHash":      it.Hash,
 						"startPrice":    targetPrice,
 						"durationHours": 24,
 						"password":      pw,
-						"twofaCode":     twofaCode,
-						"smsCode":       twofaCode,
-						"pushProof":     "",
 						"confirmText":   it.Name, // Confirmação exata exigida pelo servidor
 						"captchaToken":  token,
 					}
@@ -141,8 +131,8 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 						if strings.Contains(errStr, "captcha") || strings.Contains(errStr, "turnstile") || token == "" {
 							b.addLog(fmt.Sprintf("[JEV-AUCTION] ⚠️ Captcha Turnstile necessário para anunciar %s: acionando solver...", it.Name))
 							b.TriggerCaptchaSolver()
-						} else if strings.Contains(errStr, "2fa") || strings.Contains(errStr, "sms") || strings.Contains(errStr, "reauth") {
-							b.addLog(fmt.Sprintf("[JEV-AUCTION] 🔐 Reautenticação 2FA necessária para listar %s. Use /api/action 'reauth_2fa' com o código de 6 dígitos.", it.Name))
+						} else if strings.Contains(errStr, "password") || strings.Contains(errStr, "senha") {
+							b.addLog(fmt.Sprintf("[JEV-AUCTION] ⚠️ Falha de senha ao anunciar %s: confira credentials.password no accounts.json", it.Name))
 						} else {
 							b.addLog(fmt.Sprintf("[JEV-AUCTION] Erro ao anunciar %s: %v", it.Name, err))
 						}
@@ -163,21 +153,12 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 	if !hasActiveGold && activeCount < 10 {
 		shouldSell, goldToSell, targetCoins, reason := b.jev.EvaluateGoldForAuction(b.primaryChar.Gold, 5000000)
 		if shouldSell {
-			if pw == "" && leftMs <= 0 {
-				b.addLog(fmt.Sprintf("[AUCTION] 📢 Saldo de %dkk gold elegível para leilão (~%d coins). Defina credentials.password para anunciar!",
-					goldToSell/1000000, targetCoins))
-				return
-			}
-
 			token := b.GetTurnstileToken()
 			payload := map[string]any{
 				"goldAmount":    goldToSell,
 				"startPrice":    targetCoins,
 				"durationHours": 24,
 				"password":      pw,
-				"twofaCode":     twofaCode,
-				"smsCode":       twofaCode,
-				"pushProof":     "",
 				"confirmText":   "CONFIRMAR",
 				"captchaToken":  token,
 			}
@@ -188,8 +169,8 @@ func RunAuctionCycle(ctx context.Context, b *Bot) {
 				if strings.Contains(errStr, "captcha") || strings.Contains(errStr, "turnstile") || token == "" {
 					b.addLog(fmt.Sprintf("[AUCTION] ⚠️ Captcha Turnstile necessário para anunciar %dkk gold: acionando solver...", goldToSell/1000000))
 					b.TriggerCaptchaSolver()
-				} else if strings.Contains(errStr, "2fa") || strings.Contains(errStr, "sms") || strings.Contains(errStr, "reauth") {
-					b.addLog(fmt.Sprintf("[AUCTION] 🔐 Reautenticação 2FA necessária para listar gold. Use /api/action 'reauth_2fa' com o código de 6 dígitos."))
+				} else if strings.Contains(errStr, "password") || strings.Contains(errStr, "senha") {
+					b.addLog(fmt.Sprintf("[AUCTION] ⚠️ Falha de senha ao anunciar gold: confira credentials.password no accounts.json"))
 				} else {
 					b.addLog(fmt.Sprintf("[AUCTION] Erro ao anunciar gold: %v", err))
 				}

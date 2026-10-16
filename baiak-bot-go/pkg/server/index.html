@@ -209,7 +209,6 @@
               <div><strong>Ouro:</strong> <span style="color:var(--accent-gold);">${formatGold(acc.gold)}</span></div>
               <div><strong>Coins:</strong> <span style="color:#38bdf8; font-weight:bold;">${coins} (${mktCoins} mkt)</span></div>
               <div><strong>Stamina:</strong> ${stamina}</div>
-              <div><strong>2FA:</strong> ${twofaLeftMs > 0 ? `<span style="color:#22c55e;">Ativo (${Math.round(twofaLeftMs/60000)}m)</span>` : `<span style="color:#f59e0b;">Expirado</span>`}</div>
               <div><strong>Hunt:</strong> ${acc.currentArea || 'Nenhuma'}</div>
               <div><strong>Foco:</strong> ${strategy}</div>
               <div><strong>Gold/h:</strong> ${formatGold(Math.round(acc.goldPerHour || 0))}</div>
@@ -222,7 +221,6 @@
               <button class="btn btn-treino" onclick="dispatchAction('${acc.id}', 'toggle_treino')">🧘 Treino</button>
               <button class="btn" style="background:#7c3aed; color:#fff;" onclick="dispatchAction('${acc.id}', 'trigger_auction')">🏷️ Vender (JEV)</button>
               <button class="btn" style="background:#ec4899; color:#fff; font-weight:bold;" onclick="dispatchAction('${acc.id}', 'trigger_sniper')">🎯 Sniper</button>
-              <button class="btn" style="background:#f59e0b; color:#0f172a; font-weight:bold;" onclick="prompt2FA('${acc.id}')">🔐 Injetar 2FA</button>
               <button class="btn" style="background:#0284c7; color:#fff;" onclick="dispatchAction('${acc.id}', 'solve_captcha')">🛡️ Solver Captcha</button>
             </div>
 
