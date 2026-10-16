@@ -94,7 +94,7 @@ func (c *TRPCClient) Query(ctx context.Context, path string, input any) (any, er
 		req.Header.Set("authorization", "Bearer "+c.token)
 	}
 
-	res, err := http.DefaultClient.Do(req)
+	res, err := c.httpCli.Client().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func (c *TRPCClient) Mutate(ctx context.Context, path string, input any) (any, e
 		req.Header.Set("authorization", "Bearer "+c.token)
 	}
 
-	res, err := http.DefaultClient.Do(req)
+	res, err := c.httpCli.Client().Do(req)
 	if err != nil {
 		return nil, err
 	}

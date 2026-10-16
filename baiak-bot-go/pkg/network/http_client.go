@@ -56,6 +56,10 @@ func (h *HTTPClient) SetHeader(key, val string) {
 	h.headers.Set(key, val)
 }
 
+func (h *HTTPClient) Client() *http.Client {
+	return h.client
+}
+
 func (h *HTTPClient) PostJSON(ctx context.Context, path string, reqBody any, respTarget any) error {
 	var bodyReader io.Reader
 	if reqBody != nil {

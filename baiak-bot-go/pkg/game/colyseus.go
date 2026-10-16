@@ -125,8 +125,8 @@ func Matchmake(ctx context.Context, endpoint Endpoint, method, roomName string, 
 	req.Header.Set("user-agent", DefaultUserAgent)
 	req.Header.Set("origin", endpoint.Origin)
 
-	cli := &http.Client{Timeout: 15 * time.Second}
-	res, err := cli.Do(req)
+	httpCli := network.NewHTTPClient(endpoint.HTTP, 15*time.Second, bindIP)
+	res, err := httpCli.Client().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("matchmake request falhou: %w", err)
 	}
