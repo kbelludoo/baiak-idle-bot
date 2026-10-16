@@ -43,15 +43,31 @@ jobs:
           echo "[Solver] Iniciando resolução do Turnstile para $PUSH_URL ..."
           npm install --no-save playwright
           npx --yes playwright install --with-deps chromium
-          node -e "
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" node -e "
             const { chromium } = require('playwright');
             (async () => {
-              const browser = await chromium.launch({ headless: true });
-              const page = await browser.newPage();
+              const browser = await chromium.launch({
+                headless: false,
+                args: [
+                  '--no-sandbox',
+                  '--disable-setuid-sandbox',
+                  '--disable-blink-features=AutomationControlled',
+                  '--disable-infobars',
+                  '--window-size=1280,720'
+                ]
+              });
+              const context = await browser.newContext({
+                viewport: { width: 1280, height: 720 },
+                userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
+              });
+              const page = await context.newPage();
+              await page.addInitScript(() => {
+                delete Object.getPrototypeOf(navigator).webdriver;
+              });
               await page.goto('https://baiakidle.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
               const token = await page.evaluate(async () => {
                 return new Promise((resolve) => {
-                  const timer = setTimeout(() => resolve(''), 25000);
+                  const timer = setTimeout(() => resolve(''), 30000);
                   const script = document.createElement('script');
                   script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
                   script.async = true;

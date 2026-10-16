@@ -73,6 +73,23 @@
       </button>
     </div>
 
+    <!-- Turnstile Captcha Auto-Relay Widget -->
+    <div class="p-4 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm">
+      <div class="flex items-center gap-3">
+        <span class="text-2xl">🛡️</span>
+        <div>
+          <h2 class="font-semibold text-sm text-white">Cloudflare Turnstile Auto-Solver (GitHub Pages)</h2>
+          <p class="text-xs text-slate-400 mt-0.5">
+            Ao abrir esta página do GitHub Pages no celular ou PC, ela resolve o Captcha nativamente e alimenta a VPS com 0 MB de consumo de memória!
+          </p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <div id="cfTurnstileContainer"></div>
+        <span id="turnstileStatusBadge" class="text-xs font-mono px-2 py-1 bg-slate-800 text-slate-300 rounded border border-slate-700">Aguardando...</span>
+      </div>
+    </div>
+
     <!-- Fleet totals -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
@@ -386,8 +403,48 @@
       </div>`;
     }
 
+    function initTurnstileSolver() {
+      const s = document.createElement('script');
+      s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      s.async = true;
+      s.onload = () => {
+        if (!window.turnstile) return;
+        window.turnstile.render('#cfTurnstileContainer', {
+          sitekey: '0x4AAAAAAD1KLtRAtKEsbKdT',
+          theme: 'dark',
+          callback: async (token) => {
+            const badge = document.getElementById('turnstileStatusBadge');
+            if (badge) {
+              badge.textContent = '✔ Token gerado! Enviando para VPS...';
+              badge.className = 'text-xs font-mono px-2 py-1 bg-emerald-950/80 text-emerald-400 rounded border border-emerald-700';
+            }
+            try {
+              const base = (window.localStorage.getItem('fleet_base_url') || 'https://visit-had-hamilton-cubic.trycloudflare.com').replace(/\/$/, '');
+              const res = await fetch(base + '/api/ticket', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ turnstileToken: token })
+              });
+              const json = await res.json();
+              if (badge) badge.textContent = '✔ Token entregue à VPS! Próximo em 100s';
+              setTimeout(() => {
+                if (window.turnstile) window.turnstile.reset();
+              }, 100000);
+            } catch (err) {
+              if (badge) {
+                badge.textContent = 'Erro ao enviar: ' + err;
+                badge.className = 'text-xs font-mono px-2 py-1 bg-rose-950/80 text-rose-400 rounded border border-rose-700';
+              }
+            }
+          }
+        });
+      };
+      document.head.appendChild(s);
+    }
+
     fetchFleet();
     setInterval(fetchFleet, 5000);
+    initTurnstileSolver();
   </script>
 </body>
 </html>
