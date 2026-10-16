@@ -41,6 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "[Solver] Iniciando resolução do Turnstile para $PUSH_URL ..."
+          npm install --no-save playwright
           npx --yes playwright install --with-deps chromium
           node -e "
             const { chromium } = require('playwright');
