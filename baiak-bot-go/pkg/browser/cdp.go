@@ -6,6 +6,7 @@ package browser
 // automation framework — every message is hand-shaped CDP JSON.
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -271,8 +272,9 @@ func LaunchStealth(ctx context.Context, cfg StealthConfig) (*StealthSession, err
 	_ = os.Remove(filepath.Join(userDataDir, "DevToolsActivePort"))
 
 	proc := exec.Command(browserPath, args...)
+	var stderrBuf bytes.Buffer
 	proc.Stdout = nil
-	proc.Stderr = nil
+	proc.Stderr = &stderrBuf
 	if os.Getenv("AIGOBROWSER_CDP_DEBUG") != "" {
 		proc.Stdout = os.Stderr
 		proc.Stderr = os.Stderr
@@ -289,6 +291,9 @@ func LaunchStealth(ctx context.Context, cfg StealthConfig) (*StealthSession, err
 		killTree(proc)
 		if !persisted {
 			os.RemoveAll(userDataDir)
+		}
+		if stderrBuf.Len() > 0 {
+			return nil, fmt.Errorf("%w (chrome stderr: %s)", err, strings.TrimSpace(stderrBuf.String()))
 		}
 		return nil, err
 	}

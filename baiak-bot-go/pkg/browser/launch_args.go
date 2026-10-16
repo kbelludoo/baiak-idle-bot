@@ -19,6 +19,7 @@ func stealthLaunchArgs(cfg StealthConfig, userDataDir string, persisted bool) []
 		"--no-default-browser-check",
 		"--no-sandbox",
 		"--disable-dev-shm-usage",
+		"--disable-gpu",
 		"--disable-blink-features=AutomationControlled",
 		"--disable-popup-blocking",
 		"--mute-audio",
