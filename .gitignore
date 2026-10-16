@@ -1,25 +1,22 @@
 # Environment & Credentials (CRITICAL: NEVER COMMIT)
-.env*
-*.env*
+.env
+*.env
 *.key
 *.pem
 *.pub
+accounts.json
+*/accounts.json
 
 # Runtime & Build
 node_modules/
 data/
 *.tar.gz
 *.log
-index.js
 
 # OS & Binaries
 .DS_Store
 Thumbs.db
 *.exe
+baiak-bot-linux
+baiak-bot.exe
 
-# Scratch & Temporary
-.bak-src/
-_*.ts
-_*.cjs
-_*.json
-_vpsdiff/

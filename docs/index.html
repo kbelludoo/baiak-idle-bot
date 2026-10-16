@@ -419,7 +419,7 @@
               badge.className = 'text-xs font-mono px-2 py-1 bg-emerald-950/80 text-emerald-400 rounded border border-emerald-700';
             }
             try {
-              const base = (window.localStorage.getItem('fleet_base_url') || 'https://visit-had-hamilton-cubic.trycloudflare.com').replace(/\/$/, '');
+              const base = (apiUrl || localStorage.getItem('baiak_fleet_api') || 'https://visit-had-hamilton-cubic.trycloudflare.com').replace(/\/$/, '');
               const res = await fetch(base + '/api/ticket', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

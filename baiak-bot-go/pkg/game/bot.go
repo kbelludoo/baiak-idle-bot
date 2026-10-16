@@ -627,7 +627,6 @@ func (b *Bot) ExecuteAction(action string, payload map[string]any) (any, error) 
 
 func (b *Bot) SupplyTurnstileToken(token string) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.turnstileToken = token
 	b.turnstileTokenAt = time.Now()
 	b.addLog(fmt.Sprintf("✔ Token Turnstile registrado (%d chars) — válido por ~110s", len(token)))
@@ -635,6 +634,9 @@ func (b *Bot) SupplyTurnstileToken(token string) error {
 	case b.turnstileChan <- token:
 	default:
 	}
+	b.mu.Unlock()
+
+	go RunAuctionCycle(context.Background(), b)
 	return nil
 }
 

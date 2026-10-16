@@ -1,152 +1,67 @@
-# ⚔️ Baiak Idle — Terminal Bot 24/7 com TypeSafe AI (Jev)
+# ⚔️ Baiak Idle — 100% Native Go Fleet & GitHub Pages Auto-Relay
 
-Bot headless de alta performance para **Baiak Idle**, escrito 100% em **TypeScript** e executado nativamente com **Bun**. 
+Motor de alta performance em **Go puro** para o **Baiak Idle**, sem Node.js, sem Puppeteer, sem Chromium e sem consumo excessivo de memória.
 
-Funciona diretamente pelo protocolo **WebSocket Colyseus** e chamadas **tRPC**, **sem navegador, sem Chromium, sem Puppeteer e sem interface gráfica**, consumindo apenas **~7 a 15 MB de RAM** (ideal para rodar 24/7 em instâncias gratuitas da nuvem como a Oracle Cloud Always Free).
-
----
-
-## 🚀 Principais Funcionalidades
-
-### 1. 🧠 Inteligência TypeSafe AI (Modelo Jev System One)
-O bot integra decisões probabilísticas calibradas via [TypeSafe AI](https://typesafe.ai) (`Jev`):
-* **🛡️ Auto-Boss Seguro**: Avalia a viabilidade de cada boss cruzando o nível, vocação e margem de segurança antes de entrar no combate. **Evita 100% dos wipes**, ignorando chefes impossíveis.
-* **📦 Triagem de Inventário & Proteção de Loot**: Detecta itens raros, itens de famílias nobres (BiS) e tiers altos. Transfere automaticamente para o baú (`chest`) e protege contra venda no NPC.
-* **🏷️ Avaliação de Flash Offers**: Analisa ofertas relâmpago do servidor e realiza compra automática (`flashoffer:buy`) apenas se o custo-benefício for comprovadamente vantajoso.
-* **📜 Sincronização de Codex & Guilda**: Alinha as metas ativas do Codex com os monstros da hunt atual e sincroniza tarefas da guilda periodicamente.
-
-### 2. 🎯 Simulação Matemática de Hunts (Anti-Wipe)
-Diferente de bots com listas estáticas de nível, este bot utiliza um **simulador matemático de combate** (`src/hunt_sim.ts` / `src/game_formula.ts`):
-* Simula TTK (Time-to-Kill), DPS, regeneração e sustain de vida/mana.
-* Verifica o parâmetro **`can_tank`**: se a party não aguentar a pressão de dano dos monstros, a hunt é descartada, evitando mortes e perda contínua de gold.
-* Maximiza o score de equilíbrio entre **XP/h** e **Gold/h**.
-
-### 3. 🧙 Auto-Config de Magias, Rotações e Poções
-* No início da sessão e a cada 10 minutos, o bot configura automaticamente a party:
-  * **Knight / Tank**: Configura cura prioritária (`exura ico`), rotação completa de 4 magias de dano/área e poções de vida de tier alto (`ultimate/supreme health potion`).
-  * **Paladin / Monk / Mages**: Configura cura (`exura gran san`, etc.), rotação ofensiva ideal e poções de mana.
-* Ativa **Auto-Refill** e **Auto-Buy Supply** para garantir que o estoque de poções nunca se esgote.
-
-### 4. 🧘 Gestão de Stamina & Treino Online
-* Se a stamina cair para **< 15%**, o bot se teleporta para o **Treino Online** para treinar skills e regenerar stamina.
-* Quando a stamina atinge **> 85%**, o bot retorna automaticamente à hunt ótima.
+Executa **24/7 na VPS** consumindo apenas **~2.5 MB de RAM** para todas as contas combinadas, com integração direta ao **GitHub Pages** para resolução de Captchas Cloudflare Turnstile com **0 MB de uso na VPS**.
 
 ---
 
-## 🛠️ Requisitos
+## 🚀 Destaques da Arquitetura
 
-* [Bun](https://bun.sh) (v1.1 ou superior)
-* Token da conta do jogo (`BAIAK_TOKEN` extraído do Local Storage: `baiak-idle-token`)
-* (Opcional) Chave de API TypeSafe (`TYPESAFE_API_KEY`) para habilitar o modelo Jev
+- **100% Nativo em Go:** Binário único compilado estaticamente (`baiak-bot-linux`).
+- **Memória Mínima:** Apenas ~2.5 MB de RAM na VPS para gerenciar toda a frota (3+ contas caçando simultaneamente via WebSocket Colyseus e tRPC).
+- **GitHub Pages Turnstile Solver:** Widget Turnstile hospedado no GitHub Pages (`https://kbelludoo.github.io/baiak-idle-bot/`). Ao abrir a página no navegador ou celular, o captcha é resolvido sem headless browser na VPS e o token é entregue via `POST /api/ticket`.
+- **Leilão & Sniper Autônomo:**
+  - Vende gold excedente (> 100kk) e equipamentos raros não equipados (Avaliados via TypeSafe AI / Jev).
+  - Sniper inteligente que monitora `auction.browse` e arremata ofertas com margem de lucro sem necessidade de captcha/2fa.
+- **Auto-Config de Party & BiS:** Rotação de magias, poções supremas e talentos aplicados automaticamente.
+- **Auto-Hunt Anti-Wipe:** Simulação matemática de TTK e dano recebido, com downgrade automático de hunt em caso de risco.
 
 ---
 
-## ⚙️ Configuração
+## 📁 Estrutura do Repositório
 
-Copie o arquivo de exemplo e preencha suas credenciais:
+```
+.
+├── baiak-bot-go/              # Motor 100% nativo em Go
+│   ├── accounts.example.json  # Modelo de configuração das contas
+│   ├── main.go                # Supervisor, console e inicialização do servidor
+│   ├── go.mod / go.sum        # Dependências Go
+│   └── pkg/
+│       ├── engine/            # Interfaces de bots, manager e supervisor
+│       ├── game/              # Colyseus WebSocket, tRPC, Leilão, Hunts e Jev
+│       ├── network/           # Clientes HTTP e WebSocket com bind de IP
+│       └── server/            # Servidor Web (Dashboard + API REST com CORS)
+├── docs/                      # GitHub Pages (Turnstile Solver & Fleet Dashboard)
+│   ├── index.html             # Painel interativo com widget Turnstile
+│   ├── GAME_SYSTEMS.md        # Documentação dos sistemas de jogo
+│   └── GAME_CURIOSITIES.md    # Curiosidades e mecânicas
+└── README.md
+```
 
+---
+
+## 🌐 Dashboard & Captcha Relay via GitHub Pages
+
+Acesse o painel hospedado:
+👉 **[https://kbelludoo.github.io/baiak-idle-bot/](https://kbelludoo.github.io/baiak-idle-bot/)**
+
+1. A página conecta automaticamente à API pública da VPS via túnel seguro Cloudflare.
+2. O widget Cloudflare Turnstile oficial (`sitekey: 0x4AAAAAAD1KLtRAtKEsbKdT`) é renderizado no cliente.
+3. Assim que o desafio é concluído, o token gerado é despachado via `POST /api/ticket` diretamente para a VPS, liberando a criação imediata de anúncios de leilão.
+
+---
+
+## 🛠️ Compilação e Execução
+
+### Compilar binário para Linux (VPS):
 ```bash
-cp .env.example .env
+cd baiak-bot-go
+GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o baiak-bot-linux main.go
 ```
 
-Edite o `.env`:
-```env
-BAIAK_TOKEN=seu_token_aqui
-USER_DATA_DIR=./data
-TYPESAFE_API_KEY=sua_chave_typesafe_aqui
-AUTO_BOSS=true
+### Executar localmente (Windows):
+```powershell
+cd baiak-bot-go
+go run main.go
 ```
-
----
-
-## 💻 Como Rodar
-
-### Modo Terminal 24/7
-```bash
-# Executa o bot terminal
-bun run terminal
-
-# Ou com flags personalizadas:
-bun run terminal --auto-boss --hunt-id=glooth-cave
-```
-
-### Diagnóstico Rápido (Probe)
-Conecta, faz o handshake, imprime os frames recebidos e desconecta após alguns segundos:
-```bash
-bun run terminal:probe
-```
-
-### Testes Automatizados
-O projeto conta com **178 testes unitários** cobrindo protocolo, fórmulas, simulador de hunts e decisões do Jev:
-```bash
-bun test
-```
-
----
-
-## ☁️ Rodando 24/7 na Oracle Cloud (OCI Always Free)
-
-O bot está preparado para rodar como serviço `systemd` em VPS Linux (Ubuntu / Debian / Oracle Linux):
-
-1. Clone o repositório na VPS:
-   ```bash
-   git clone <URL_DO_REPOSITORIO> ~/baiak-bot
-   cd ~/baiak-bot
-   ```
-2. Instale o Bun (se ainda não tiver):
-   ```bash
-   curl -fsSL https://bun.sh/install | bash
-   export PATH="$HOME/.bun/bin:$PATH"
-   ```
-3. Crie o serviço systemd em `/etc/systemd/system/baiak-term.service`:
-   ```ini
-   [Unit]
-   Description=Baiak Idle - Terminal Bot 24/7
-   After=network-online.target
-   Wants=network-online.target
-
-   [Service]
-   Type=simple
-   User=ubuntu
-   WorkingDirectory=/home/ubuntu/baiak-bot
-   EnvironmentFile=-/home/ubuntu/baiak-bot/.env
-   Environment=NODE_ENV=production
-   ExecStart=/home/ubuntu/.bun/bin/bun run src/term/main.ts
-   Restart=always
-   RestartSec=10
-   MemoryHigh=256M
-   MemoryMax=384M
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-4. Ative e inicie o serviço:
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now baiak-term.service
-   ```
-5. Verifique os logs em tempo real:
-   ```bash
-   journalctl -u baiak-term.service -f
-   ```
-
----
-
-## 📋 Flags da CLI
-
-| Flag | Padrão | Descrição |
-| --- | --- | --- |
-| `--auto-boss` | `false` (ou `AUTO_BOSS=true`) | Habilita auto-boss com filtro de segurança Jev |
-| `--hunt-id=<id>` | Automática (fórmula) | Força uma hunt específica (ex: `glooth-cave`) |
-| `--no-sell` | `false` | Desativa o auto-sell de loot |
-| `--no-rewards` | `false` | Desativa a coleta periódica de recompensas |
-| `--no-treino` | `false` | Desativa o treino online com stamina baixa |
-| `--no-arena` | `false` | Desativa a fila diária de arena PvP |
-| `--no-codex` | `false` | Desativa entregas automáticas do Codex |
-| `--log-sec=<n>` | `60` | Intervalo em segundos do log de status |
-| `--poll-sec=<n>` | `120` | Intervalo em segundos do polling tRPC |
-
----
-
-## 📄 Licença
-MIT
