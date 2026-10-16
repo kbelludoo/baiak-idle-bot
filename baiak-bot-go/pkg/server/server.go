@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"strings"
 	"time"
 
 	"baiak-bot/pkg/engine"
@@ -165,23 +166,29 @@ func (s *Server) handleAPITicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body struct {
-		AccountID      string `json:"accountId"`
-		Ticket         string `json:"ticket"`
-		TurnstileToken string `json:"turnstileToken"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || (body.Ticket == "" && body.TurnstileToken == "") {
+	var raw map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "Campos 'ticket' ou 'turnstileToken' são obrigatórios"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": fmt.Sprintf("JSON inválido: %v", err)})
 		return
 	}
 
-	token := body.TurnstileToken
-	if token == "" {
-		token = body.Ticket
+	var token string
+	for _, key := range []string{"turnstileToken", "turnstile_token", "ticket", "token"} {
+		if v, ok := raw[key].(string); ok && strings.TrimSpace(v) != "" {
+			token = strings.TrimSpace(v)
+			break
+		}
 	}
 
-	if err := s.manager.SupplyTurnstileToken(body.AccountID, token); err != nil {
+	if token == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "Campos 'turnstileToken', 'ticket' ou 'token' são obrigatórios"})
+		return
+	}
+
+	accID, _ := raw["accountId"].(string)
+	if err := s.manager.SupplyTurnstileToken(accID, token); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
 		return
