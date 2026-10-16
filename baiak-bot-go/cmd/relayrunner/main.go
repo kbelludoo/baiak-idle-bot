@@ -91,6 +91,40 @@ func main() {
 
 	_, _ = session.Evaluate(ctx, renderScript)
 
+	// Auto-clicker para checkbox do Turnstile caso o Cloudflare exiba desafio interativo
+	go func() {
+		clickTicker := time.NewTicker(2 * time.Second)
+		defer clickTicker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-clickTicker.C:
+				res, err := session.Evaluate(ctx, `(() => {
+					const iframes = Array.from(document.querySelectorAll('iframe[src*="challenges.cloudflare.com"]'));
+					for (const f of iframes) {
+						const r = f.getBoundingClientRect();
+						if (r.width > 20 && r.height > 20) {
+							return { x: r.left + 30, y: r.top + r.height / 2 };
+						}
+					}
+					return null;
+				})()`)
+				if err == nil && string(res) != "null" && string(res) != "" {
+					var pt struct {
+						X float64 `json:"x"`
+						Y float64 `json:"y"`
+					}
+					if json.Unmarshal(res, &pt) == nil && pt.X > 0 {
+						log.Printf("[relayrunner] Detectado checkbox do Turnstile em (%.0f, %.0f) -> Clicando automaticamente...", pt.X, pt.Y)
+						session.MouseJitter(ctx, 3)
+						_ = session.ClickAt(ctx, pt.X, pt.Y)
+					}
+				}
+			}
+		}
+	}()
+
 	log.Printf("[relayrunner] Aguardando resolução do Turnstile...")
 	pollTicker := time.NewTicker(1 * time.Second)
 	defer pollTicker.Stop()
