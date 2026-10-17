@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Baiak Idle — Fleet Dashboard</title>
+  <title>Baiak Idle — Bot Go Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -40,8 +40,8 @@
           ⚔️
         </div>
         <div>
-          <h1 class="font-bold text-base md:text-lg text-white leading-tight">Baiak Idle — Fleet Dashboard</h1>
-          <p class="text-xs text-slate-400 hidden sm:block">3 contas · 3 IPs · VPS Oracle 24/7</p>
+          <h1 class="font-bold text-base md:text-lg text-white leading-tight">Baiak Idle — Bot Go</h1>
+          <p class="text-xs text-slate-400 hidden sm:block">Engine Go Nativa · 3 contas · VPS Oracle 24/7</p>
         </div>
       </div>
 
@@ -50,7 +50,7 @@
           <span class="w-2 h-2 rounded-full bg-red-500"></span>
           <span id="statusText">Desconectado</span>
         </div>
-        <button onclick="toggleConfigModal()" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 transition-colors" title="Configurar URL da frota">
+        <button onclick="toggleConfigModal()" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 transition-colors" title="Configurar URL da API Go">
           ⚙️
         </button>
       </div>
@@ -62,10 +62,10 @@
     <div id="setupBanner" class="p-4 rounded-xl bg-sky-950/40 border border-sky-800/60 text-sky-200 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
       <div>
         <h2 class="font-semibold text-sm md:text-base flex items-center gap-2">
-          <span>🔗</span> Conecte o Dashboard ao agregador da VPS
+          <span>🔗</span> Conecte o Dashboard ao Bot Go da VPS
         </h2>
         <p class="text-xs text-sky-300/80 mt-1">
-          Informe a URL do agregador de frota (ex: <code>https://xxxx.trycloudflare.com</code>).
+          Informe a URL da API do Bot Go (ex: <code>https://xxxx.trycloudflare.com</code>).
         </p>
       </div>
       <button onclick="toggleConfigModal()" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold whitespace-nowrap shadow transition">
@@ -126,16 +126,16 @@
     <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
       <div class="flex items-center justify-between border-b border-slate-800 pb-3">
         <h3 class="text-base font-bold text-white flex items-center gap-2">
-          <span>⚙️</span> Configurar URL da Frota
+          <span>⚙️</span> Configurar URL da API Go
         </h3>
         <button onclick="toggleConfigModal()" class="text-slate-400 hover:text-white text-lg">&times;</button>
       </div>
 
       <div class="space-y-3">
-        <label class="text-xs font-semibold text-slate-300 block">URL do agregador (VPS)</label>
+        <label class="text-xs font-semibold text-slate-300 block">URL da API do Bot Go (VPS)</label>
         <input type="text" id="inputApiUrl" placeholder="ex: https://xxxx.trycloudflare.com" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-sky-500 focus:outline-none">
         <p class="text-[11px] text-slate-400">
-          💡 O agregador (<code>/api/fleet</code>) expõe as 3 contas. HTTPS é obrigatório no GitHub Pages (Mixed Content).
+          💡 A API do Bot Go (<code>/api/fleet</code>) expõe as 3 contas. HTTPS é obrigatório no GitHub Pages (Mixed Content).
         </p>
       </div>
 
@@ -224,7 +224,7 @@
       const badgeText = document.getElementById('statusText');
       if (online) {
         badge.className = 'flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-medium bg-emerald-950/60 border border-emerald-800/60 text-emerald-400';
-        badgeText.textContent = 'Fleet online';
+        badgeText.textContent = 'Bot Go online';
         document.getElementById('setupBanner').classList.add('hidden');
       } else {
         badge.className = 'flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-medium bg-red-950/60 border border-red-800/60 text-red-400';
