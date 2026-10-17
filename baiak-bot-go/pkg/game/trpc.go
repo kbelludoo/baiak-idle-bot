@@ -170,6 +170,10 @@ func (c *TRPCClient) GetCharacters(ctx context.Context) ([]CharacterInfo, error)
 		}
 		if stam, ok := raw["stamina"].(float64); ok {
 			info.Stamina = int(stam)
+		} else if state, ok := raw["state"].(map[string]any); ok {
+			if stam, ok := state["stamina"].(float64); ok {
+				info.Stamina = int(stam)
+			}
 		}
 		if gold, ok := raw["gold"].(float64); ok {
 			info.Gold = int64(gold)

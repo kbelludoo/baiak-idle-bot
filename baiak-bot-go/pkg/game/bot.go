@@ -93,6 +93,22 @@ func (b *Bot) updateStatus(fn func(s *engine.AccountStatus)) {
 	b.status.UpdatedAt = time.Now().UnixMilli()
 }
 
+func FormatStamina(mins int) string {
+	if mins <= 0 {
+		return "0min (0%)"
+	}
+	h := mins / 60
+	m := mins % 60
+	pct := int(math.Round(float64(mins) / 2520.0 * 100.0))
+	if pct > 100 {
+		pct = 100
+	}
+	if h > 0 {
+		return fmt.Sprintf("%dh %02dm (%d%%)", h, m, pct)
+	}
+	return fmt.Sprintf("%dmin (%d%%)", m, pct)
+}
+
 func (b *Bot) Init(ctx context.Context) error {
 	b.updateStatus(func(s *engine.AccountStatus) {
 		s.Status = "Carregando dados da conta..."
@@ -164,9 +180,10 @@ func (b *Bot) Init(ctx context.Context) error {
 		s.Gold = primary.Gold
 		s.CurrentArea = huntName
 		s.Status = "Pronto para caçar"
-		s.Extra["stamina"] = fmt.Sprintf("%dmin", primary.Stamina)
+		s.Extra["stamina"] = FormatStamina(primary.Stamina)
 		s.Extra["activeParty"] = len(activePool)
 		s.Extra["strategy"] = b.currentStrategy
+		s.Extra["charName"] = primary.Name
 	})
 
 	b.addLog(fmt.Sprintf("Personagem: %s (Lv %d %s) | Party: %d ativos | Estratégia: %s | Hunt: %s",
@@ -331,7 +348,11 @@ func (b *Bot) Run(ctx context.Context) error {
 	})
 
 	// 4. Inicializar caçada com comandos Colyseus oficiais
-	b.sendStage("entrada na sala")
+	if b.config.Settings.AutoTreino && b.primaryChar.Stamina <= 1260 {
+		b.checkAutoTreino(room)
+	} else {
+		b.sendStage("entrada na sala")
+	}
 	_ = room.Send("loop", true)
 	_ = room.Send("offlinemode", map[string]any{"mode": "hunt", "huntId": b.currentHuntID})
 	_ = room.Send("autosellfull", map[string]any{"on": true})
@@ -364,9 +385,6 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	arenaTicker := time.NewTicker(30 * time.Minute)
 	defer arenaTicker.Stop()
-
-	staminaTicker := time.NewTicker(10 * time.Second)
-	defer staminaTicker.Stop()
 
 	equipTicker := time.NewTicker(5 * time.Minute)
 	defer equipTicker.Stop()
@@ -427,29 +445,6 @@ func (b *Bot) Run(ctx context.Context) error {
 			}
 			SyncPartyAutoConfig(ctx, b.trpc, room, b.allChars, b.addLog)
 
-		case <-staminaTicker.C:
-			if b.config.Settings.AutoTreino {
-				stam := b.primaryChar.Stamina
-				// Stamina máxima é 2520 min (42h). 50% = 1260 min.
-				if !b.inTreino && stam > 0 && stam <= 1260 {
-					b.inTreino = true
-					b.treinoEnteredAt = time.Now()
-					_ = room.Send("mode", map[string]any{"mode": "exercise"})
-					_ = room.Send("tocity", map[string]any{})
-					b.updateStatus(func(s *engine.AccountStatus) {
-						s.Status = "training"
-					})
-					b.addLog(fmt.Sprintf("🧘 Stamina <= 50%% (%dmin) -> alternando para Treino Online", stam))
-				} else if b.inTreino && stam >= 2520 {
-					b.inTreino = false
-					b.sendStage("stamina 100% recuperada")
-					b.updateStatus(func(s *engine.AccountStatus) {
-						s.Status = "hunting"
-					})
-					b.addLog("⚔️ Stamina 100% recuperada -> retornando para a hunt")
-				}
-			}
-
 		case <-pollTicker.C:
 			// Sincronizar dados via tRPC
 			if chars, err := b.trpc.GetCharacters(ctx); err == nil && len(chars) > 0 {
@@ -496,9 +491,12 @@ func (b *Bot) Run(ctx context.Context) error {
 				b.updateStatus(func(s *engine.AccountStatus) {
 					s.Level = b.primaryChar.Level
 					s.Gold = b.primaryChar.Gold
-					s.Extra["stamina"] = fmt.Sprintf("%dmin", b.primaryChar.Stamina)
+					s.Extra["stamina"] = FormatStamina(b.primaryChar.Stamina)
 					s.Extra["strategy"] = b.currentStrategy
+					s.Extra["charName"] = b.primaryChar.Name
 				})
+
+				b.checkAutoTreino(room)
 			}
 
 		case <-ratesTicker.C:
@@ -720,4 +718,30 @@ func (b *Bot) TriggerCaptchaSolver() {
 		}
 	}()
 }
+
+func (b *Bot) checkAutoTreino(room *Room) {
+	if !b.config.Settings.AutoTreino || room == nil || room.Closed {
+		return
+	}
+	stam := b.primaryChar.Stamina
+	// Stamina máxima é 2520 min (42h). 50% = 1260 min.
+	if !b.inTreino && stam <= 1260 {
+		b.inTreino = true
+		b.treinoEnteredAt = time.Now()
+		_ = room.Send("mode", map[string]any{"mode": "exercise"})
+		_ = room.Send("tocity", map[string]any{})
+		b.updateStatus(func(s *engine.AccountStatus) {
+			s.Status = "training"
+		})
+		b.addLog(fmt.Sprintf("🧘 Stamina <= 50%% (%dmin / %s) -> alternando para Treino Online", stam, FormatStamina(stam)))
+	} else if b.inTreino && stam >= 2510 {
+		b.inTreino = false
+		b.sendStage("stamina 100% recuperada")
+		b.updateStatus(func(s *engine.AccountStatus) {
+			s.Status = "hunting"
+		})
+		b.addLog("⚔️ Stamina 100% recuperada -> retornando para a hunt")
+	}
+}
+
 
