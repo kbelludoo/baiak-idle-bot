@@ -62,5 +62,8 @@ var PreferredHuntTable = map[int]string{
 	150: "asura-lair", 170: "wereliones-cave", 180: "draken-lair", 190: "cobra-cave",
 	200: "undeadragon-lair", 210: "falcon", 220: "grimeleech-cave", 240: "choking-cave",
 	250: "guzzlemaw-cave", 270: "lionknight-cave", 290: "megadragon-cave", 300: "naga-lair",
-	350: "gazer-lair", 450: "inferniarch-lair", 500: "livraria-cave", 610: "lavafungos-cave",
+	310: "moonstone-crater", 350: "gazer-lair", 370: "forbidden-gardens", 420: "asura-citadel",
+	450: "inferniarch-lair", 500: "livraria-cave", 510: "thalassara-surroundings", 610: "lavafungos-cave",
+	700: "crypt-cave", 800: "bonyseadevil-cave", 1500: "draklightsource-cave", 2000: "radiant-skyhold",
+	2500: "radiant-skyhold-devoted",
 }

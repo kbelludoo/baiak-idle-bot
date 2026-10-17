@@ -42,6 +42,12 @@ type Bot struct {
 	staged         bool
 	treinoEnteredAt time.Time
 
+	// Passe de Temporada, Rift Tree e Perks de Arma
+	passMgr        *PassManager
+	riftMgr        *RiftManager
+	profMgr        *ProficiencyManager
+	currentTier    string // "" normal, "nm" nightmare, "hl" hell
+
 	// Anti-wipe
 	deathTimestamps []time.Time
 	lastDowngradeAt time.Time
@@ -62,6 +68,10 @@ func NewBot(cfg AccountConfig) *Bot {
 		currentStrategy: cfg.Settings.Priority,
 		jev:             NewJevClient(),
 		turnstileChan:   make(chan string, 5),
+		passMgr:         NewPassManager(),
+		riftMgr:         NewRiftManager(),
+		profMgr:         NewProficiencyManager(),
+		currentTier:     "",
 	}
 
 	return b
@@ -347,6 +357,34 @@ func (b *Bot) Run(ctx context.Context) error {
 		b.addLog(fmt.Sprintf("🛒 Compra na loja: %v", p))
 	})
 
+	room.On("bpstatus", func(p any) {
+		b.passMgr.HandleBPStatus(p, b.addLog)
+	})
+
+	room.On("rift", func(p any) {
+		b.riftMgr.HandleRiftState(p)
+	})
+
+	room.On("progression", func(p any) {
+		if b.riftMgr.HandleProgression(p, b.addLog) {
+			b.mu.Lock()
+			newTier := b.riftMgr.GetTier()
+			changed := newTier != b.currentTier
+			if changed {
+				b.currentTier = newTier
+			}
+			b.mu.Unlock()
+
+			if changed {
+				b.sendStage("desbloqueio tier " + newTier)
+			}
+		}
+	})
+
+	room.On("profstate", func(p any) {
+		b.profMgr.HandleProfState(p, room, b.addLog)
+	})
+
 	// 4. Inicializar caçada com comandos Colyseus oficiais
 	if b.config.Settings.AutoTreino && b.primaryChar.Stamina <= 1260 {
 		b.checkAutoTreino(room)
@@ -398,10 +436,23 @@ func (b *Bot) Run(ctx context.Context) error {
 	auctionTicker := time.NewTicker(90 * time.Second)
 	defer auctionTicker.Stop()
 
+	seasonTicker := time.NewTicker(3 * time.Minute)
+	defer seasonTicker.Stop()
+
 	// Dispara o primeiro ciclo de leilão e coleta de inbox após 10 segundos
 	go func() {
 		time.Sleep(10 * time.Second)
 		RunAuctionCycle(ctx, b)
+	}()
+
+	// Dispara verificação do passe de temporada, rift tree e perks de arma após conexão
+	go func() {
+		time.Sleep(5 * time.Second)
+		if !room.Closed {
+			b.passMgr.CheckAndClaim(ctx, room, b.addLog)
+			b.riftMgr.SpendRiftTree(ctx, room, b.allChars, b.addLog)
+			b.profMgr.CheckAndSpendPerks(ctx, room, b.allChars, b.addLog)
+		}
 	}()
 
 	lastGold := b.primaryChar.Gold
@@ -414,6 +465,13 @@ func (b *Bot) Run(ctx context.Context) error {
 
 		case <-auctionTicker.C:
 			RunAuctionCycle(ctx, b)
+
+		case <-seasonTicker.C:
+			if !room.Closed {
+				b.passMgr.CheckAndClaim(ctx, room, b.addLog)
+				b.riftMgr.SpendRiftTree(ctx, room, b.allChars, b.addLog)
+				b.profMgr.CheckAndSpendPerks(ctx, room, b.allChars, b.addLog)
+			}
 
 		case <-rewardTicker.C:
 			if room.Closed {
@@ -556,15 +614,32 @@ func (b *Bot) sendStage(reason string) {
 
 	_ = b.room.Send("ready", map[string]any{})
 	_ = b.room.Send("mode", map[string]any{"mode": "hunt"})
-	_ = b.room.Send("stage", map[string]any{"huntId": b.currentHuntID})
+
+	b.mu.RLock()
+	tier := b.currentTier
+	b.mu.RUnlock()
+
+	stagePayload := map[string]any{
+		"huntId": b.currentHuntID,
+	}
+	tierLabel := ""
+	if tier == "hl" {
+		stagePayload["tier"] = "hl"
+		tierLabel = " [Hell]"
+	} else if tier == "nm" {
+		stagePayload["tier"] = "nm"
+		tierLabel = " [Nightmare]"
+	}
+
+	_ = b.room.Send("stage", stagePayload)
 	b.staged = true
 	b.inTreino = false
 
 	b.updateStatus(func(s *engine.AccountStatus) {
-		s.CurrentArea = name
+		s.CurrentArea = name + tierLabel
 		s.Status = "hunting"
 	})
-	b.addLog(fmt.Sprintf("Stage enviado (%s): %s (%s)", reason, name, b.currentHuntID))
+	b.addLog(fmt.Sprintf("Stage enviado (%s): %s%s (%s)", reason, name, tierLabel, b.currentHuntID))
 }
 
 func (b *Bot) GetStatus() engine.AccountStatus {
@@ -583,9 +658,47 @@ func (b *Bot) ExecuteAction(action string, payload map[string]any) (any, error) 
 		if huntID == "" {
 			return nil, fmt.Errorf("parâmetro 'huntId' obrigatório")
 		}
-		b.currentHuntID = huntID
+		if strings.HasSuffix(huntID, ":h") {
+			b.currentHuntID = strings.TrimSuffix(huntID, ":h")
+			b.currentTier = "hl"
+		} else if strings.HasSuffix(huntID, ":n") {
+			b.currentHuntID = strings.TrimSuffix(huntID, ":n")
+			b.currentTier = "nm"
+		} else {
+			b.currentHuntID = huntID
+		}
 		b.sendStage("comando manual web")
-		return map[string]any{"ok": true, "huntId": huntID}, nil
+		return map[string]any{"ok": true, "huntId": b.currentHuntID, "tier": b.currentTier}, nil
+
+	case "set_tier":
+		tier, _ := payload["tier"].(string)
+		if tier != "" && tier != "nm" && tier != "hl" {
+			return nil, fmt.Errorf("tier inválido (permitidos: '', 'nm', 'hl')")
+		}
+		b.currentTier = tier
+		b.sendStage("alteração manual de tier")
+		return map[string]any{"ok": true, "tier": b.currentTier}, nil
+
+	case "claim_pass":
+		if b.room != nil && !b.room.Closed {
+			b.passMgr.CheckAndClaim(context.Background(), b.room, b.addLog)
+			return "Passe de Temporada e missões diárias verificados e reivindicados!", nil
+		}
+		return nil, fmt.Errorf("sala não conectada")
+
+	case "spend_rift":
+		if b.room != nil && !b.room.Closed {
+			b.riftMgr.SpendRiftTree(context.Background(), b.room, b.allChars, b.addLog)
+			return "Pontos de Rift Tree distribuídos com sucesso!", nil
+		}
+		return nil, fmt.Errorf("sala não conectada")
+
+	case "sync_perks":
+		if b.room != nil && !b.room.Closed {
+			b.profMgr.CheckAndSpendPerks(context.Background(), b.room, b.allChars, b.addLog)
+			return "Perks de proficiência de armas sincronizados e alocados!", nil
+		}
+		return nil, fmt.Errorf("sala não conectada")
 
 	case "auto_sell":
 		if b.room != nil && !b.room.Closed {

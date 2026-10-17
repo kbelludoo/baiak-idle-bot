@@ -68,3 +68,59 @@ func TestSimulateHuntAndRanking(t *testing.T) {
 		t.Errorf("PickBestHunt retornou string vazia")
 	}
 }
+
+func TestPassManager(t *testing.T) {
+	pm := NewPassManager()
+	var logs []string
+	logFn := func(s string) {
+		logs = append(logs, s)
+	}
+
+	pm.HandleBPStatus(map[string]any{
+		"open":           true,
+		"premium":        true,
+		"pendingTiers":   []any{1.0, 2.0, 3.0},
+		"pendingPremium": []any{2.0, 3.0, 4.0},
+	}, logFn)
+
+	if len(pm.pendingTiers) != 4 {
+		t.Errorf("Esperado 4 degraus únicos pendentes, obtido %d", len(pm.pendingTiers))
+	}
+	if len(logs) == 0 {
+		t.Errorf("Esperado log informando degraus pendentes")
+	}
+}
+
+func TestRiftManagerProgression(t *testing.T) {
+	rm := NewRiftManager()
+	var logs []string
+	logFn := func(s string) {
+		logs = append(logs, s)
+	}
+
+	// Menos de 7500 pontos -> normal
+	unlocked := rm.HandleProgression(map[string]any{"points": 5000.0}, logFn)
+	if unlocked || rm.IsNightmare() || rm.GetTier() != "" {
+		t.Errorf("Nightmare não deveria estar desbloqueado com 5000 pontos")
+	}
+
+	// 7500 pontos -> desbloqueia Nightmare
+	unlocked = rm.HandleProgression(map[string]any{"points": 7500.0}, logFn)
+	if !unlocked || !rm.IsNightmare() || rm.GetTier() != "nm" {
+		t.Errorf("Nightmare deveria ter desbloqueado com 7500 pontos, tier: %s", rm.GetTier())
+	}
+
+	// 7500 nightmare points -> desbloqueia Hell
+	unlocked = rm.HandleProgression(map[string]any{"nightmarePoints": 7500.0}, logFn)
+	if !unlocked || !rm.IsHell() || rm.GetTier() != "hl" {
+		t.Errorf("Hell deveria ter desbloqueado com 7500 nightmarePoints, tier: %s", rm.GetTier())
+	}
+}
+
+func TestProficiencyManager(t *testing.T) {
+	pm := NewProficiencyManager()
+	if pm == nil {
+		t.Fatalf("ProficiencyManager é nil")
+	}
+}
+
