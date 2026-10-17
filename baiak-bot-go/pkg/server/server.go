@@ -79,10 +79,6 @@ func (s *Server) handleAPIFleet(w http.ResponseWriter, r *http.Request) {
 		if sVal, ok := st.Extra["stamina"].(string); ok && sVal != "" {
 			staminaStr = sVal
 		}
-		charName := ""
-		if cVal, ok := st.Extra["charName"].(string); ok && cVal != "" {
-			charName = cVal
-		}
 		isInTreino := st.Status == "training"
 		telemetryMap := map[string]any{
 			"gold":    st.Gold,
@@ -90,9 +86,13 @@ func (s *Server) handleAPIFleet(w http.ResponseWriter, r *http.Request) {
 			"kills":   st.Kills,
 			"stamina": staminaStr,
 		}
+		accLabel := st.ID
+		if strings.HasPrefix(st.ID, "acc-") {
+			accLabel = "Conta " + strings.TrimPrefix(st.ID, "acc-")
+		}
 		botsMap[st.ID] = map[string]any{
-			"label":     st.Name,
-			"name":      charName,
+			"label":     accLabel,
+			"name":      "",
 			"online":    isOnline,
 			"reachable": true,
 			"status": map[string]any{

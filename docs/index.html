@@ -304,12 +304,7 @@
       const huntId = s?.hunt?.id || '';
       const stamRaw = s?.telemetry?.stamina || s?.stamina;
       const stamInfo = parseStamina(stamRaw);
-      const options = hunts.map((h) =>
-        `<option value="${h.id}" ${h.id === huntId ? 'selected' : ''}>${h.name} (Lvl ${h.minLevel}+)</option>`
-      ).join('');
-
-      const nameSuffix = (bot.name && bot.name !== bot.label) ? ` · ${bot.name}` : '';
-      const portText = bot.port ? ` · :${bot.port}` : '';
+      const accTitle = key.startsWith('acc-') ? 'Conta ' + key.replace('acc-', '') : (bot.label || key);
 
       return `
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
@@ -317,9 +312,9 @@
           <div>
             <div class="flex items-center gap-2">
               <span class="w-2 h-2 rounded-full ${online ? 'bg-emerald-500 pulse-online' : 'bg-red-500'}"></span>
-              <h2 class="font-bold text-white text-base">${bot.label}${nameSuffix}</h2>
+              <h2 class="font-bold text-white text-base">${accTitle}</h2>
             </div>
-            <div class="text-[11px] text-slate-400 mt-1">Lvl ${level}${portText} · ⚡ <span class="${stamInfo.color} font-medium">${stamInfo.text}</span></div>
+            <div class="text-[11px] text-slate-400 mt-1">Lvl ${level} (${s?.vocation || ''}) · ⚡ <span class="${stamInfo.color} font-medium">${stamInfo.text}</span></div>
           </div>
           <div class="flex flex-col items-end gap-1">
             <span class="text-[11px] px-2 py-0.5 rounded-full ${online ? 'bg-emerald-950/60 border border-emerald-800 text-emerald-400' : 'bg-red-950/60 border border-red-800 text-red-400'}">
@@ -356,52 +351,6 @@
             <div class="text-[10px] uppercase tracking-wider text-slate-400">Ouro</div>
             <div class="font-semibold text-amber-400">${fmt(s?.telemetry?.gold)}</div>
           </div>
-        </div>
-
-        <div class="space-y-2">
-          <label class="text-xs font-semibold text-slate-300 block">Trocar Hunt</label>
-          <div class="flex gap-2">
-            <select id="hunt_${key}" class="flex-1 bg-slate-800 border border-slate-700 text-white rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-sky-500 focus:outline-none">
-              ${options || '<option value="">—</option>'}
-            </select>
-            <button onclick="sendAction('${key}', 'set_hunt', { huntId: document.getElementById('hunt_${key}').value })"
-              class="px-3 py-2 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold rounded-lg shadow transition">
-              Trocar
-            </button>
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-2">
-          <button onclick="sendAction('${key}', 'toggle_treino', { enabled: ${inTreino ? 'false' : 'true'} })"
-            class="p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-left transition group">
-            <div class="text-sm font-semibold text-white group-hover:text-sky-400">🧘 Treino</div>
-            <div class="text-[11px] text-slate-400">${inTreino ? 'Ativo' : 'Inativo'}</div>
-          </button>
-          <button onclick="sendAction('${key}', 'toggle_boss', { enabled: ${s?.state?.autoBoss ? 'false' : 'true'} })"
-            class="p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-left transition group">
-            <div class="text-sm font-semibold text-white group-hover:text-amber-400">👑 Auto-Boss</div>
-            <div class="text-[11px] text-slate-400">${s?.state?.autoBoss ? 'Ativado' : 'Desativado'}</div>
-          </button>
-          <button onclick="sendAction('${key}', 'reconfig')"
-            class="p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-left transition group">
-            <div class="text-sm font-semibold text-white group-hover:text-emerald-400">⚡ Max DPS</div>
-            <div class="text-[11px] text-slate-400">Reaplicar magias</div>
-          </button>
-          <button onclick="sendAction('${key}', 'refill')"
-            class="p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-left transition group">
-            <div class="text-sm font-semibold text-white group-hover:text-purple-400">🧪 Refill</div>
-            <div class="text-[11px] text-slate-400">Comprar poções</div>
-          </button>
-        </div>
-
-        <div class="border-t border-slate-800 pt-3 space-y-1">
-          <div class="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Party (${chars.length})</div>
-          ${chars.map((c) => `
-            <div class="flex items-center justify-between text-[11px] bg-slate-800/50 border border-slate-700/50 rounded px-2 py-1">
-              <span class="text-slate-200 truncate">${c.name}</span>
-              <span class="text-sky-400 font-semibold whitespace-nowrap">${(c.vocation || '').slice(0, 3)} · ${c.level}</span>
-            </div>
-          `).join('') || '<div class="text-[11px] text-slate-500">sem dados</div>'}
         </div>
       </div>`;
     }
