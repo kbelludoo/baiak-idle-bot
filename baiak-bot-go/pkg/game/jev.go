@@ -174,9 +174,12 @@ type jevAnswer struct {
 // EvaluateItemForAuction avalia se um item da bag deve ser listado em leilão
 func (j *JevClient) EvaluateItemForAuction(ctx context.Context, name string, tier, upLevel int, attrs []ItemAttribute) (bool, int, int, string) {
 	estVal := EstimateItemMarketValueCoins(name, tier, upLevel, attrs)
-	targetPrice := int(float64(estVal) * 0.85)
-	if targetPrice < 25 {
-		targetPrice = 25
+
+	// Preço de partida competitivo para atrair lances imediatos (mínimo da plataforma é 25c).
+	// Anúncios com startPrice de 25c-35c atraem disputa entre jogadores e vendem rapidamente.
+	targetPrice := 25
+	if tier >= 5 {
+		targetPrice = 35
 	}
 
 	// Itens comuns ou de valor irrisório (< 100 coins) não justificam leilão
@@ -239,12 +242,12 @@ func (j *JevClient) EvaluateItemForAuction(ctx context.Context, name string, tie
 
 // EvaluateGoldForAuction calcula se e quanto gold deve ser anunciado no leilão
 func (j *JevClient) EvaluateGoldForAuction(goldBalance int64, medianRate int64) (bool, int64, int, string) {
-	feeGold := int64(5000000)   // 5kk de taxa
-	minGold := int64(100000000) // 100kk mínimo para venda expressiva
+	feeGold := int64(5000000)  // 5kk de taxa
+	minGold := int64(50000000) // 50kk mínimo para venda
 	maxToSell := int64(800000000)
 
 	if goldBalance < minGold+feeGold {
-		return false, 0, 0, fmt.Sprintf("Saldo insuficiente (%d < 105kk)", goldBalance)
+		return false, 0, 0, fmt.Sprintf("Saldo insuficiente (%d < 55kk)", goldBalance)
 	}
 
 	goldToSell := goldBalance - feeGold
@@ -253,7 +256,7 @@ func (j *JevClient) EvaluateGoldForAuction(goldBalance int64, medianRate int64) 
 	}
 
 	if medianRate <= 0 {
-		medianRate = 5000000 // 5kk por coin padrão
+		medianRate = 4000000 // 4kk por coin para vender rápido
 	}
 
 	targetCoins := int(goldToSell / medianRate)
