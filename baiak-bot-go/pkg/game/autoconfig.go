@@ -112,31 +112,44 @@ func SyncPartyAutoConfig(ctx context.Context, trpc *TRPCClient, room *Room, char
 		return
 	}
 
-	// 1. Auto-refill e auto-compra de supplies preventivo no Colyseus
+	// 1. Determinar estritamente as poções necessárias para os personagens ativos (evita comprar dezenas de milhares de poções à toa)
+	neededPotions := make(map[string]bool)
+	for slotIdx, c := range chars {
+		if slotIdx > 3 {
+			break
+		}
+		hpPot, manaPot := GetRecommendedPotions(c.Vocation, c.Level)
+		if hpPot != "" {
+			neededPotions[hpPot] = true
+		}
+		if manaPot != "" {
+			neededPotions[manaPot] = true
+		}
+	}
+
+	var refillNames []string
+	buySupplyCfg := make(map[string]any)
+	for pot := range neededPotions {
+		refillNames = append(refillNames, pot)
+		buySupplyCfg[pot] = map[string]any{
+			"min": 30,
+			"qty": 100,
+		}
+	}
+
+	// Se nenhuma poção foi mapeada por segurança, usar standard de emergência
+	if len(refillNames) == 0 {
+		refillNames = []string{"ultimate health potion", "ultimate mana potion"}
+		buySupplyCfg["ultimate health potion"] = map[string]any{"min": 20, "qty": 50}
+		buySupplyCfg["ultimate mana potion"] = map[string]any{"min": 20, "qty": 50}
+	}
+
 	_ = room.Send("autorefill", map[string]any{
-		"names": []string{
-			"supreme health potion",
-			"ultimate spirit potion",
-			"distilled ultimate mana potion",
-			"ultimate mana potion",
-			"ultimate health potion",
-			"great spirit potion",
-			"great health potion",
-			"great mana potion",
-		},
+		"names": refillNames,
 	})
 
 	_ = room.Send("autobuysupply", map[string]any{
-		"cfg": map[string]any{
-			"supreme health potion":          map[string]any{"min": 25, "qty": 150},
-			"ultimate health potion":         map[string]any{"min": 25, "qty": 150},
-			"great health potion":            map[string]any{"min": 25, "qty": 150},
-			"ultimate spirit potion":         map[string]any{"min": 25, "qty": 150},
-			"great spirit potion":            map[string]any{"min": 25, "qty": 150},
-			"distilled ultimate mana potion": map[string]any{"min": 25, "qty": 150},
-			"ultimate mana potion":           map[string]any{"min": 25, "qty": 150},
-			"great mana potion":              map[string]any{"min": 25, "qty": 150},
-		},
+		"cfg": buySupplyCfg,
 	})
 
 	// 2. Configurar rotação, cura e poções para cada slot ativo

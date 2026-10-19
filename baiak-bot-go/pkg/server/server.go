@@ -46,7 +46,8 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleDashboard)
 	mux.HandleFunc("/api/status", s.handleAPIStatus)
-	mux.HandleFunc("/api/fleet", s.handleAPIFleet)
+	mux.HandleFunc("/api/summary", s.handleAPISummary)
+	mux.HandleFunc("/api/fleet", s.handleAPISummary) // alias de compatibilidade
 	mux.HandleFunc("/api/action", s.handleAPIAction)
 	mux.HandleFunc("/api/ticket", s.handleAPITicket)
 
@@ -59,7 +60,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(indexHTML)
 }
 
-func (s *Server) handleAPIFleet(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAPISummary(w http.ResponseWriter, r *http.Request) {
 	statuses := s.manager.GetAllStatuses()
 	var totalGold int64 = 0
 	var totalExpH float64 = 0
@@ -121,15 +122,18 @@ func (s *Server) handleAPIFleet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	summaryMap := map[string]any{
+		"botsOnline":       onlineCount,
+		"botsTotal":        len(statuses),
+		"totalXpPerHour":   totalExpH,
+		"totalLootPerHour": totalGoldH,
+		"totalGold":        totalGold,
+	}
+
 	data := map[string]any{
-		"fleet": map[string]any{
-			"botsOnline":       onlineCount,
-			"botsTotal":        len(statuses),
-			"totalXpPerHour":   totalExpH,
-			"totalLootPerHour": totalGoldH,
-			"totalGold":        totalGold,
-		},
-		"bots": botsMap,
+		"summary": summaryMap,
+		"fleet":   summaryMap, // alias retrocompatível
+		"bots":    botsMap,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

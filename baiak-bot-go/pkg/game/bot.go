@@ -398,6 +398,12 @@ func (b *Bot) Run(ctx context.Context) error {
 	_ = room.Send("protecttiers", map[string]any{"tiers": []int{3, 4, 5, 6, 7, 8, 9, 10}})
 	_ = room.Send("codexauto", map[string]any{"on": true})
 
+	// Extras: Recompensas diárias, guild tasks, charms e auto-prey
+	RunDailyRewards(room, b.addLog)
+	RunGuildTasks(room, b.addLog)
+	RunAutoPrey(room, b.currentHuntID, b.addLog)
+	RunCharmsAuto(room, b.currentHuntID)
+
 	// Sincronizar rotação de magias, cura e poções BiS para a party
 	SyncPartyAutoConfig(ctx, b.trpc, room, b.allChars, b.addLog)
 
@@ -439,6 +445,12 @@ func (b *Bot) Run(ctx context.Context) error {
 	seasonTicker := time.NewTicker(3 * time.Minute)
 	defer seasonTicker.Stop()
 
+	dailyTicker := time.NewTicker(20 * time.Minute)
+	defer dailyTicker.Stop()
+
+	bossTicker := time.NewTicker(15 * time.Minute)
+	defer bossTicker.Stop()
+
 	// Dispara o primeiro ciclo de leilão e coleta de inbox após 10 segundos
 	go func() {
 		time.Sleep(10 * time.Second)
@@ -471,6 +483,18 @@ func (b *Bot) Run(ctx context.Context) error {
 				b.passMgr.CheckAndClaim(ctx, room, b.addLog)
 				b.riftMgr.SpendRiftTree(ctx, room, b.allChars, b.addLog)
 				b.profMgr.CheckAndSpendPerks(ctx, room, b.allChars, b.addLog)
+			}
+
+		case <-dailyTicker.C:
+			if !room.Closed {
+				RunDailyRewards(room, b.addLog)
+				RunGuildTasks(room, b.addLog)
+				RunAutoPrey(room, b.currentHuntID, b.addLog)
+			}
+
+		case <-bossTicker.C:
+			if !room.Closed && !b.inTreino && b.config.Settings.AutoBoss {
+				RunSafeBosses(ctx, room, b.primaryChar.Level, len(b.deathTimestamps), b.addLog)
 			}
 
 		case <-rewardTicker.C:
@@ -529,6 +553,16 @@ func (b *Bot) Run(ctx context.Context) error {
 
 				// Restauração automática de hunt: se o anti-wipe rebaixou a hunt temporariamente,
 				// restaura para o alvo quando a janela de mortes estiver limpa e sem wipes recentes.
+				// Podar mortes fora da janela de 10 minutos para permitir recuperação do anti-wipe
+				cutoffDeath := time.Now().Add(-10 * time.Minute)
+				var activeDeaths []time.Time
+				for _, t := range b.deathTimestamps {
+					if t.After(cutoffDeath) {
+						activeDeaths = append(activeDeaths, t)
+					}
+				}
+				b.deathTimestamps = activeDeaths
+
 				if b.currentHuntID != targetHunt && len(b.deathTimestamps) == 0 && time.Since(b.lastDowngradeAt) > 10*time.Minute {
 					b.addLog(fmt.Sprintf("🔄 Situação normalizada (sem wipes recentes). Restaurando hunt alvo de %s: %s", strings.ToUpper(b.currentStrategy), targetHunt))
 					b.currentHuntID = targetHunt
@@ -546,12 +580,23 @@ func (b *Bot) Run(ctx context.Context) error {
 					}
 				}
 
+				// Total de ouro consolidado da conta (incluindo saldo de todos os alts)
+				var totalAccountGold int64 = 0
+				for _, c := range b.allChars {
+					totalAccountGold += c.Gold
+				}
+				if totalAccountGold < b.primaryChar.Gold {
+					totalAccountGold = b.primaryChar.Gold
+				}
+
 				b.updateStatus(func(s *engine.AccountStatus) {
 					s.Level = b.primaryChar.Level
-					s.Gold = b.primaryChar.Gold
+					s.Gold = totalAccountGold
 					s.Extra["stamina"] = FormatStamina(b.primaryChar.Stamina)
 					s.Extra["strategy"] = b.currentStrategy
 					s.Extra["charName"] = b.primaryChar.Name
+					s.Extra["primaryGold"] = b.primaryChar.Gold
+					s.Extra["accountGold"] = totalAccountGold
 				})
 
 				b.checkAutoTreino(room)
@@ -573,7 +618,15 @@ func (b *Bot) Run(ctx context.Context) error {
 					goldKill = sim.GoldPerHour / math.Max(killsH, 1.0)
 				}
 				killsGained := int(math.Max(1, math.Round(killsH*elapsedHour)))
-				dGold := float64(b.primaryChar.Gold - lastGold)
+
+				var totalAccountGold int64 = 0
+				for _, c := range b.allChars {
+					totalAccountGold += c.Gold
+				}
+				if totalAccountGold < b.primaryChar.Gold {
+					totalAccountGold = b.primaryChar.Gold
+				}
+				dGold := float64(totalAccountGold - lastGold)
 
 				b.updateStatus(func(s *engine.AccountStatus) {
 					if !b.inTreino {
@@ -592,7 +645,14 @@ func (b *Bot) Run(ctx context.Context) error {
 				})
 			}
 			lastSampleAt = now
-			lastGold = b.primaryChar.Gold
+			var curGold int64 = 0
+			for _, c := range b.allChars {
+				curGold += c.Gold
+			}
+			if curGold < b.primaryChar.Gold {
+				curGold = b.primaryChar.Gold
+			}
+			lastGold = curGold
 
 			// Watchdog: sem frames por mais de 120 segundos -> forçar reconexão
 			if time.Since(room.LastFrameAt) > 120*time.Second {
@@ -640,6 +700,10 @@ func (b *Bot) sendStage(reason string) {
 		s.Status = "hunting"
 	})
 	b.addLog(fmt.Sprintf("Stage enviado (%s): %s%s (%s)", reason, name, tierLabel, b.currentHuntID))
+
+	// Reconfigura presas e charms automaticamente para a nova hunt
+	RunAutoPrey(b.room, b.currentHuntID, b.addLog)
+	RunCharmsAuto(b.room, b.currentHuntID)
 }
 
 func (b *Bot) GetStatus() engine.AccountStatus {
@@ -649,15 +713,13 @@ func (b *Bot) GetStatus() engine.AccountStatus {
 }
 
 func (b *Bot) ExecuteAction(action string, payload map[string]any) (any, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	switch action {
 	case "set_hunt":
 		huntID, _ := payload["huntId"].(string)
 		if huntID == "" {
 			return nil, fmt.Errorf("parâmetro 'huntId' obrigatório")
 		}
+		b.mu.Lock()
 		if strings.HasSuffix(huntID, ":h") {
 			b.currentHuntID = strings.TrimSuffix(huntID, ":h")
 			b.currentTier = "hl"
@@ -667,21 +729,30 @@ func (b *Bot) ExecuteAction(action string, payload map[string]any) (any, error) 
 		} else {
 			b.currentHuntID = huntID
 		}
+		curHunt := b.currentHuntID
+		curTier := b.currentTier
+		b.mu.Unlock()
+
 		b.sendStage("comando manual web")
-		return map[string]any{"ok": true, "huntId": b.currentHuntID, "tier": b.currentTier}, nil
+		return map[string]any{"ok": true, "huntId": curHunt, "tier": curTier}, nil
 
 	case "set_tier":
 		tier, _ := payload["tier"].(string)
 		if tier != "" && tier != "nm" && tier != "hl" {
 			return nil, fmt.Errorf("tier inválido (permitidos: '', 'nm', 'hl')")
 		}
+		b.mu.Lock()
 		b.currentTier = tier
+		curTier := b.currentTier
+		b.mu.Unlock()
+
 		b.sendStage("alteração manual de tier")
-		return map[string]any{"ok": true, "tier": b.currentTier}, nil
+		return map[string]any{"ok": true, "tier": curTier}, nil
 
 	case "claim_pass":
 		if b.room != nil && !b.room.Closed {
 			b.passMgr.CheckAndClaim(context.Background(), b.room, b.addLog)
+			RunDailyRewards(b.room, b.addLog)
 			return "Passe de Temporada e missões diárias verificados e reivindicados!", nil
 		}
 		return nil, fmt.Errorf("sala não conectada")
@@ -700,6 +771,16 @@ func (b *Bot) ExecuteAction(action string, payload map[string]any) (any, error) 
 		}
 		return nil, fmt.Errorf("sala não conectada")
 
+	case "run_boss":
+		if b.room != nil && !b.room.Closed {
+			ok := RunSafeBosses(context.Background(), b.room, b.primaryChar.Level, len(b.deathTimestamps), b.addLog)
+			if ok {
+				return "Boss seguro iniciado com sucesso!", nil
+			}
+			return "Nenhum boss seguro disponível ou mortes recentes detectadas", nil
+		}
+		return nil, fmt.Errorf("sala não conectada")
+
 	case "auto_sell":
 		if b.room != nil && !b.room.Closed {
 			_ = b.room.Send("sellall", map[string]any{"protected": false})
@@ -711,11 +792,17 @@ func (b *Bot) ExecuteAction(action string, payload map[string]any) (any, error) 
 		if b.room == nil || b.room.Closed {
 			return nil, fmt.Errorf("sala não conectada")
 		}
+		b.mu.Lock()
 		b.inTreino = !b.inTreino
-		if b.inTreino {
+		inTreino := b.inTreino
+		b.mu.Unlock()
+
+		if inTreino {
 			_ = b.room.Send("mode", map[string]any{"mode": "exercise"})
 			_ = b.room.Send("tocity", map[string]any{})
-			b.status.Status = "training"
+			b.updateStatus(func(s *engine.AccountStatus) {
+				s.Status = "training"
+			})
 			return "Treino Online ativado!", nil
 		} else {
 			b.sendStage("retorno manual do treino")

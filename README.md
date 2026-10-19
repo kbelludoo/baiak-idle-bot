@@ -1,4 +1,4 @@
-# ⚔️ Baiak Idle — 100% Native Go Fleet & GitHub Pages Auto-Relay
+# ⚔️ Baiak Idle — 100% Native Go Bot & GitHub Pages Auto-Relay
 
 Motor de alta performance em **Go puro** para o **Baiak Idle**, sem Node.js, sem Puppeteer, sem Chromium e sem consumo excessivo de memória.
 
@@ -32,7 +32,7 @@ Executa **24/7 na VPS** consumindo apenas **~2.5 MB de RAM** para todas as conta
 │       ├── game/              # Colyseus WebSocket, tRPC, Leilão, Hunts e Jev
 │       ├── network/           # Clientes HTTP e WebSocket com bind de IP
 │       └── server/            # Servidor Web (Dashboard + API REST com CORS)
-├── docs/                      # GitHub Pages (Turnstile Solver & Fleet Dashboard)
+├── docs/                      # GitHub Pages (Turnstile Solver & Bot Dashboard)
 │   ├── index.html             # Painel interativo com widget Turnstile
 │   ├── GAME_SYSTEMS.md        # Documentação dos sistemas de jogo
 │   └── GAME_CURIOSITIES.md    # Curiosidades e mecânicas
