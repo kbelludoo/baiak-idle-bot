@@ -119,6 +119,50 @@ func FormatStamina(mins int) string {
 	return fmt.Sprintf("%dmin (%d%%)", m, pct)
 }
 
+// getActiveParty retorna os personagens ativos na ordem exata de slots da party do jogo:
+// Slot 0 = Líder da Party
+// Slots 1..N = Demais membros ativos (excluindo os desabilitados)
+func (b *Bot) getActiveParty() []CharacterInfo {
+	disabledSet := make(map[string]bool)
+	if b.partyConfig != nil {
+		for _, dis := range b.partyConfig.Disabled {
+			disabledSet[fmt.Sprint(dis)] = true
+		}
+	}
+
+	leaderID := ""
+	if b.partyConfig != nil && b.partyConfig.Leader != nil {
+		leaderID = fmt.Sprint(b.partyConfig.Leader)
+	}
+
+	var leader *CharacterInfo
+	var others []CharacterInfo
+
+	for _, c := range b.allChars {
+		cID := fmt.Sprint(c.ID)
+		if disabledSet[cID] {
+			continue
+		}
+		if leaderID != "" && cID == leaderID {
+			cpy := c
+			leader = &cpy
+		} else {
+			others = append(others, c)
+		}
+	}
+
+	var active []CharacterInfo
+	if leader != nil {
+		active = append(active, *leader)
+	}
+	active = append(active, others...)
+
+	if len(active) == 0 {
+		return b.allChars
+	}
+	return active
+}
+
 func (b *Bot) Init(ctx context.Context) error {
 	b.updateStatus(func(s *engine.AccountStatus) {
 		s.Status = "Carregando dados da conta..."
@@ -136,24 +180,7 @@ func (b *Bot) Init(ctx context.Context) error {
 	partyCfg, _ := b.trpc.GetPartyConfig(ctx)
 	b.partyConfig = partyCfg
 
-	// Determinar personagem líder ou de maior nível ativo
-	disabledSet := make(map[string]bool)
-	if partyCfg != nil {
-		for _, dis := range partyCfg.Disabled {
-			disabledSet[fmt.Sprint(dis)] = true
-		}
-	}
-
-	var activePool []CharacterInfo
-	for _, c := range chars {
-		if !disabledSet[fmt.Sprint(c.ID)] {
-			activePool = append(activePool, c)
-		}
-	}
-	if len(activePool) == 0 {
-		activePool = chars
-	}
-
+	activePool := b.getActiveParty()
 	primary := activePool[0]
 	for _, c := range activePool {
 		if c.Level > primary.Level {
@@ -404,12 +431,13 @@ func (b *Bot) Run(ctx context.Context) error {
 	RunAutoPrey(room, b.currentHuntID, b.addLog)
 	RunCharmsAuto(room, b.currentHuntID)
 
-	// Sincronizar rotação de magias, cura e poções BiS para a party
-	SyncPartyAutoConfig(ctx, b.trpc, room, b.allChars, b.addLog)
+	// Sincronizar rotação de magias, cura e poções BiS para a party ativa
+	activeParty := b.getActiveParty()
+	SyncPartyAutoConfig(ctx, b.trpc, room, activeParty, b.addLog)
 
 	// Gasto de talentos automático
 	if b.config.Settings.AutoTree {
-		go SpendTalentsForParty(ctx, room, b.allChars, b.addLog)
+		go SpendTalentsForParty(ctx, room, activeParty, b.addLog)
 	}
 
 	// Auto-equip de itens melhores na mochila
@@ -417,9 +445,9 @@ func (b *Bot) Run(ctx context.Context) error {
 	if minTier <= 0 {
 		minTier = 3
 	}
-	for idx, c := range b.allChars {
-		if idx <= 3 {
-			RunAutoEquip(ctx, b.trpc, room, c, idx, minTier, b.addLog)
+	for slotIdx, c := range activeParty {
+		if slotIdx <= 3 {
+			RunAutoEquip(ctx, b.trpc, room, c, slotIdx, minTier, b.addLog)
 		}
 	}
 
@@ -461,9 +489,10 @@ func (b *Bot) Run(ctx context.Context) error {
 	go func() {
 		time.Sleep(5 * time.Second)
 		if !room.Closed {
+			activeParty := b.getActiveParty()
 			b.passMgr.CheckAndClaim(ctx, room, b.addLog)
-			b.riftMgr.SpendRiftTree(ctx, room, b.allChars, b.addLog)
-			b.profMgr.CheckAndSpendPerks(ctx, room, b.allChars, b.addLog)
+			b.riftMgr.SpendRiftTree(ctx, room, activeParty, b.addLog)
+			b.profMgr.CheckAndSpendPerks(ctx, room, activeParty, b.addLog)
 		}
 	}()
 
@@ -480,9 +509,10 @@ func (b *Bot) Run(ctx context.Context) error {
 
 		case <-seasonTicker.C:
 			if !room.Closed {
+				activeParty := b.getActiveParty()
 				b.passMgr.CheckAndClaim(ctx, room, b.addLog)
-				b.riftMgr.SpendRiftTree(ctx, room, b.allChars, b.addLog)
-				b.profMgr.CheckAndSpendPerks(ctx, room, b.allChars, b.addLog)
+				b.riftMgr.SpendRiftTree(ctx, room, activeParty, b.addLog)
+				b.profMgr.CheckAndSpendPerks(ctx, room, activeParty, b.addLog)
 			}
 
 		case <-dailyTicker.C:
@@ -520,15 +550,19 @@ func (b *Bot) Run(ctx context.Context) error {
 			if minTier <= 0 {
 				minTier = 3
 			}
-			for idx, c := range b.allChars {
-				if idx <= 3 {
-					RunAutoEquip(ctx, b.trpc, room, c, idx, minTier, b.addLog)
+			activeParty := b.getActiveParty()
+			for slotIdx, c := range activeParty {
+				if slotIdx <= 3 {
+					RunAutoEquip(ctx, b.trpc, room, c, slotIdx, minTier, b.addLog)
 				}
 			}
-			SyncPartyAutoConfig(ctx, b.trpc, room, b.allChars, b.addLog)
+			SyncPartyAutoConfig(ctx, b.trpc, room, activeParty, b.addLog)
 
 		case <-pollTicker.C:
 			// Sincronizar dados via tRPC
+			if partyCfg, err := b.trpc.GetPartyConfig(ctx); err == nil && partyCfg != nil {
+				b.partyConfig = partyCfg
+			}
 			if chars, err := b.trpc.GetCharacters(ctx); err == nil && len(chars) > 0 {
 				b.allChars = chars
 				for _, c := range chars {
@@ -759,14 +793,14 @@ func (b *Bot) ExecuteAction(action string, payload map[string]any) (any, error) 
 
 	case "spend_rift":
 		if b.room != nil && !b.room.Closed {
-			b.riftMgr.SpendRiftTree(context.Background(), b.room, b.allChars, b.addLog)
+			b.riftMgr.SpendRiftTree(context.Background(), b.room, b.getActiveParty(), b.addLog)
 			return "Pontos de Rift Tree distribuídos com sucesso!", nil
 		}
 		return nil, fmt.Errorf("sala não conectada")
 
 	case "sync_perks":
 		if b.room != nil && !b.room.Closed {
-			b.profMgr.CheckAndSpendPerks(context.Background(), b.room, b.allChars, b.addLog)
+			b.profMgr.CheckAndSpendPerks(context.Background(), b.room, b.getActiveParty(), b.addLog)
 			return "Perks de proficiência de armas sincronizados e alocados!", nil
 		}
 		return nil, fmt.Errorf("sala não conectada")

@@ -59,9 +59,14 @@ func RunAutoEquip(ctx context.Context, trpc *TRPCClient, room *Room, char Charac
 		return 0
 	}
 
+	charIDStr := fmt.Sprint(char.ID)
 	equippedMap := make(map[string]float64)
 	for _, it := range summary.Items {
 		if it.Location == "equipped" {
+			// Apenas itens equipados no personagem alvo!
+			if it.CharID != nil && fmt.Sprint(it.CharID) != charIDStr {
+				continue
+			}
 			cat := summary.Catalog[it.Name]
 			if cat.Slot != "" {
 				equippedMap[cat.Slot] = calcItemScore(it, cat)
@@ -73,6 +78,10 @@ func RunAutoEquip(ctx context.Context, trpc *TRPCClient, room *Room, char Charac
 	equippedCount := 0
 	for _, it := range summary.Items {
 		if it.Location == "equipped" || it.Hash == "" {
+			continue
+		}
+		// Se o item na mochila estiver vinculado a outro personagem, ignorar
+		if it.CharID != nil && it.CharID != "" && fmt.Sprint(it.CharID) != charIDStr {
 			continue
 		}
 		if int(it.Tier) < minTier {
